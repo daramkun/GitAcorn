@@ -1,19 +1,25 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { getAppInfo } from "./app-info";
 import {
+  applyPatchSelection,
   activateSessionTab,
   activateWorktree,
   chooseRepositoryDirectory,
   closeSessionTab,
+  createCommit,
+  discardPath,
+  getDiff,
   getRepositorySidebar,
   getRepositorySnapshot,
   listenForRepositoryChanges,
   openRepository,
   reorderSessionTabs,
   restoreSession,
+  stagePaths,
+  unstagePaths,
   updateSessionTab,
   type RepositorySnapshotDto,
   type SessionDto,
@@ -24,16 +30,22 @@ vi.mock("./app-info", () => ({
 }));
 
 vi.mock("./repository", () => ({
+  applyPatchSelection: vi.fn(),
   chooseRepositoryDirectory: vi.fn(),
   openRepository: vi.fn(),
   restoreSession: vi.fn(),
   activateSessionTab: vi.fn(),
   activateWorktree: vi.fn(),
   closeSessionTab: vi.fn(),
+  createCommit: vi.fn(),
+  discardPath: vi.fn(),
+  getDiff: vi.fn(),
   getRepositorySidebar: vi.fn(),
   reorderSessionTabs: vi.fn(),
   updateSessionTab: vi.fn(),
   getRepositorySnapshot: vi.fn(),
+  stagePaths: vi.fn(),
+  unstagePaths: vi.fn(),
   listenForRepositoryChanges: vi.fn(),
   normalizeAppError: (error: unknown) => {
     const value = error as { code?: string; message?: string; details?: string };
@@ -58,6 +70,12 @@ const mockedGetSidebar = vi.mocked(getRepositorySidebar);
 const mockedReorderTabs = vi.mocked(reorderSessionTabs);
 const mockedUpdateTab = vi.mocked(updateSessionTab);
 const mockedGetSnapshot = vi.mocked(getRepositorySnapshot);
+const mockedGetDiff = vi.mocked(getDiff);
+const mockedStagePaths = vi.mocked(stagePaths);
+const mockedUnstagePaths = vi.mocked(unstagePaths);
+const mockedApplyPatch = vi.mocked(applyPatchSelection);
+const mockedDiscardPath = vi.mocked(discardPath);
+const mockedCreateCommit = vi.mocked(createCommit);
 const mockedListenForChanges = vi.mocked(listenForRepositoryChanges);
 
 const snapshot: RepositorySnapshotDto = {
@@ -103,6 +121,7 @@ const sessionWithSnapshot: SessionDto = {
       worktreePath: snapshot.repository.worktreePath,
       active: true,
       page: "changes",
+      selectedDiff: "unstaged",
       panelWidth: 280,
       unavailable: false,
       snapshot,
@@ -134,6 +153,43 @@ describe("App", () => {
     mockedReorderTabs.mockResolvedValue();
     mockedUpdateTab.mockResolvedValue();
     mockedGetSnapshot.mockResolvedValue(snapshot);
+    mockedGetDiff.mockResolvedValue({
+      schemaVersion: 1,
+      binary: false,
+      oldPath: "tracked.txt",
+      newPath: "tracked.txt",
+      hunks: [
+        {
+          index: 0,
+          header: "@@ -1 +1 @@",
+          oldStart: 1,
+          oldCount: 1,
+          newStart: 1,
+          newCount: 1,
+          lines: [
+            {
+              index: 0,
+              kind: "deletion",
+              oldLine: 1,
+              content: "initial",
+              selectable: true,
+            },
+            {
+              index: 1,
+              kind: "addition",
+              newLine: 1,
+              content: "modified",
+              selectable: true,
+            },
+          ],
+        },
+      ],
+    });
+    mockedStagePaths.mockResolvedValue(snapshot);
+    mockedUnstagePaths.mockResolvedValue(snapshot);
+    mockedApplyPatch.mockResolvedValue(snapshot);
+    mockedDiscardPath.mockResolvedValue(snapshot);
+    mockedCreateCommit.mockResolvedValue({ ...snapshot, changes: [] });
     mockedListenForChanges.mockResolvedValue(vi.fn());
   });
 
@@ -160,6 +216,7 @@ describe("App", () => {
       snapshot.repository.id,
       "history",
       undefined,
+      "unstaged",
       280,
     );
   });
@@ -217,6 +274,7 @@ describe("App", () => {
           worktreePath: secondSnapshot.repository.worktreePath,
           active: false,
           page: "history",
+          selectedDiff: "unstaged",
           panelWidth: 280,
           unavailable: false,
           snapshot: secondSnapshot,
@@ -228,6 +286,7 @@ describe("App", () => {
           active: false,
           page: "changes",
           selectedPath: "third-only.txt",
+          selectedDiff: "unstaged",
           panelWidth: 360,
           unavailable: false,
           snapshot: thirdSnapshot,
@@ -242,12 +301,12 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^third-repo1$/ }));
     expect(screen.getByText("release · Changes")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "third-only.txt" })).toBeInTheDocument();
+    expect(screen.getByTitle("third-only.txt")).toHaveClass("selected");
     expect(screen.getByRole("slider", { name: "Changed files panel width" })).toHaveValue("360");
 
     fireEvent.click(screen.getByRole("button", { name: /^acorn-demo2$/ }));
     expect(screen.getByText("main · Changes")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "tracked.txt" })).toBeInTheDocument();
+    expect(screen.getByTitle("tracked.txt")).toHaveClass("selected");
     expect(mockedActivateTab).toHaveBeenCalledWith(secondSnapshot.repository.id);
     expect(mockedActivateTab).toHaveBeenCalledWith(thirdSnapshot.repository.id);
   });
@@ -266,6 +325,7 @@ describe("App", () => {
       snapshot.repository.id,
       "changes",
       undefined,
+      "unstaged",
       340,
     );
   });
@@ -333,6 +393,7 @@ describe("App", () => {
           worktreePath: "C:\\Moved\\missing-repo",
           active: true,
           page: "changes",
+          selectedDiff: "unstaged",
           panelWidth: 280,
           unavailable: true,
         },
@@ -356,5 +417,124 @@ describe("App", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("not inside a Git working tree");
     expect(screen.getByRole("button", { name: "Choose another folder" })).toBeInTheDocument();
+  });
+
+  it("renders a diff and stages only selected lines", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], selectedPath: "tracked.txt" }],
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /modified/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Stage selected lines" }));
+
+    await waitFor(() =>
+      expect(mockedApplyPatch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        snapshot.changes[0].pathBytes,
+        "unstaged",
+        [{ hunkIndex: 0, lineIndices: [1] }],
+      ),
+    );
+  });
+
+  it("opens the staged side and unstages the whole file", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /staged file\.txt/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Unstage file" }));
+
+    expect(mockedUnstagePaths).toHaveBeenCalledWith(
+      snapshot.repository.id,
+      snapshot.revision,
+      [snapshot.changes[1].pathBytes],
+    );
+  });
+
+  it("validates and submits the commit form", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    const commit = await screen.findByRole("button", { name: "Commit to main" });
+    expect(commit).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Commit summary" }), {
+      target: { value: "Ship M3" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Commit description" }), {
+      target: { value: "Partial staging is ready." },
+    });
+    fireEvent.click(commit);
+
+    expect(mockedCreateCommit).toHaveBeenCalledWith(snapshot.repository.id, snapshot.revision, {
+      summary: "Ship M3",
+      description: "Partial staging is ready.",
+      amend: false,
+    });
+  });
+
+  it("windows a 10k file list instead of mounting every row", async () => {
+    const changes = Array.from({ length: 10_000 }, (_, index) => ({
+      ...snapshot.changes[0],
+      path: `file-${index}.txt`,
+      pathBytes: Array.from(new TextEncoder().encode(`file-${index}.txt`)),
+    }));
+    mockedRestoreSession.mockResolvedValue({
+      schemaVersion: 1,
+      tabs: [
+        {
+          ...sessionWithSnapshot.tabs[0],
+          snapshot: { ...snapshot, changes },
+        },
+      ],
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: /file-0\.txt/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /file-9999\.txt/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /file-\d+\.txt/ }).length).toBeLessThan(40);
+  });
+
+  it("windows a large diff while preserving selectable line controls", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], selectedPath: "tracked.txt" }],
+    });
+    mockedGetDiff.mockResolvedValue({
+      schemaVersion: 1,
+      binary: false,
+      oldPath: "tracked.txt",
+      newPath: "tracked.txt",
+      hunks: [
+        {
+          index: 0,
+          header: "@@ -0,0 +1,1000 @@",
+          oldStart: 0,
+          oldCount: 0,
+          newStart: 1,
+          newCount: 1000,
+          lines: Array.from({ length: 1000 }, (_, index) => ({
+            index,
+            kind: "addition" as const,
+            newLine: index + 1,
+            content: `large-diff-line-${index}`,
+            selectable: true,
+          })),
+        },
+      ],
+    });
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: /large-diff-line-0/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /large-diff-line-999/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /large-diff-line-/ }).length,
+    ).toBeLessThan(100);
   });
 });

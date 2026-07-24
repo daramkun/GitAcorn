@@ -8,10 +8,14 @@ import {
 } from "react";
 import { getAppInfo, type AppInfoDto } from "./app-info";
 import {
+  applyPatchSelection,
   activateSessionTab,
   activateWorktree,
   chooseRepositoryDirectory,
   closeSessionTab,
+  createCommit,
+  discardPath,
+  getDiff,
   getRepositorySidebar,
   getRepositorySnapshot,
   listenForRepositoryChanges,
@@ -19,8 +23,12 @@ import {
   openRepository,
   reorderSessionTabs,
   restoreSession,
+  stagePaths,
+  unstagePaths,
   updateSessionTab,
   type AppErrorDto,
+  type DiffDto,
+  type DiffTarget,
   type FileChangeDto,
   type RepositorySnapshotDto,
   type RepositorySidebarDto,
@@ -168,11 +176,19 @@ export function App() {
     );
   }
 
-  function updateActiveTab(patch: Partial<Pick<SessionTabDto, "page" | "selectedPath">>) {
+  function updateActiveTab(
+    patch: Partial<Pick<SessionTabDto, "page" | "selectedPath" | "selectedDiff">>,
+  ) {
     if (!activeTab) return;
     const next = { ...activeTab, ...patch };
     setTabs((current) => current.map((tab) => (tab.repoId === next.repoId ? next : tab)));
-    updateSessionTab(next.repoId, next.page, next.selectedPath, next.panelWidth).catch(
+    updateSessionTab(
+      next.repoId,
+      next.page,
+      next.selectedPath,
+      next.selectedDiff,
+      next.panelWidth,
+    ).catch(
       (reason: unknown) => setError(normalizeAppError(reason)),
     );
   }
@@ -324,6 +340,7 @@ export function App() {
                 snapshot={activeSnapshot}
                 selectedPath={activeTab.selectedPath}
                 panelWidth={activeTab.panelWidth}
+                selectedTarget={activeTab.selectedDiff}
                 onPanelWidth={(panelWidth) => {
                   const next = { ...activeTab, panelWidth };
                   setTabs((current) =>
@@ -333,10 +350,23 @@ export function App() {
                     next.repoId,
                     next.page,
                     next.selectedPath,
+                    next.selectedDiff,
                     panelWidth,
                   ).catch((reason: unknown) => setError(normalizeAppError(reason)));
                 }}
-                onSelect={(selectedPath) => updateActiveTab({ selectedPath })}
+                onSelect={(selectedPath, selectedDiff) =>
+                  updateActiveTab({ selectedPath, selectedDiff })
+                }
+                onSnapshot={(snapshot) =>
+                  setTabs((current) =>
+                    current.map((tab) =>
+                      tab.repoId === snapshot.repository.id
+                        ? { ...tab, snapshot, unavailable: false }
+                        : tab,
+                    ),
+                  )
+                }
+                onError={(reason) => setError(normalizeAppError(reason))}
               />
             ) : (
               <ChangesEmpty onOpen={handleOpenRepository} opening={opening || sessionLoading} />
@@ -366,34 +396,486 @@ function UnavailableRepository({ tab, onLocate }: { tab: SessionTabDto; onLocate
   return <div className="welcome-panel"><p className="eyebrow">Repository unavailable</p><h1>{repositoryName(tab.worktreePath)} moved or was deleted.</h1><p>{tab.worktreePath}</p><button type="button" onClick={onLocate}>Locate repository</button></div>;
 }
 
-function ChangesView({ snapshot, selectedPath, panelWidth, onPanelWidth, onSelect }: { snapshot: RepositorySnapshotDto; selectedPath?: string; panelWidth: number; onPanelWidth: (width: number) => void; onSelect: (path: string) => void }) {
-  const unstaged = useMemo(() => snapshot.changes.filter((change) => change.worktreeStatus !== "." || change.conflict), [snapshot]);
-  const staged = useMemo(() => snapshot.changes.filter((change) => change.indexStatus !== "." && change.indexStatus !== "?"), [snapshot]);
+function ChangesView({
+  snapshot,
+  selectedPath,
+  selectedTarget,
+  panelWidth,
+  onPanelWidth,
+  onSelect,
+  onSnapshot,
+  onError,
+}: {
+  snapshot: RepositorySnapshotDto;
+  selectedPath?: string;
+  selectedTarget: DiffTarget;
+  panelWidth: number;
+  onPanelWidth: (width: number) => void;
+  onSelect: (path: string, target: DiffTarget) => void;
+  onSnapshot: (snapshot: RepositorySnapshotDto) => void;
+  onError: (error: unknown) => void;
+}) {
+  const unstaged = useMemo(
+    () =>
+      snapshot.changes.filter(
+        (change) => change.worktreeStatus !== "." || change.conflict,
+      ),
+    [snapshot],
+  );
+  const staged = useMemo(
+    () =>
+      snapshot.changes.filter(
+        (change) => change.indexStatus !== "." && change.indexStatus !== "?",
+      ),
+    [snapshot],
+  );
   const selected = snapshot.changes.find((change) => change.path === selectedPath);
-  return <div className="changes-layout" style={{ "--file-panel-width": `${panelWidth}px` } as CSSProperties}>
-    <section className="file-panel" aria-label="Changed files">
-      <label className="panel-width-control">
-        <span>File panel width</span>
-        <input aria-label="Changed files panel width" type="range" min="190" max="420" value={panelWidth} onChange={(event) => onPanelWidth(Number(event.currentTarget.value))} />
-      </label>
-      <ChangeSection title="Unstaged" changes={unstaged} selectedPath={selectedPath} onSelect={onSelect} />
-      <ChangeSection title="Staged" changes={staged} selectedPath={selectedPath} onSelect={onSelect} />
-    </section>
-    <section className="selected-file-panel">{selected ? <><p className="eyebrow">Selected change</p><h1>{selected.path}</h1>{selected.originalPath && <p>Renamed from {selected.originalPath}</p>}<div className="change-metadata"><span>Index <strong>{statusLabel(selected.indexStatus)}</strong></span><span>Working tree <strong>{statusLabel(selected.worktreeStatus)}</strong></span>{selected.conflict && <span className="conflict-label">Conflict</span>}</div><p className="diff-placeholder">Diff rendering arrives in M3.</p></> : <div className="empty-selection"><span className="file-glyph" aria-hidden="true" /><h1>{snapshot.changes.length === 0 ? "Working tree clean" : "Select a changed file"}</h1><p>{snapshot.changes.length === 0 ? "There are no staged or unstaged changes." : "Choose a file to inspect its Git status."}</p></div>}</section>
-    <aside className="commit-panel" aria-label="Commit form preview"><div className="panel-heading"><h2>Commit</h2><span>{staged.length}</span></div><textarea aria-label="Commit summary" placeholder="Summary" disabled /><textarea aria-label="Commit description" placeholder="Description (optional)" disabled /><button type="button" disabled>Commit to {snapshot.head.name ?? "HEAD"}</button></aside>
-  </div>;
+  const [diff, setDiff] = useState<DiffDto>();
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [selectedLines, setSelectedLines] = useState<Set<string>>(new Set());
+  const [operation, setOperation] = useState<string>();
+  const [summary, setSummary] = useState("");
+  const [description, setDescription] = useState("");
+  const [amend, setAmend] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setSelectedLines(new Set());
+    if (!selected) {
+      setDiff(undefined);
+      return () => {
+        active = false;
+      };
+    }
+    setDiffLoading(true);
+    getDiff(
+      snapshot.repository.id,
+      snapshot.revision,
+      selected.pathBytes,
+      selectedTarget,
+    )
+      .then((value) => active && setDiff(value))
+      .catch((reason: unknown) => active && onError(reason))
+      .finally(() => active && setDiffLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [
+    onError,
+    selected,
+    selectedTarget,
+    snapshot.repository.id,
+    snapshot.revision,
+  ]);
+
+  async function mutate(
+    label: string,
+    action: () => Promise<RepositorySnapshotDto>,
+  ) {
+    try {
+      setOperation(label);
+      const next = await action();
+      setSelectedLines(new Set());
+      onSnapshot(next);
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setOperation(undefined);
+    }
+  }
+
+  function applyLines() {
+    if (!selected || selectedLines.size === 0) return;
+    const byHunk = new Map<number, number[]>();
+    for (const key of selectedLines) {
+      const [hunk, line] = key.split(":").map(Number);
+      byHunk.set(hunk, [...(byHunk.get(hunk) ?? []), line]);
+    }
+    void mutate(selectedTarget === "staged" ? "Unstaging lines…" : "Staging lines…", () =>
+      applyPatchSelection(
+        snapshot.repository.id,
+        snapshot.revision,
+        selected.pathBytes,
+        selectedTarget,
+        [...byHunk].map(([hunkIndex, lineIndices]) => ({
+          hunkIndex,
+          lineIndices,
+        })),
+      ),
+    );
+  }
+
+  function discardSelected() {
+    if (!selected || selectedTarget !== "unstaged") return;
+    if (
+      !window.confirm(
+        `Discard the displayed working-tree changes in ${selected.path}? This cannot be undone by GitAcorn.`,
+      )
+    ) {
+      return;
+    }
+    void mutate("Discarding…", () =>
+      discardPath(
+        snapshot.repository.id,
+        snapshot.revision,
+        selected.pathBytes,
+        selected.worktreeStatus === "?",
+      ),
+    );
+  }
+
+  function submitCommit() {
+    if (!summary.trim()) return;
+    void mutate(amend ? "Amending…" : "Committing…", () =>
+      createCommit(snapshot.repository.id, snapshot.revision, {
+        summary,
+        description,
+        amend,
+      }),
+    );
+  }
+
+  return (
+    <div
+      className="changes-layout"
+      style={{ "--file-panel-width": `${panelWidth}px` } as CSSProperties}
+    >
+      <section className="file-panel" aria-label="Changed files">
+        <label className="panel-width-control">
+          <span>File panel width</span>
+          <input
+            aria-label="Changed files panel width"
+            type="range"
+            min="190"
+            max="420"
+            value={panelWidth}
+            onChange={(event) => onPanelWidth(Number(event.currentTarget.value))}
+          />
+        </label>
+        <ChangeSection
+          title="Unstaged"
+          target="unstaged"
+          changes={unstaged}
+          selectedPath={selectedPath}
+          selectedTarget={selectedTarget}
+          onSelect={onSelect}
+        />
+        <ChangeSection
+          title="Staged"
+          target="staged"
+          changes={staged}
+          selectedPath={selectedPath}
+          selectedTarget={selectedTarget}
+          onSelect={onSelect}
+        />
+      </section>
+      <section className="selected-file-panel diff-panel">
+        {selected ? (
+          <>
+            <div className="diff-toolbar">
+              <div>
+                <span className="eyebrow">
+                  {selectedTarget === "staged" ? "Staged diff" : "Unstaged diff"}
+                </span>
+                <strong>{selected.path}</strong>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  disabled={Boolean(operation)}
+                  onClick={() =>
+                    void mutate(
+                      selectedTarget === "staged" ? "Unstaging file…" : "Staging file…",
+                      () =>
+                        selectedTarget === "staged"
+                          ? unstagePaths(snapshot.repository.id, snapshot.revision, [
+                              selected.pathBytes,
+                            ])
+                          : stagePaths(snapshot.repository.id, snapshot.revision, [
+                              selected.pathBytes,
+                            ]),
+                    )
+                  }
+                >
+                  {selectedTarget === "staged" ? "Unstage file" : "Stage file"}
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedLines.size === 0 || Boolean(operation)}
+                  onClick={applyLines}
+                >
+                  {selectedTarget === "staged" ? "Unstage" : "Stage"} selected lines
+                </button>
+                {selectedTarget === "unstaged" && (
+                  <button
+                    className="danger-button"
+                    type="button"
+                    disabled={Boolean(operation)}
+                    onClick={discardSelected}
+                  >
+                    Discard…
+                  </button>
+                )}
+              </div>
+            </div>
+            {operation && <div className="operation-status" role="status">{operation}</div>}
+            {diffLoading ? (
+              <div className="diff-state" role="status">Loading diff…</div>
+            ) : diff?.binary ? (
+              <div className="diff-state">Binary file. Use the whole-file action.</div>
+            ) : diff && diff.hunks.length > 0 ? (
+              <DiffRenderer
+                diff={diff}
+                selectedLines={selectedLines}
+                onToggleLine={(key) =>
+                  setSelectedLines((current) => {
+                    const next = new Set(current);
+                    if (next.has(key)) next.delete(key);
+                    else next.add(key);
+                    return next;
+                  })
+                }
+                onApplyHunk={(hunkIndex) =>
+                  void mutate(
+                    selectedTarget === "staged" ? "Unstaging hunk…" : "Staging hunk…",
+                    () =>
+                      applyPatchSelection(
+                        snapshot.repository.id,
+                        snapshot.revision,
+                        selected.pathBytes,
+                        selectedTarget,
+                        [{ hunkIndex, lineIndices: [] }],
+                      ),
+                  )
+                }
+                actionLabel={selectedTarget === "staged" ? "Unstage hunk" : "Stage hunk"}
+              />
+            ) : (
+              <div className="diff-state">No text diff is available for this side.</div>
+            )}
+          </>
+        ) : (
+          <div className="empty-selection">
+            <span className="file-glyph" aria-hidden="true" />
+            <h1>
+              {snapshot.changes.length === 0
+                ? "Working tree clean"
+                : "Select a changed file"}
+            </h1>
+            <p>
+              {snapshot.changes.length === 0
+                ? "There are no staged or unstaged changes."
+                : "Choose a file to inspect and stage its diff."}
+            </p>
+          </div>
+        )}
+      </section>
+      <aside className="commit-panel" aria-label="Commit form">
+        <div className="panel-heading"><h2>Commit</h2><span>{staged.length}</span></div>
+        <textarea
+          aria-label="Commit summary"
+          placeholder="Summary"
+          value={summary}
+          onChange={(event) => setSummary(event.currentTarget.value)}
+        />
+        <textarea
+          aria-label="Commit description"
+          placeholder="Description (optional)"
+          value={description}
+          onChange={(event) => setDescription(event.currentTarget.value)}
+        />
+        <label className="amend-control">
+          <input
+            type="checkbox"
+            checked={amend}
+            onChange={(event) => setAmend(event.currentTarget.checked)}
+          />
+          Amend previous commit
+        </label>
+        <button
+          className="primary-action"
+          type="button"
+          disabled={!summary.trim() || (!amend && staged.length === 0) || Boolean(operation)}
+          onClick={submitCommit}
+        >
+          {amend ? "Amend" : "Commit"} to {snapshot.head.name ?? "HEAD"}
+        </button>
+      </aside>
+    </div>
+  );
 }
 
-function ChangeSection({ title, changes, selectedPath, onSelect }: { title: string; changes: FileChangeDto[]; selectedPath?: string; onSelect: (path: string) => void }) {
-  return <div className="change-section"><div className="panel-heading"><h2>{title}</h2><span>{changes.length}</span></div>{changes.length === 0 ? <div className="panel-empty">No {title.toLowerCase()} changes.</div> : <div className="change-list">{changes.map((change) => <button className={selectedPath === change.path ? "change-row selected" : "change-row"} type="button" key={`${title}-${change.path}-${change.indexStatus}-${change.worktreeStatus}`} onClick={() => onSelect(change.path)} title={change.path}><span className={`status-badge ${change.conflict ? "conflict" : ""}`}>{change.conflict ? "!" : title === "Staged" ? change.indexStatus : change.worktreeStatus}</span><span className="change-path">{change.path}</span>{change.submodule && <small>submodule</small>}</button>)}</div>}</div>;
+function ChangeSection({
+  title,
+  target,
+  changes,
+  selectedPath,
+  selectedTarget,
+  onSelect,
+}: {
+  title: string;
+  target: DiffTarget;
+  changes: FileChangeDto[];
+  selectedPath?: string;
+  selectedTarget?: DiffTarget;
+  onSelect: (path: string, target: DiffTarget) => void;
+}) {
+  return (
+    <div className="change-section">
+      <div className="panel-heading"><h2>{title}</h2><span>{changes.length}</span></div>
+      {changes.length === 0 ? (
+        <div className="panel-empty">No {title.toLowerCase()} changes.</div>
+      ) : (
+        <VirtualChangeList
+          changes={changes}
+          target={target}
+          selectedPath={selectedPath}
+          selectedTarget={selectedTarget}
+          onSelect={onSelect}
+        />
+      )}
+    </div>
+  );
 }
 
-function statusLabel(code: string) {
-  return ({ ".": "Unchanged", "?": "Untracked", M: "Modified", A: "Added", D: "Deleted", R: "Renamed", C: "Copied", T: "Type changed", U: "Unmerged" }[code] ?? code);
+function VirtualChangeList({
+  changes,
+  target,
+  selectedPath,
+  selectedTarget,
+  onSelect,
+}: {
+  changes: FileChangeDto[];
+  target: DiffTarget;
+  selectedPath?: string;
+  selectedTarget?: DiffTarget;
+  onSelect: (path: string, target: DiffTarget) => void;
+}) {
+  const rowHeight = 34;
+  const [scrollTop, setScrollTop] = useState(0);
+  const visibleCount = 20;
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 4);
+  const end = Math.min(changes.length, start + visibleCount + 8);
+  return (
+    <div className="change-list" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
+      <div className="virtual-list-space" style={{ height: changes.length * rowHeight }}>
+        <div style={{ transform: `translateY(${start * rowHeight}px)` }}>
+          {changes.slice(start, end).map((change) => {
+            const partial =
+              change.indexStatus !== "." &&
+              change.indexStatus !== "?" &&
+              (change.worktreeStatus !== "." || change.conflict);
+            return (
+              <button
+                className={
+                  selectedPath === change.path && selectedTarget === target
+                    ? "change-row selected"
+                    : "change-row"
+                }
+                type="button"
+                key={`${target}-${change.path}-${change.indexStatus}-${change.worktreeStatus}`}
+                onClick={() => onSelect(change.path, target)}
+                title={change.path}
+              >
+                <span className={`status-badge ${change.conflict ? "conflict" : ""}`}>
+                  {change.conflict
+                    ? "!"
+                    : target === "staged"
+                      ? change.indexStatus
+                      : change.worktreeStatus}
+                </span>
+                <span className="change-path">{change.path}</span>
+                {partial && <small>partial</small>}
+                {!partial && change.submodule && <small>submodule</small>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DiffRenderer({
+  diff,
+  selectedLines,
+  onToggleLine,
+  onApplyHunk,
+  actionLabel,
+}: {
+  diff: DiffDto;
+  selectedLines: Set<string>;
+  onToggleLine: (key: string) => void;
+  onApplyHunk: (hunkIndex: number) => void;
+  actionLabel: string;
+}) {
+  return (
+    <div className="diff-scroll" aria-label="File diff">
+      {diff.hunks.map((hunk) => (
+        <div className="diff-hunk" key={hunk.index}>
+          <div className="diff-hunk-header">
+            <code>{hunk.header}</code>
+            <button type="button" onClick={() => onApplyHunk(hunk.index)}>
+              {actionLabel}
+            </button>
+          </div>
+          <VirtualDiffLines
+            hunkIndex={hunk.index}
+            lines={hunk.lines}
+            selectedLines={selectedLines}
+            onToggleLine={onToggleLine}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function VirtualDiffLines({
+  hunkIndex,
+  lines,
+  selectedLines,
+  onToggleLine,
+}: {
+  hunkIndex: number;
+  lines: DiffDto["hunks"][number]["lines"];
+  selectedLines: Set<string>;
+  onToggleLine: (key: string) => void;
+}) {
+  const rowHeight = 23;
+  const [scrollTop, setScrollTop] = useState(0);
+  const virtual = lines.length > 300;
+  const start = virtual ? Math.max(0, Math.floor(scrollTop / rowHeight) - 8) : 0;
+  const end = virtual ? Math.min(lines.length, start + 80) : lines.length;
+  const content = lines.slice(start, end).map((line) => {
+    const key = `${hunkIndex}:${line.index}`;
+    return (
+      <button
+        type="button"
+        key={key}
+        className={`diff-line ${line.kind} ${selectedLines.has(key) ? "selected" : ""}`}
+        disabled={!line.selectable}
+        aria-pressed={line.selectable ? selectedLines.has(key) : undefined}
+        onClick={() => line.selectable && onToggleLine(key)}
+      >
+        <span>{line.oldLine ?? ""}</span>
+        <span>{line.newLine ?? ""}</span>
+        <code>{line.kind === "addition" ? "+" : line.kind === "deletion" ? "-" : " "}{line.content}</code>
+      </button>
+    );
+  });
+  if (!virtual) return <div className="diff-lines">{content}</div>;
+  return (
+    <div className="diff-lines virtual-diff" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
+      <div style={{ height: lines.length * rowHeight }}>
+        <div style={{ transform: `translateY(${start * rowHeight}px)` }}>{content}</div>
+      </div>
+    </div>
+  );
 }
 
 function ChangesEmpty({ onOpen, opening }: { onOpen: () => void; opening: boolean }) {
-  return <div className="changes-layout"><section className="file-panel" aria-label="Changed files"><ChangeSection title="Unstaged" changes={[]} onSelect={() => undefined} /><ChangeSection title="Staged" changes={[]} onSelect={() => undefined} /></section><section className="welcome-panel"><div className="welcome-art" aria-hidden="true"><span className="branch-line" /><span className="branch-node node-one" /><span className="branch-node node-two" /><span className="branch-node node-three" /></div><p className="eyebrow">A calmer Git workflow</p><h1>Your repositories, clearly in view.</h1><p>Open a local repository to inspect its real staged, unstaged, and untracked changes.</p><button type="button" onClick={onOpen} disabled={opening}>{opening ? "Opening…" : "Open a repository"}</button><small>Git 2.40.0 or newer is required.</small></section><aside className="commit-panel" aria-label="Commit form preview"><div className="panel-heading"><h2>Commit</h2></div><textarea aria-label="Commit summary" placeholder="Summary" disabled /><textarea aria-label="Commit description" placeholder="Description (optional)" disabled /><button type="button" disabled>Commit</button></aside></div>;
+  return <div className="changes-layout"><section className="file-panel" aria-label="Changed files"><ChangeSection title="Unstaged" target="unstaged" changes={[]} onSelect={() => undefined} /><ChangeSection title="Staged" target="staged" changes={[]} onSelect={() => undefined} /></section><section className="welcome-panel"><div className="welcome-art" aria-hidden="true"><span className="branch-line" /><span className="branch-node node-one" /><span className="branch-node node-two" /><span className="branch-node node-three" /></div><p className="eyebrow">A calmer Git workflow</p><h1>Your repositories, clearly in view.</h1><p>Open a local repository to inspect its real staged, unstaged, and untracked changes.</p><button type="button" onClick={onOpen} disabled={opening}>{opening ? "Opening…" : "Open a repository"}</button><small>Git 2.40.0 or newer is required.</small></section><aside className="commit-panel" aria-label="Commit form preview"><div className="panel-heading"><h2>Commit</h2></div><textarea aria-label="Commit summary" placeholder="Summary" disabled /><textarea aria-label="Commit description" placeholder="Description (optional)" disabled /><button type="button" disabled>Commit</button></aside></div>;
 }
 
 function HistoryEmpty({ hasRepository }: { hasRepository: boolean }) {

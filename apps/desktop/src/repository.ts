@@ -41,6 +41,36 @@ export type FileChangeDto = {
   submodule: boolean;
 };
 
+export type DiffTarget = "unstaged" | "staged";
+
+export type DiffDto = {
+  schemaVersion: 1;
+  binary: boolean;
+  oldPath: string;
+  newPath: string;
+  hunks: Array<{
+    index: number;
+    header: string;
+    oldStart: number;
+    oldCount: number;
+    newStart: number;
+    newCount: number;
+    lines: Array<{
+      index: number;
+      kind: "context" | "addition" | "deletion" | "noNewline";
+      oldLine?: number;
+      newLine?: number;
+      content: string;
+      selectable: boolean;
+    }>;
+  }>;
+};
+
+export type PatchSelection = {
+  hunkIndex: number;
+  lineIndices: number[];
+};
+
 export type SessionDto = {
   schemaVersion: 1;
   tabs: SessionTabDto[];
@@ -53,6 +83,7 @@ export type SessionTabDto = {
   active: boolean;
   page: "changes" | "history";
   selectedPath?: string;
+  selectedDiff: DiffTarget;
   panelWidth: number;
   unavailable: boolean;
   snapshot?: RepositorySnapshotDto;
@@ -106,9 +137,16 @@ export function updateSessionTab(
   repoId: string,
   page: "changes" | "history",
   selectedPath: string | undefined,
+  selectedDiff: DiffTarget,
   panelWidth: number,
 ): Promise<void> {
-  return invoke("session_tab_update", { repoId, page, selectedPath, panelWidth });
+  return invoke("session_tab_update", {
+    repoId,
+    page,
+    selectedPath,
+    selectedDiff,
+    panelWidth,
+  });
 }
 
 export function getRepositorySnapshot(repoId: string): Promise<RepositorySnapshotDto> {
@@ -121,6 +159,69 @@ export function getRepositorySidebar(repoId: string): Promise<RepositorySidebarD
 
 export function activateWorktree(repoId: string, worktreeId: string): Promise<SessionDto> {
   return invoke<SessionDto>("worktree_activate", { repoId, worktreeId });
+}
+
+export function getDiff(
+  repoId: string,
+  revision: number,
+  pathBytes: number[],
+  target: DiffTarget,
+): Promise<DiffDto> {
+  return invoke<DiffDto>("diff_get", { repoId, revision, pathBytes, target });
+}
+
+export function stagePaths(
+  repoId: string,
+  revision: number,
+  paths: number[][],
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("stage_paths", { repoId, revision, paths });
+}
+
+export function unstagePaths(
+  repoId: string,
+  revision: number,
+  paths: number[][],
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("unstage_paths", { repoId, revision, paths });
+}
+
+export function applyPatchSelection(
+  repoId: string,
+  revision: number,
+  pathBytes: number[],
+  target: DiffTarget,
+  selections: PatchSelection[],
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("apply_patch_selection", {
+    repoId,
+    revision,
+    pathBytes,
+    target,
+    selections,
+  });
+}
+
+export function discardPath(
+  repoId: string,
+  revision: number,
+  pathBytes: number[],
+  untracked: boolean,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("discard_path", {
+    repoId,
+    revision,
+    pathBytes,
+    untracked,
+  });
+}
+
+export function createCommit(
+  repoId: string,
+  revision: number,
+  request: { summary: string; description: string; amend: boolean },
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("commit_create", { repoId, revision, request });
 }
 
 export function listenForRepositoryChanges(

@@ -1,5 +1,6 @@
 //! Pure Git domain types. Tauri and process execution do not belong in this crate.
 
+mod diff;
 mod status;
 
 use std::fmt;
@@ -9,6 +10,9 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use diff::{
+    DiffDocument, DiffFile, DiffHunk, DiffLine, DiffLineKind, DiffParseError, parse_unified_diff,
+};
 pub use status::{FileChange, HeadState, StatusParseError, StatusSnapshot, parse_porcelain_v2};
 
 const REPOSITORY_NAMESPACE: Uuid = Uuid::from_u128(0xa6a5_6f5f_d466_45de_a2af_82cd_987d_1552);

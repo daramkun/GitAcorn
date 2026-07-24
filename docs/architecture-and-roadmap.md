@@ -832,15 +832,43 @@ pnpm build
 
 ### M3 체크리스트
 
-- [ ] staged/unstaged diff parser와 renderer
-- [ ] Changes 내부 두 파일 목록
-- [ ] file stage/unstage
-- [ ] hunk patch 생성·적용
-- [ ] 선택 라인 patch 생성·적용과 partial 상태
-- [ ] Staged 파일 선택 및 부분 unstage
-- [ ] commit/amend form과 validation
-- [ ] discard preview와 recovery action
-- [ ] large repository virtualization benchmark
+- [x] staged/unstaged diff parser와 renderer
+- [x] Changes 내부 두 파일 목록
+- [x] file stage/unstage
+- [x] hunk patch 생성·적용
+- [x] 선택 라인 patch 생성·적용과 partial 상태
+- [x] Staged 파일 선택 및 부분 unstage
+- [x] commit/amend form과 validation
+- [x] discard preview와 recovery action
+- [x] large repository virtualization benchmark
+
+#### M3 완료 기록 — 2026-07-24
+
+- 구현된 사용자 흐름
+  - Unstaged/Staged 파일 선택 → byte-safe unified diff parser → old/new line 번호가 있는 자체 line renderer
+  - tracked, untracked 파일의 전체 file/hunk/선택 라인 stage와 staged diff에서 동일한 단위의 unstage
+  - 같은 파일에 index와 worktree 변경이 남은 partial 상태를 양쪽 목록에 동시에 표시
+  - repository revision 검증 → 저장소별 writer lock → `git apply --check` → 실제 patch 적용 → 최신 snapshot 반환
+  - patch 적용 뒤 선택 파일과 diff 방향을 유지하고 세션 재시작 시 staged/unstaged 선택 복원
+  - 표시된 unstaged diff를 preview로 확인한 뒤 tracked/untracked discard 확인, 오류 시 refresh/retry recovery action 제공
+  - staged 파일 기반 commit과 amend form, 빈 summary와 staged 파일 없는 일반 commit validation
+  - 10k changed file 목록과 1k line diff를 고정 높이 windowing으로 제한해 전체 DOM 생성을 방지
+- 실행한 검증
+  - `cargo fmt --all -- --check` 통과
+  - `cargo clippy --workspace --all-targets -- -D warnings` 통과
+  - `cargo test --workspace` 통과: Rust unit/integration test 32개
+  - 실제 temporary Git 저장소에서 선택 라인 stage → partial diff 확인 → 선택 라인 unstage, untracked partial stage, 실패 patch의 index 무변경, commit/discard 통합 test 통과
+  - `pnpm lint` 통과
+  - `pnpm test --run` 통과: component test 14개
+  - 10k changed file과 1k line diff virtualization regression test 통과
+  - `pnpm build` 통과
+  - `pnpm --filter @git-acorn/desktop tauri build --no-bundle` 통과
+  - `target/release/git-acorn-desktop.exe` 시작 smoke test 통과
+- 남은 제한
+  - conflict combined diff와 충돌 해결 UI는 M6 범위이며 M3 renderer는 일반 staged/unstaged unified diff를 대상으로 한다.
+  - diff line renderer는 현재 unified mode이며 split mode 선택지는 후속 UI 고도화에서 추가한다.
+- 다음 시작 지점
+  - M4 cursor 기반 commit log와 lane graph를 실제 대형 history fixture에서 시작한다.
 
 ## 17. 아키텍처 결정 기록(ADR) 목록
 

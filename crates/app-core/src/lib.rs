@@ -8,7 +8,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use repository::{
-    GitVersion, RefSummary, RepositoryService, RepositorySidebar, StashSummary, WorktreeSummary,
+    CommitRequest, DiffTarget, GitVersion, PatchSelection, RefSummary, RepositoryService,
+    RepositorySidebar, StashSummary, WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;
 
@@ -38,6 +39,8 @@ pub enum AppError {
     InvalidGitOutput(String),
     #[error("Operation was cancelled")]
     Cancelled,
+    #[error("{0}")]
+    InvalidRequest(String),
     #[error("Application session could not be saved")]
     Persistence { detail: String },
 }
@@ -67,6 +70,7 @@ impl From<&AppError> for AppErrorDto {
             AppError::GitFailed { .. } => ("gitFailed", vec!["retry", "copyDiagnostics"]),
             AppError::InvalidGitOutput(_) => ("invalidGitOutput", vec!["retry", "copyDiagnostics"]),
             AppError::Cancelled => ("cancelled", Vec::new()),
+            AppError::InvalidRequest(_) => ("invalidRequest", vec!["editRequest", "refresh"]),
             AppError::Persistence { .. } => ("persistenceFailed", vec!["retry"]),
         };
         let details = match error {

@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use git_cli::{CancellationToken, GitExecutionError, GitExecutor, GitOutput, GitRequest};
 use git_domain::{
-    RepoId, RepositoryDescriptor, RepositorySnapshot, WorktreeId, parse_porcelain_v2,
+    DiffDocument, DiffLineKind, RepoId, RepositoryDescriptor, RepositorySnapshot, WorktreeId,
+    parse_porcelain_v2, parse_unified_diff,
 };
 use uuid::Uuid;
 
@@ -39,6 +40,25 @@ pub struct RefSummary {
 pub struct StashSummary {
     pub reference: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffTarget {
+    Unstaged,
+    Staged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatchSelection {
+    pub hunk_index: usize,
+    pub line_indices: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitRequest {
+    pub summary: String,
+    pub description: String,
+    pub amend: bool,
 }
 
 const MINIMUM_GIT_VERSION: GitVersion = GitVersion {
@@ -170,6 +190,145 @@ impl RepositoryService {
         })
     }
 
+    pub fn diff(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+        target: DiffTarget,
+    ) -> Result<DiffDocument, AppError> {
+        let output = self.diff_bytes(repository, path, target, 3)?;
+        parse_unified_diff(&output).map_err(|error| AppError::InvalidGitOutput(error.to_string()))
+    }
+
+    pub fn stage_paths(
+        &self,
+        repository: &RepositoryDescriptor,
+        paths: &[Vec<u8>],
+    ) -> Result<(), AppError> {
+        let mut args = vec![OsString::from("add"), OsString::from("--")];
+        args.extend(
+            paths
+                .iter()
+                .map(|path| path_argument(path))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        self.git_unit(repository, args)
+    }
+
+    pub fn unstage_paths(
+        &self,
+        repository: &RepositoryDescriptor,
+        paths: &[Vec<u8>],
+        unborn: bool,
+    ) -> Result<(), AppError> {
+        let mut args = if unborn {
+            vec![
+                OsString::from("rm"),
+                OsString::from("--cached"),
+                OsString::from("--ignore-unmatch"),
+                OsString::from("--"),
+            ]
+        } else {
+            vec![
+                OsString::from("restore"),
+                OsString::from("--staged"),
+                OsString::from("--"),
+            ]
+        };
+        args.extend(
+            paths
+                .iter()
+                .map(|path| path_argument(path))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        self.git_unit(repository, args)
+    }
+
+    pub fn apply_selection(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+        target: DiffTarget,
+        selections: &[PatchSelection],
+    ) -> Result<(), AppError> {
+        if selections.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "Select at least one changed line or hunk".to_owned(),
+            ));
+        }
+        let output = self.diff_bytes(repository, path, target, 3)?;
+        let document = parse_unified_diff(&output)
+            .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
+        let patch = build_selected_patch(&document, selections)?;
+        let reverse = target == DiffTarget::Staged;
+        self.apply_cached_patch(repository, patch, reverse)
+    }
+
+    pub fn discard_path(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+        untracked: bool,
+    ) -> Result<(), AppError> {
+        let path = path_argument(path)?;
+        if untracked {
+            self.git_unit(
+                repository,
+                [
+                    OsString::from("clean"),
+                    OsString::from("-f"),
+                    OsString::from("-d"),
+                    OsString::from("--"),
+                    path,
+                ],
+            )
+        } else {
+            self.git_unit(
+                repository,
+                [
+                    OsString::from("restore"),
+                    OsString::from("--worktree"),
+                    OsString::from("--"),
+                    path,
+                ],
+            )
+        }
+    }
+
+    pub fn commit(
+        &self,
+        repository: &RepositoryDescriptor,
+        request: &CommitRequest,
+    ) -> Result<(), AppError> {
+        let summary = request.summary.trim();
+        if summary.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "Commit summary cannot be empty".to_owned(),
+            ));
+        }
+        if summary.contains(['\r', '\n']) {
+            return Err(AppError::InvalidRequest(
+                "Commit summary must be a single line".to_owned(),
+            ));
+        }
+        let mut message = summary.to_owned();
+        if !request.description.trim().is_empty() {
+            message.push_str("\n\n");
+            message.push_str(request.description.trim());
+        }
+        message.push('\n');
+        let mut args = vec![OsString::from("commit"), OsString::from("--file=-")];
+        if request.amend {
+            args.push(OsString::from("--amend"));
+        }
+        let mut git_request = GitRequest::new(args);
+        git_request.working_directory = Some(repository.worktree_path.clone());
+        git_request.timeout = Duration::from_secs(60);
+        git_request.stdin = Some(message.into_bytes());
+        ensure_success(self.run(git_request)?)?;
+        Ok(())
+    }
+
     fn rev_parse_path(&self, selected_path: &Path, argument: &str) -> Result<PathBuf, AppError> {
         let mut request = GitRequest::new([
             OsString::from("-C"),
@@ -214,6 +373,212 @@ impl RepositoryService {
         String::from_utf8(self.git_bytes(repository, args)?)
             .map_err(|error| AppError::InvalidGitOutput(error.to_string()))
     }
+
+    fn git_unit<I, S>(&self, repository: &RepositoryDescriptor, args: I) -> Result<(), AppError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        self.git_bytes(repository, args).map(|_| ())
+    }
+
+    fn diff_bytes(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+        target: DiffTarget,
+        context: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        let mut args = vec![
+            OsString::from("diff"),
+            OsString::from("--no-ext-diff"),
+            OsString::from("--no-color"),
+            OsString::from(format!("--unified={context}")),
+        ];
+        if target == DiffTarget::Staged {
+            args.push(OsString::from("--cached"));
+        }
+        args.push(OsString::from("--"));
+        args.push(path_argument(path)?);
+        let output = self.git_bytes(repository, args)?;
+        if !output.is_empty()
+            || target == DiffTarget::Staged
+            || !self.is_untracked(repository, path)?
+        {
+            return Ok(output);
+        }
+
+        let path = path_argument(path)?;
+        let mut request = GitRequest::new([
+            OsString::from("diff"),
+            OsString::from("--no-index"),
+            OsString::from("--no-color"),
+            OsString::from(format!("--unified={context}")),
+            OsString::from("--"),
+            OsString::from("/dev/null"),
+            path,
+        ]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(10);
+        let output = self.run(request)?;
+        if matches!(output.exit_code, 0 | 1) {
+            Ok(output.stdout)
+        } else {
+            ensure_success(output).map(|output| output.stdout)
+        }
+    }
+
+    fn is_untracked(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+    ) -> Result<bool, AppError> {
+        let output = self.git_bytes(
+            repository,
+            [
+                OsString::from("ls-files"),
+                OsString::from("--others"),
+                OsString::from("--exclude-standard"),
+                OsString::from("-z"),
+                OsString::from("--"),
+                path_argument(path)?,
+            ],
+        )?;
+        Ok(output
+            .split(|byte| *byte == 0)
+            .any(|candidate| candidate == path))
+    }
+
+    fn apply_cached_patch(
+        &self,
+        repository: &RepositoryDescriptor,
+        patch: Vec<u8>,
+        reverse: bool,
+    ) -> Result<(), AppError> {
+        let run = |check: bool| {
+            let mut args = vec![
+                OsString::from("apply"),
+                OsString::from("--cached"),
+                OsString::from("--recount"),
+            ];
+            if check {
+                args.push(OsString::from("--check"));
+            }
+            if reverse {
+                args.push(OsString::from("--reverse"));
+            }
+            let mut request = GitRequest::new(args);
+            request.working_directory = Some(repository.worktree_path.clone());
+            request.stdin = Some(patch.clone());
+            request.timeout = Duration::from_secs(15);
+            ensure_success(self.run(request)?)?;
+            Ok(())
+        };
+        run(true)?;
+        run(false)
+    }
+}
+
+fn build_selected_patch(
+    document: &DiffDocument,
+    selections: &[PatchSelection],
+) -> Result<Vec<u8>, AppError> {
+    let file = document
+        .files
+        .first()
+        .ok_or_else(|| AppError::InvalidRequest("No text diff is available".to_owned()))?;
+    if file.binary {
+        return Err(AppError::InvalidRequest(
+            "Binary files can only be staged or unstaged as a whole".to_owned(),
+        ));
+    }
+    let mut patch = file.header.clone();
+    let mut selected_change_count = 0;
+
+    for selection in selections {
+        let hunk = file.hunks.get(selection.hunk_index).ok_or_else(|| {
+            AppError::InvalidRequest("The selected hunk is no longer available".to_owned())
+        })?;
+        let select_whole_hunk = selection.line_indices.is_empty();
+        let changes_before = selected_change_count;
+        let mut body = Vec::new();
+        let mut old_count = 0_u64;
+        let mut new_count = 0_u64;
+        let mut kept_previous_line = false;
+        for (line_index, line) in hunk.lines.iter().enumerate() {
+            let selected = select_whole_hunk || selection.line_indices.contains(&line_index);
+            match line.kind {
+                DiffLineKind::Context => {
+                    body.extend_from_slice(b" ");
+                    body.extend_from_slice(&line.raw_content);
+                    body.push(b'\n');
+                    old_count += 1;
+                    new_count += 1;
+                    kept_previous_line = true;
+                }
+                DiffLineKind::Deletion if selected => {
+                    body.push(b'-');
+                    body.extend_from_slice(&line.raw_content);
+                    body.push(b'\n');
+                    old_count += 1;
+                    selected_change_count += 1;
+                    kept_previous_line = true;
+                }
+                DiffLineKind::Deletion => {
+                    body.push(b' ');
+                    body.extend_from_slice(&line.raw_content);
+                    body.push(b'\n');
+                    old_count += 1;
+                    new_count += 1;
+                    kept_previous_line = true;
+                }
+                DiffLineKind::Addition if selected => {
+                    body.push(b'+');
+                    body.extend_from_slice(&line.raw_content);
+                    body.push(b'\n');
+                    new_count += 1;
+                    selected_change_count += 1;
+                    kept_previous_line = true;
+                }
+                DiffLineKind::Addition => {
+                    kept_previous_line = false;
+                }
+                DiffLineKind::NoNewline if kept_previous_line => {
+                    body.extend_from_slice(b"\\ No newline at end of file\n");
+                }
+                DiffLineKind::NoNewline => {}
+            }
+        }
+        if selected_change_count > changes_before {
+            patch.extend_from_slice(
+                format!(
+                    "@@ -{},{} +{},{} @@\n",
+                    hunk.old_start, old_count, hunk.new_start, new_count
+                )
+                .as_bytes(),
+            );
+            patch.extend_from_slice(&body);
+        }
+    }
+    if selected_change_count == 0 {
+        return Err(AppError::InvalidRequest(
+            "Select at least one added or deleted line".to_owned(),
+        ));
+    }
+    Ok(patch)
+}
+
+#[cfg(unix)]
+fn path_argument(path: &[u8]) -> Result<OsString, AppError> {
+    use std::os::unix::ffi::OsStringExt;
+    Ok(OsString::from_vec(path.to_vec()))
+}
+
+#[cfg(windows)]
+fn path_argument(path: &[u8]) -> Result<OsString, AppError> {
+    String::from_utf8(path.to_vec())
+        .map(OsString::from)
+        .map_err(|_| AppError::InvalidRequest("File path is not valid UTF-8 on Windows".to_owned()))
 }
 
 fn parse_worktrees(output: &str, current_path: &Path) -> Vec<WorktreeSummary> {

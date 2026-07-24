@@ -1,6 +1,6 @@
-use app_core::{AppErrorDto, RepositorySidebar};
-use git_domain::{FileChange, HeadState, RepositorySnapshot};
-use serde::Serialize;
+use app_core::{AppErrorDto, CommitRequest, PatchSelection, RepositorySidebar};
+use git_domain::{DiffDocument, DiffLineKind, FileChange, HeadState, RepositorySnapshot};
+use serde::{Deserialize, Serialize};
 
 use crate::state::SessionTabState;
 
@@ -54,6 +54,7 @@ pub struct SessionTabDto {
     pub active: bool,
     pub page: String,
     pub selected_path: Option<String>,
+    pub selected_diff: String,
     pub panel_width: f64,
     pub unavailable: bool,
     pub snapshot: Option<RepositorySnapshotDto>,
@@ -138,6 +139,57 @@ impl From<RepositorySnapshot> for RepositorySnapshotDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DiffDto {
+    pub schema_version: u16,
+    pub binary: bool,
+    pub old_path: String,
+    pub new_path: String,
+    pub hunks: Vec<DiffHunkDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffHunkDto {
+    pub index: usize,
+    pub header: String,
+    pub old_start: u64,
+    pub old_count: u64,
+    pub new_start: u64,
+    pub new_count: u64,
+    pub lines: Vec<DiffLineDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffLineDto {
+    pub index: usize,
+    pub kind: &'static str,
+    pub old_line: Option<u64>,
+    pub new_line: Option<u64>,
+    pub content: String,
+    pub selectable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchSelectionDto {
+    pub hunk_index: usize,
+    #[serde(default)]
+    pub line_indices: Vec<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitRequestDto {
+    pub summary: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub amend: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepositorySidebarDto {
     pub schema_version: u16,
     pub worktrees: Vec<WorktreeDto>,
@@ -184,6 +236,7 @@ impl From<Vec<SessionTabState>> for SessionDto {
                     active: tab.stored.active,
                     page: tab.stored.page,
                     selected_path: tab.stored.selected_path,
+                    selected_diff: tab.stored.selected_diff,
                     panel_width: tab.stored.panel_width,
                     unavailable: tab.unavailable,
                     snapshot: tab.snapshot.map(RepositorySnapshotDto::from),
@@ -241,6 +294,79 @@ impl From<FileChange> for FileChangeDto {
             worktree_status: char::from(change.worktree_status).to_string(),
             conflict: change.is_conflict,
             submodule: change.is_submodule,
+        }
+    }
+}
+
+impl From<DiffDocument> for DiffDto {
+    fn from(document: DiffDocument) -> Self {
+        let file = document.files.into_iter().next();
+        Self {
+            schema_version: 1,
+            binary: file.as_ref().is_some_and(|file| file.binary),
+            old_path: file
+                .as_ref()
+                .map(|file| file.old_path.clone())
+                .unwrap_or_default(),
+            new_path: file
+                .as_ref()
+                .map(|file| file.new_path.clone())
+                .unwrap_or_default(),
+            hunks: file
+                .map(|file| {
+                    file.hunks
+                        .into_iter()
+                        .map(|hunk| DiffHunkDto {
+                            index: hunk.index,
+                            header: hunk.header,
+                            old_start: hunk.old_start,
+                            old_count: hunk.old_count,
+                            new_start: hunk.new_start,
+                            new_count: hunk.new_count,
+                            lines: hunk
+                                .lines
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, line)| {
+                                    let (kind, selectable) = match line.kind {
+                                        DiffLineKind::Context => ("context", false),
+                                        DiffLineKind::Addition => ("addition", true),
+                                        DiffLineKind::Deletion => ("deletion", true),
+                                        DiffLineKind::NoNewline => ("noNewline", false),
+                                    };
+                                    DiffLineDto {
+                                        index,
+                                        kind,
+                                        old_line: line.old_line,
+                                        new_line: line.new_line,
+                                        content: line.content,
+                                        selectable,
+                                    }
+                                })
+                                .collect(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl From<PatchSelectionDto> for PatchSelection {
+    fn from(selection: PatchSelectionDto) -> Self {
+        Self {
+            hunk_index: selection.hunk_index,
+            line_indices: selection.line_indices,
+        }
+    }
+}
+
+impl From<CommitRequestDto> for CommitRequest {
+    fn from(request: CommitRequestDto) -> Self {
+        Self {
+            summary: request.summary,
+            description: request.description,
+            amend: request.amend,
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::io::{Error as IoError, Read};
+use std::io::{Error as IoError, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{
@@ -22,6 +22,7 @@ pub struct GitRequest {
     pub args: Vec<OsString>,
     pub timeout: Duration,
     pub environment: BTreeMap<OsString, OsString>,
+    pub stdin: Option<Vec<u8>>,
 }
 
 impl GitRequest {
@@ -31,6 +32,7 @@ impl GitRequest {
             args: args.into_iter().map(Into::into).collect(),
             timeout: Duration::from_secs(10),
             environment: BTreeMap::new(),
+            stdin: None,
         }
     }
 }
@@ -97,7 +99,11 @@ impl GitExecutor {
             .args(&request.args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
-            .stdin(Stdio::null())
+            .stdin(if request.stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(directory) = request.working_directory {
@@ -115,6 +121,17 @@ impl GitExecutor {
                 GitExecutionError::Io(error)
             }
         })?;
+        if let Some(input) = request.stdin {
+            if let Err(error) = child
+                .stdin
+                .take()
+                .expect("stdin is piped")
+                .write_all(&input)
+            {
+                terminate(&mut child);
+                return Err(GitExecutionError::Io(error));
+            }
+        }
         let stdout_reader = read_stream(child.stdout.take().expect("stdout is piped"));
         let stderr_reader = read_stream(child.stderr.take().expect("stderr is piped"));
 

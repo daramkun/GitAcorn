@@ -1,5 +1,5 @@
-use app_core::RepositoryService;
-use git_domain::HeadState;
+use app_core::{CommitRequest, DiffTarget, PatchSelection, RepositoryService};
+use git_domain::{DiffLineKind, HeadState};
 use test_support::TestRepository;
 
 #[test]
@@ -114,4 +114,225 @@ fn assigns_one_repository_id_and_distinct_ids_to_linked_worktrees() {
             .iter()
             .any(|worktree| worktree.id == linked.worktree_id && !worktree.is_current)
     );
+}
+
+#[test]
+fn stages_selected_lines_and_unstages_them_without_touching_other_changes() {
+    let fixture = TestRepository::init();
+    fixture.write("tracked.txt", "first\nsecond\nthird\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.git(["commit", "-m", "baseline"]);
+    fixture.write("tracked.txt", "first\nSECOND\nthird\nfourth\n");
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let diff = service
+        .diff(&repository, b"tracked.txt", DiffTarget::Unstaged)
+        .expect("unstaged diff");
+    let hunk = &diff.files[0].hunks[0];
+    let selected = hunk
+        .lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            (matches!(line.kind, DiffLineKind::Addition | DiffLineKind::Deletion)
+                && line.content != "fourth")
+                .then_some(index)
+        })
+        .collect();
+
+    service
+        .apply_selection(
+            &repository,
+            b"tracked.txt",
+            DiffTarget::Unstaged,
+            &[PatchSelection {
+                hunk_index: 0,
+                line_indices: selected,
+            }],
+        )
+        .expect("stage selected replacement");
+
+    let staged = String::from_utf8(fixture.git_output([
+        "diff",
+        "--cached",
+        "--no-color",
+        "--",
+        "tracked.txt",
+    ]))
+    .expect("UTF-8 staged diff");
+    let unstaged =
+        String::from_utf8(fixture.git_output(["diff", "--no-color", "--", "tracked.txt"]))
+            .expect("UTF-8 unstaged diff");
+    assert!(staged.contains("SECOND"));
+    assert!(!staged.contains("fourth"));
+    assert!(unstaged.contains("fourth"));
+
+    let staged_diff = service
+        .diff(&repository, b"tracked.txt", DiffTarget::Staged)
+        .expect("staged diff");
+    let staged_hunk = &staged_diff.files[0].hunks[0];
+    let staged_lines = staged_hunk
+        .lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| line.kind.ne(&DiffLineKind::Context).then_some(index))
+        .collect();
+    service
+        .apply_selection(
+            &repository,
+            b"tracked.txt",
+            DiffTarget::Staged,
+            &[PatchSelection {
+                hunk_index: 0,
+                line_indices: staged_lines,
+            }],
+        )
+        .expect("unstage selected replacement");
+
+    assert!(
+        fixture
+            .git_output(["diff", "--cached", "--", "tracked.txt"])
+            .is_empty()
+    );
+    let snapshot = service.snapshot(&repository, 2).expect("status");
+    let change = snapshot
+        .status
+        .changes
+        .iter()
+        .find(|change| change.path == b"tracked.txt")
+        .expect("tracked change");
+    assert_eq!(change.index_status, b'.');
+    assert_eq!(change.worktree_status, b'M');
+}
+
+#[test]
+fn rejects_an_invalid_patch_before_changing_the_index() {
+    let fixture = TestRepository::init();
+    fixture.write("tracked.txt", "changed\n");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    let result = service.apply_selection(
+        &repository,
+        b"tracked.txt",
+        DiffTarget::Unstaged,
+        &[PatchSelection {
+            hunk_index: 99,
+            line_indices: Vec::new(),
+        }],
+    );
+
+    assert!(result.is_err());
+    assert!(fixture.git_output(["diff", "--cached"]).is_empty());
+}
+
+#[test]
+fn stages_commits_and_discards_with_real_git() {
+    let fixture = TestRepository::init();
+    fixture.write("tracked.txt", "ready to commit\n");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .stage_paths(&repository, &[b"tracked.txt".to_vec()])
+        .expect("stage file");
+    service
+        .commit(
+            &repository,
+            &CommitRequest {
+                summary: "Commit from GitAcorn".to_owned(),
+                description: "M3 integration flow".to_owned(),
+                amend: false,
+            },
+        )
+        .expect("commit");
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["log", "-1", "--pretty=%s"]))
+            .expect("UTF-8 subject")
+            .trim(),
+        "Commit from GitAcorn"
+    );
+
+    fixture.write("tracked.txt", "amended content\n");
+    service
+        .stage_paths(&repository, &[b"tracked.txt".to_vec()])
+        .expect("stage amend");
+    service
+        .commit(
+            &repository,
+            &CommitRequest {
+                summary: "Amended from GitAcorn".to_owned(),
+                description: String::new(),
+                amend: true,
+            },
+        )
+        .expect("amend commit");
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["log", "-1", "--pretty=%s"]))
+            .expect("UTF-8 amended subject")
+            .trim(),
+        "Amended from GitAcorn"
+    );
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["rev-list", "--count", "HEAD"]))
+            .expect("UTF-8 commit count")
+            .trim(),
+        "2"
+    );
+
+    fixture.write("tracked.txt", "discard me\n");
+    service
+        .discard_path(&repository, b"tracked.txt", false)
+        .expect("discard tracked change");
+    assert!(
+        service
+            .snapshot(&repository, 3)
+            .expect("clean status")
+            .status
+            .changes
+            .is_empty()
+    );
+}
+
+#[test]
+fn renders_and_partially_stages_an_untracked_file() {
+    let fixture = TestRepository::init();
+    fixture.write("new file.txt", "one\ntwo\n");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let diff = service
+        .diff(&repository, b"new file.txt", DiffTarget::Unstaged)
+        .expect("untracked diff");
+    let hunk = &diff.files[0].hunks[0];
+    let first_addition = hunk
+        .lines
+        .iter()
+        .position(|line| line.kind == DiffLineKind::Addition && line.content == "one")
+        .expect("first addition");
+
+    service
+        .apply_selection(
+            &repository,
+            b"new file.txt",
+            DiffTarget::Unstaged,
+            &[PatchSelection {
+                hunk_index: 0,
+                line_indices: vec![first_addition],
+            }],
+        )
+        .expect("partially stage untracked file");
+
+    let staged = String::from_utf8(fixture.git_output(["show", ":new file.txt"]))
+        .expect("UTF-8 index content");
+    assert_eq!(staged, "one\n");
+    let snapshot = service.snapshot(&repository, 4).expect("partial status");
+    let change = snapshot
+        .status
+        .changes
+        .iter()
+        .find(|change| change.path == b"new file.txt")
+        .expect("partial new file");
+    assert_eq!(change.index_status, b'A');
+    assert_eq!(change.worktree_status, b'M');
 }

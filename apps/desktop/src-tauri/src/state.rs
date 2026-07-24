@@ -3,8 +3,13 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Mutex;
 
-use app_core::{AppError, RepositoryScheduler, RepositoryService, RepositorySidebar};
-use git_domain::{RepoId, RepositoryDescriptor, RepositorySnapshot, WorktreeId};
+use app_core::{
+    AppError, CommitRequest, DiffTarget, PatchSelection, RepositoryScheduler, RepositoryService,
+    RepositorySidebar,
+};
+use git_domain::{
+    DiffDocument, HeadState, RepoId, RepositoryDescriptor, RepositorySnapshot, WorktreeId,
+};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use persistence::{SessionStore, SessionTab};
 use tauri::{AppHandle, Emitter};
@@ -77,6 +82,9 @@ impl ApplicationState {
                     .map(|tab| tab.page.clone())
                     .unwrap_or_else(|| "changes".to_owned()),
                 selected_path: existing.and_then(|tab| tab.selected_path.clone()),
+                selected_diff: existing
+                    .map(|tab| tab.selected_diff.clone())
+                    .unwrap_or_else(|| "unstaged".to_owned()),
                 panel_width: existing.map(|tab| tab.panel_width).unwrap_or(280.0),
             })
             .await
@@ -154,6 +162,90 @@ impl ApplicationState {
             .read(repo_id, || self.service.sidebar(&descriptor))
     }
 
+    pub fn repository_diff(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        path: &[u8],
+        target: DiffTarget,
+    ) -> Result<DiffDocument, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.read(repo_id, || {
+            let repositories = self
+                .repositories
+                .lock()
+                .expect("repository registry lock poisoned");
+            let repository = repositories
+                .get(&repo_id)
+                .ok_or(AppError::RepositoryNotOpen)?;
+            ensure_revision(revision, repository.revision)?;
+            self.service.diff(&repository.descriptor, path, target)
+        })
+    }
+
+    pub fn stage_paths(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        paths: &[Vec<u8>],
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.stage_paths(repository, paths)
+        })
+    }
+
+    pub fn unstage_paths(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        paths: &[Vec<u8>],
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            let snapshot = service.snapshot(repository, revision)?;
+            service.unstage_paths(
+                repository,
+                paths,
+                matches!(snapshot.status.head, HeadState::Unborn),
+            )
+        })
+    }
+
+    pub fn apply_selection(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        path: &[u8],
+        target: DiffTarget,
+        selections: &[PatchSelection],
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.apply_selection(repository, path, target, selections)
+        })
+    }
+
+    pub fn discard_path(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        path: &[u8],
+        untracked: bool,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.discard_path(repository, path, untracked)
+        })
+    }
+
+    pub fn commit(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        request: &CommitRequest,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.commit(repository, request)
+        })
+    }
+
     pub async fn activate_worktree(
         &self,
         repo_id: &str,
@@ -211,6 +303,7 @@ impl ApplicationState {
         tab.worktree_id = descriptor.worktree_id.to_string();
         tab.worktree_path = descriptor.worktree_path.to_string_lossy().into_owned();
         tab.selected_path = None;
+        tab.selected_diff = "unstaged".to_owned();
         self.session
             .upsert_tab(&tab)
             .await
@@ -253,6 +346,7 @@ impl ApplicationState {
         repo_id: &str,
         page: String,
         selected_path: Option<String>,
+        selected_diff: String,
         panel_width: f64,
     ) -> Result<(), AppError> {
         let tabs = self.load_stored_tabs().await?;
@@ -262,6 +356,7 @@ impl ApplicationState {
             .ok_or(AppError::RepositoryNotOpen)?;
         tab.page = page;
         tab.selected_path = selected_path;
+        tab.selected_diff = selected_diff;
         tab.panel_width = panel_width;
         self.session
             .upsert_tab(&tab)
@@ -271,6 +366,41 @@ impl ApplicationState {
 
     async fn load_stored_tabs(&self) -> Result<Vec<SessionTab>, AppError> {
         self.session.load_tabs().await.map_err(persistence_error)
+    }
+
+    fn mutate(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        operation: impl FnOnce(&RepositoryService, &RepositoryDescriptor) -> Result<(), AppError>,
+    ) -> Result<RepositorySnapshot, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, repository.revision)?;
+                repository.descriptor.clone()
+            };
+            operation(&self.service, &descriptor)?;
+            let next_revision = {
+                let mut repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get_mut(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                repository.revision += 1;
+                repository.revision
+            };
+            self.service.snapshot(&descriptor, next_revision)
+        })
     }
 
     async fn session_tabs(
@@ -339,6 +469,14 @@ fn parse_repo_id(repo_id: &str) -> Result<RepoId, AppError> {
     RepoId::from_str(repo_id).map_err(|_| AppError::RepositoryNotOpen)
 }
 
+fn ensure_revision(expected: u64, actual: u64) -> Result<(), AppError> {
+    if expected == actual {
+        Ok(())
+    } else {
+        Err(AppError::StaleRevision { expected, actual })
+    }
+}
+
 fn persistence_error(error: sqlx::Error) -> AppError {
     AppError::Persistence {
         detail: error.to_string(),
@@ -349,5 +487,24 @@ fn watcher_error(error: notify::Error) -> AppError {
     AppError::GitFailed {
         diagnostic_id: Uuid::new_v4(),
         detail: format!("Could not watch repository: {error}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use app_core::AppError;
+
+    use super::ensure_revision;
+
+    #[test]
+    fn rejects_a_stale_write_revision() {
+        let error = ensure_revision(4, 5).expect_err("stale revision");
+        assert!(matches!(
+            error,
+            AppError::StaleRevision {
+                expected: 4,
+                actual: 5
+            }
+        ));
     }
 }

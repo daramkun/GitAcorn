@@ -41,6 +41,25 @@ impl TestRepository {
     {
         run_git(self.path(), args);
     }
+
+    pub fn git_output<I, S>(&self, args: I) -> Vec<u8>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let output = Command::new("git")
+            .current_dir(self.path())
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args(args)
+            .output()
+            .expect("run fixture Git command");
+        assert!(
+            output.status.success(),
+            "Git fixture command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    }
 }
 
 fn run_git<I, S>(directory: &Path, args: I)

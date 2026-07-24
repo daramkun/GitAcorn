@@ -30,6 +30,7 @@ pub struct SessionTab {
     pub active: bool,
     pub page: String,
     pub selected_path: Option<String>,
+    pub selected_diff: String,
     pub panel_width: f64,
 }
 
@@ -57,6 +58,7 @@ impl SessionStore {
                 active INTEGER NOT NULL DEFAULT 0,
                 page TEXT NOT NULL DEFAULT 'changes',
                 selected_path TEXT,
+                selected_diff TEXT NOT NULL DEFAULT 'unstaged',
                 panel_width REAL NOT NULL DEFAULT 280
             )",
         )
@@ -71,6 +73,18 @@ impl SessionStore {
             sqlx::query("ALTER TABLE session_tabs ADD COLUMN worktree_id TEXT NOT NULL DEFAULT ''")
                 .execute(&pool)
                 .await?;
+        }
+        let has_selected_diff: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('session_tabs') WHERE name = 'selected_diff'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        if has_selected_diff == 0 {
+            sqlx::query(
+                "ALTER TABLE session_tabs ADD COLUMN selected_diff TEXT NOT NULL DEFAULT 'unstaged'",
+            )
+            .execute(&pool)
+            .await?;
         }
         Ok(Self { pool })
     }
@@ -90,6 +104,7 @@ impl SessionStore {
                 active INTEGER NOT NULL DEFAULT 0,
                 page TEXT NOT NULL DEFAULT 'changes',
                 selected_path TEXT,
+                selected_diff TEXT NOT NULL DEFAULT 'unstaged',
                 panel_width REAL NOT NULL DEFAULT 280
             )",
         )
@@ -100,7 +115,7 @@ impl SessionStore {
 
     pub async fn load_tabs(&self) -> Result<Vec<SessionTab>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, panel_width
+            "SELECT repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width
              FROM session_tabs ORDER BY tab_order",
         )
         .fetch_all(&self.pool)
@@ -115,6 +130,7 @@ impl SessionStore {
                 active: row.get::<i64, _>("active") != 0,
                 page: row.get("page"),
                 selected_path: row.get("selected_path"),
+                selected_diff: row.get("selected_diff"),
                 panel_width: row.get("panel_width"),
             })
             .collect())
@@ -129,8 +145,8 @@ impl SessionStore {
         }
         sqlx::query(
             "INSERT INTO session_tabs
-                (repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, panel_width)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(repo_id) DO UPDATE SET
                 worktree_id = excluded.worktree_id,
                 worktree_path = excluded.worktree_path,
@@ -138,6 +154,7 @@ impl SessionStore {
                 active = excluded.active,
                 page = excluded.page,
                 selected_path = excluded.selected_path,
+                selected_diff = excluded.selected_diff,
                 panel_width = excluded.panel_width",
         )
         .bind(&tab.repo_id)
@@ -147,6 +164,7 @@ impl SessionStore {
         .bind(tab.active)
         .bind(&tab.page)
         .bind(&tab.selected_path)
+        .bind(&tab.selected_diff)
         .bind(tab.panel_width)
         .execute(&mut *transaction)
         .await?;
@@ -213,6 +231,7 @@ mod tests {
                     }
                     .to_owned(),
                     selected_path: Some(format!("{repo_id}.txt")),
+                    selected_diff: "staged".to_owned(),
                     panel_width: 320.0,
                 })
                 .await
@@ -229,6 +248,7 @@ mod tests {
         assert!(tabs[1].active);
         assert_eq!(tabs[0].page, "history");
         assert_eq!(tabs[0].selected_path.as_deref(), Some("one.txt"));
+        assert_eq!(tabs[0].selected_diff, "staged");
     }
 
     #[tokio::test]
@@ -244,6 +264,7 @@ mod tests {
                     active: false,
                     page: "changes".to_owned(),
                     selected_path: None,
+                    selected_diff: "unstaged".to_owned(),
                     panel_width: 280.0,
                 })
                 .await
@@ -304,5 +325,6 @@ mod tests {
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs[0].repo_id, "legacy");
         assert_eq!(tabs[0].worktree_id, "");
+        assert_eq!(tabs[0].selected_diff, "unstaged");
     }
 }
