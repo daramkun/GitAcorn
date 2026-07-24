@@ -18,10 +18,14 @@ tauri-build = { version = "2.4", features = [] }
 
 [dependencies]
 app-core = { path = "../../../crates/app-core" }
+git-domain = { path = "../../../crates/git-domain" }
+notify = "8.0"
 serde.workspace = true
 tauri = { version = "2.8", features = [] }
+tauri-plugin-dialog = "2.4"
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

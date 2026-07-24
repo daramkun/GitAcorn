@@ -1,19 +1,37 @@
 //! Application use cases and errors shared by every UI adapter.
 
+mod repository;
+mod scheduler;
+
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use repository::{GitVersion, RepositoryService};
+pub use scheduler::RepositoryScheduler;
+
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("Repository could not be found")]
+    #[error("Git is not installed or is not available on PATH")]
+    GitNotFound,
+    #[error("Git {found} is not supported; Git {minimum} or newer is required")]
+    UnsupportedGitVersion { found: String, minimum: String },
+    #[error("The selected path does not exist or cannot be accessed")]
+    InvalidPath,
+    #[error("The selected folder is not inside a Git working tree")]
     RepositoryNotFound,
+    #[error("Repository is not open in this session")]
+    RepositoryNotOpen,
     #[error(
         "The request used repository revision {expected}, but the current revision is {actual}"
     )]
     StaleRevision { expected: u64, actual: u64 },
+    #[error("Git operation timed out")]
+    TimedOut,
     #[error("Git operation failed (diagnostic {diagnostic_id})")]
-    GitFailed { diagnostic_id: Uuid },
+    GitFailed { diagnostic_id: Uuid, detail: String },
+    #[error("Git output could not be parsed: {0}")]
+    InvalidGitOutput(String),
     #[error("Operation was cancelled")]
     Cancelled,
 }
@@ -24,22 +42,39 @@ pub struct AppErrorDto {
     pub schema_version: u16,
     pub code: &'static str,
     pub message: String,
+    pub details: Option<String>,
     pub recovery_actions: Vec<&'static str>,
 }
 
 impl From<&AppError> for AppErrorDto {
     fn from(error: &AppError) -> Self {
         let (code, recovery_actions) = match error {
-            AppError::RepositoryNotFound => ("repositoryNotFound", vec!["chooseRepository"]),
+            AppError::GitNotFound => ("gitNotFound", vec!["installGit", "retry"]),
+            AppError::UnsupportedGitVersion { .. } => ("unsupportedGitVersion", vec!["updateGit"]),
+            AppError::InvalidPath | AppError::RepositoryNotFound => {
+                ("repositoryNotFound", vec!["chooseRepository"])
+            }
+            AppError::RepositoryNotOpen => ("repositoryNotOpen", vec!["chooseRepository"]),
             AppError::StaleRevision { .. } => ("staleRevision", vec!["refresh"]),
+            AppError::TimedOut => ("timedOut", vec!["retry"]),
             AppError::GitFailed { .. } => ("gitFailed", vec!["retry", "copyDiagnostics"]),
+            AppError::InvalidGitOutput(_) => ("invalidGitOutput", vec!["retry", "copyDiagnostics"]),
             AppError::Cancelled => ("cancelled", Vec::new()),
+        };
+        let details = match error {
+            AppError::GitFailed {
+                diagnostic_id,
+                detail,
+            } => Some(format!("{diagnostic_id}: {detail}")),
+            AppError::InvalidGitOutput(detail) => Some(detail.clone()),
+            _ => None,
         };
 
         Self {
             schema_version: 1,
             code,
             message: error.to_string(),
+            details,
             recovery_actions,
         }
     }
@@ -58,5 +93,11 @@ mod tests {
 
         assert_eq!(dto.code, "staleRevision");
         assert_eq!(dto.recovery_actions, vec!["refresh"]);
+    }
+
+    #[test]
+    fn missing_repository_can_reopen_picker() {
+        let dto = AppErrorDto::from(&AppError::RepositoryNotFound);
+        assert_eq!(dto.recovery_actions, vec!["chooseRepository"]);
     }
 }

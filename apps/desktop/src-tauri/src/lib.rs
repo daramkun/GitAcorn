@@ -1,5 +1,6 @@
 mod commands;
 mod dto;
+mod state;
 
 use tracing_subscriber::EnvFilter;
 
@@ -7,7 +8,13 @@ pub fn run() {
     init_tracing();
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![commands::app_info])
+        .plugin(tauri_plugin_dialog::init())
+        .manage(state::ApplicationState::default())
+        .invoke_handler(tauri::generate_handler![
+            commands::app_info,
+            commands::repository_open,
+            commands::repository_snapshot
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run GitAcorn");
 }
