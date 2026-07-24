@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="GitAcorn">
+  <rect width="256" height="256" rx="56" fill="#17100c"/>
+  <path d="M142 53c4-19 18-30 35-35-1 20-10 35-31 43" fill="none" stroke="#8b5a2b" stroke-width="16" stroke-linecap="round"/>
+  <path d="M66 111c5-39 30-62 67-62s62 23 67 62H66Z" fill="#5b371f"/>
+  <path d="M73 116h120c0 69-24 112-60 112S73 185 73 116Z" fill="#c88743"/>
+  <path d="M73 116h120" fill="none" stroke="#e0aa68" stroke-width="12" stroke-linecap="round"/>
+</svg>

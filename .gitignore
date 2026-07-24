@@ -1,0 +1,10 @@
+/target/
+node_modules/
+/.pnpm-store/
+/.tools/
+/apps/desktop/dist/
+/apps/desktop/src-tauri/gen/
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

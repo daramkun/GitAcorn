@@ -1,0 +1,10 @@
+[package]
+name = "git-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+git-domain = { path = "../git-domain" }
+tracing.workspace = true
