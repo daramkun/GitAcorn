@@ -867,8 +867,13 @@ function VirtualDiffLines({
   if (!virtual) return <div className="diff-lines">{content}</div>;
   return (
     <div className="diff-lines virtual-diff" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
-      <div style={{ height: lines.length * rowHeight }}>
-        <div style={{ transform: `translateY(${start * rowHeight}px)` }}>{content}</div>
+      <div className="virtual-diff-space" style={{ height: lines.length * rowHeight }}>
+        <div
+          className="virtual-diff-window"
+          style={{ transform: `translateY(${start * rowHeight}px)` }}
+        >
+          {content}
+        </div>
       </div>
     </div>
   );

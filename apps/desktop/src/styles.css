@@ -31,6 +31,7 @@ body,
   height: 100%;
   min-height: 580px;
   margin: 0;
+  overflow: hidden;
 }
 
 button,
@@ -476,12 +477,15 @@ button:disabled {
   display: grid;
   flex: 1;
   grid-template-columns: var(--file-panel-width, minmax(190px, 0.28fr)) minmax(330px, 1fr) minmax(210px, 0.3fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
+  overflow: hidden;
 }
 
 .file-panel,
 .commit-panel {
   min-width: 0;
+  min-height: 0;
   background: var(--surface);
 }
 
@@ -635,7 +639,9 @@ button:disabled {
   flex-direction: column;
   justify-content: center;
   min-width: 0;
+  min-height: 0;
   padding: 36px;
+  overflow: hidden;
   text-align: center;
 }
 
@@ -746,8 +752,18 @@ button:disabled {
 }
 
 .diff-lines.virtual-diff {
+  position: relative;
   overflow-y: auto;
   max-height: 520px;
+}
+
+.virtual-diff-space {
+  position: relative;
+}
+
+.virtual-diff-window {
+  position: absolute;
+  inset: 0 0 auto;
 }
 
 .diff-line {
