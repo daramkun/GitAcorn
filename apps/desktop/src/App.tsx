@@ -11,14 +11,20 @@ import {
   applyPatchSelection,
   activateSessionTab,
   activateWorktree,
+  checkoutBranch,
   chooseRepositoryDirectory,
   closeSessionTab,
+  createBranch,
   createCommit,
+  deleteBranch,
   discardPath,
   getDiff,
+  getHistoryPage,
+  getReferences,
   getRepositorySidebar,
   getRepositorySnapshot,
   listenForRepositoryChanges,
+  mergeBranch,
   normalizeAppError,
   openRepository,
   reorderSessionTabs,
@@ -27,11 +33,13 @@ import {
   unstagePaths,
   updateSessionTab,
   type AppErrorDto,
+  type CommitDto,
   type DiffDto,
   type DiffTarget,
   type FileChangeDto,
   type RepositorySnapshotDto,
   type RepositorySidebarDto,
+  type ReferenceDto,
   type SessionTabDto,
 } from "./repository";
 
@@ -177,7 +185,17 @@ export function App() {
   }
 
   function updateActiveTab(
-    patch: Partial<Pick<SessionTabDto, "page" | "selectedPath" | "selectedDiff">>,
+    patch: Partial<
+      Pick<
+        SessionTabDto,
+        | "page"
+        | "selectedPath"
+        | "selectedDiff"
+        | "historyCursor"
+        | "selectedCommit"
+        | "historyFilter"
+      >
+    >,
   ) {
     if (!activeTab) return;
     const next = { ...activeTab, ...patch };
@@ -188,6 +206,9 @@ export function App() {
       next.selectedPath,
       next.selectedDiff,
       next.panelWidth,
+      next.historyCursor,
+      next.selectedCommit,
+      next.historyFilter,
     ).catch(
       (reason: unknown) => setError(normalizeAppError(reason)),
     );
@@ -352,6 +373,9 @@ export function App() {
                     next.selectedPath,
                     next.selectedDiff,
                     panelWidth,
+                    next.historyCursor,
+                    next.selectedCommit,
+                    next.historyFilter,
                   ).catch((reason: unknown) => setError(normalizeAppError(reason)));
                 }}
                 onSelect={(selectedPath, selectedDiff) =>
@@ -372,7 +396,31 @@ export function App() {
               <ChangesEmpty onOpen={handleOpenRepository} opening={opening || sessionLoading} />
             )
           ) : (
-            <HistoryEmpty hasRepository={Boolean(activeSnapshot)} />
+            activeSnapshot && activeTab ? (
+              <HistoryView
+                key={activeTab.repoId}
+                tab={activeTab}
+                snapshot={activeSnapshot}
+                onPersist={(patch) => updateActiveTab(patch)}
+                onSnapshot={(next) =>
+                  setTabs((current) =>
+                    current.map((tab) =>
+                      tab.repoId === next.repository.id ? { ...tab, snapshot: next } : tab,
+                    ),
+                  )
+                }
+                onSidebarInvalidated={() =>
+                  setSidebars((current) => {
+                    const next = { ...current };
+                    delete next[activeTab.repoId];
+                    return next;
+                  })
+                }
+                onError={(reason) => setError(normalizeAppError(reason))}
+              />
+            ) : (
+              <HistoryEmpty />
+            )
           )}
         </section>
       </main>
@@ -883,6 +931,345 @@ function ChangesEmpty({ onOpen, opening }: { onOpen: () => void; opening: boolea
   return <div className="changes-layout"><section className="file-panel" aria-label="Changed files"><ChangeSection title="Unstaged" target="unstaged" changes={[]} onSelect={() => undefined} /><ChangeSection title="Staged" target="staged" changes={[]} onSelect={() => undefined} /></section><section className="welcome-panel"><div className="welcome-art" aria-hidden="true"><span className="branch-line" /><span className="branch-node node-one" /><span className="branch-node node-two" /><span className="branch-node node-three" /></div><p className="eyebrow">A calmer Git workflow</p><h1>Your repositories, clearly in view.</h1><p>Open a local repository to inspect its real staged, unstaged, and untracked changes.</p><button type="button" onClick={onOpen} disabled={opening}>{opening ? "Opening…" : "Open a repository"}</button><small>Git 2.40.0 or newer is required.</small></section><aside className="commit-panel" aria-label="Commit form preview"><div className="panel-heading"><h2>Commit</h2></div><textarea aria-label="Commit summary" placeholder="Summary" disabled /><textarea aria-label="Commit description" placeholder="Description (optional)" disabled /><button type="button" disabled>Commit</button></aside></div>;
 }
 
-function HistoryEmpty({ hasRepository }: { hasRepository: boolean }) {
-  return <div className="history-empty"><div className="history-lines" aria-hidden="true"><i /><i /><i /></div><p className="eyebrow">Commit graph</p><h1>History will appear here.</h1><p>{hasRepository ? "Commit history is planned for M4." : "Open a repository to explore commits, branches, tags, and authors."}</p></div>;
+function HistoryView({
+  tab,
+  snapshot,
+  onPersist,
+  onSnapshot,
+  onSidebarInvalidated,
+  onError,
+}: {
+  tab: SessionTabDto;
+  snapshot: RepositorySnapshotDto;
+  onPersist: (
+    patch: Partial<
+      Pick<SessionTabDto, "historyCursor" | "selectedCommit" | "historyFilter">
+    >,
+  ) => void;
+  onSnapshot: (snapshot: RepositorySnapshotDto) => void;
+  onSidebarInvalidated: () => void;
+  onError: (error: unknown) => void;
+}) {
+  const savedFilter = parseHistoryFilter(tab.historyFilter);
+  const [commits, setCommits] = useState<CommitDto[]>([]);
+  const [references, setReferences] = useState<ReferenceDto[]>([]);
+  const [reference, setReference] = useState(savedFilter.reference);
+  const [query, setQuery] = useState(savedFilter.query);
+  const [draftQuery, setDraftQuery] = useState(savedFilter.query);
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [selectedOid, setSelectedOid] = useState(tab.selectedCommit);
+  const [loading, setLoading] = useState(true);
+  const [operation, setOperation] = useState<string>();
+  const [branchName, setBranchName] = useState("");
+  const selected = commits.find((commit) => commit.oid === selectedOid) ?? commits[0];
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      getHistoryPage(
+        snapshot.repository.id,
+        tab.historyCursor,
+        reference || undefined,
+        query || undefined,
+      ),
+      getReferences(snapshot.repository.id),
+    ])
+      .then(([page, refs]) => {
+        if (!active) return;
+        setCommits(page.commits);
+        setNextCursor(page.nextCursor);
+        setReferences(refs);
+        const oid =
+          page.commits.find((commit) => commit.oid === selectedOid)?.oid ??
+          page.commits[0]?.oid;
+        setSelectedOid(oid);
+        if (oid && oid !== tab.selectedCommit) onPersist({ selectedCommit: oid });
+      })
+      .catch(onError)
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [snapshot.repository.id, reference, query]);
+
+  async function loadMore() {
+    if (!nextCursor) return;
+    setLoading(true);
+    try {
+      const cursor = nextCursor;
+      const page = await getHistoryPage(
+        snapshot.repository.id,
+        cursor,
+        reference || undefined,
+        query || undefined,
+      );
+      setCommits((current) => [...current, ...page.commits]);
+      setNextCursor(page.nextCursor);
+      onPersist({ historyCursor: cursor });
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function persistFilter(nextReference: string, nextQuery: string) {
+    onPersist({
+      historyCursor: undefined,
+      historyFilter: JSON.stringify({ reference: nextReference, query: nextQuery }),
+    });
+  }
+
+  async function mutate(label: string, action: () => Promise<RepositorySnapshotDto>) {
+    setOperation(label);
+    try {
+      const next = await action();
+      onSnapshot(next);
+      onSidebarInvalidated();
+      setReferences(await getReferences(snapshot.repository.id));
+      const page = await getHistoryPage(
+        snapshot.repository.id,
+        undefined,
+        reference || undefined,
+        query || undefined,
+      );
+      setCommits(page.commits);
+      setNextCursor(page.nextCursor);
+      onPersist({ historyCursor: undefined });
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setOperation(undefined);
+    }
+  }
+
+  const selectedReference = references.find(
+    (item) => item.fullName === reference || item.shortName === reference,
+  );
+  const currentBranch = snapshot.head.kind === "branch" ? snapshot.head.name : undefined;
+  const hasConflicts = snapshot.changes.some((change) => change.conflict);
+
+  return (
+    <div className="history-view">
+      <section className="history-list-panel" aria-label="Commit history">
+        <form
+          className="history-filterbar"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setQuery(draftQuery.trim());
+            persistFilter(reference, draftQuery.trim());
+          }}
+        >
+          <select
+            aria-label="Branch or tag reference"
+            value={reference}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setReference(value);
+              persistFilter(value, query);
+            }}
+          >
+            <option value="">All branches and tags</option>
+            {references.map((item) => (
+              <option key={item.fullName} value={item.fullName}>
+                {item.kind === "tag" ? "tag: " : ""}{item.shortName}
+              </option>
+            ))}
+          </select>
+          <input
+            aria-label="Search commit messages"
+            value={draftQuery}
+            onChange={(event) => setDraftQuery(event.currentTarget.value)}
+            placeholder="Search subject or body"
+          />
+          <button type="submit">Search</button>
+        </form>
+        {loading && commits.length === 0 ? (
+          <div className="history-state" role="status">Loading history…</div>
+        ) : commits.length === 0 ? (
+          <div className="history-state">No commits match this filter.</div>
+        ) : (
+          <div className="commit-list">
+            {commits.map((commit) => (
+              <button
+                type="button"
+                key={commit.oid}
+                className={selected?.oid === commit.oid ? "commit-row selected" : "commit-row"}
+                aria-current={selected?.oid === commit.oid ? "true" : undefined}
+                onClick={() => {
+                  setSelectedOid(commit.oid);
+                  onPersist({ selectedCommit: commit.oid });
+                }}
+              >
+                <span
+                  className={`graph-node lane-${commit.lane % 6}`}
+                  style={{ "--lane": commit.lane, "--lanes": commit.laneCount } as CSSProperties}
+                  aria-label={`Graph lane ${commit.lane + 1} of ${commit.laneCount}`}
+                />
+                <span className="commit-copy">
+                  <strong>{commit.subject}</strong>
+                  <span>{commit.authorName} · {relativeTime(commit.authoredAt)}</span>
+                </span>
+                <span className="commit-refs">
+                  {commit.references.slice(0, 2).map((item) => <small key={item}>{shortRef(item)}</small>)}
+                </span>
+                <code>{commit.oid.slice(0, 8)}</code>
+              </button>
+            ))}
+          </div>
+        )}
+        {nextCursor && (
+          <button className="load-more" type="button" disabled={loading} onClick={loadMore}>
+            {loading ? "Loading…" : "Load older commits"}
+          </button>
+        )}
+      </section>
+
+      <aside className="commit-detail" aria-label="Commit details">
+        {hasConflicts && (
+          <div className="merge-conflict" role="alert">
+            Merge stopped with conflicts. Resolve the highlighted files in Changes.
+          </div>
+        )}
+        {selected ? (
+          <>
+            <span className="eyebrow">{selected.oid}</span>
+            <h1>{selected.subject}</h1>
+            <p>{selected.authorName} &lt;{selected.authorEmail}&gt;</p>
+            <time dateTime={new Date(selected.authoredAt * 1000).toISOString()}>
+              {new Date(selected.authoredAt * 1000).toLocaleString()}
+            </time>
+            {selected.body && <pre>{selected.body}</pre>}
+            <div className="detail-refs">
+              {selected.references.map((item) => <span key={item}>{shortRef(item)}</span>)}
+            </div>
+          </>
+        ) : (
+          <div className="history-state">Select a commit to inspect it.</div>
+        )}
+
+        <div className="reference-actions">
+          <h2>Reference actions</h2>
+          {selectedReference ? (
+            <>
+              <strong>{selectedReference.shortName}</strong>
+              {selectedReference.upstream && (
+                <span>
+                  {selectedReference.upstream} · ↑{selectedReference.ahead} ↓{selectedReference.behind}
+                </span>
+              )}
+              {selectedReference.kind === "localBranch" && (
+                <div>
+                  <button
+                    type="button"
+                    disabled={Boolean(operation) || selectedReference.shortName === currentBranch}
+                    onClick={() =>
+                      void mutate("Checking out…", () =>
+                        checkoutBranch(
+                          snapshot.repository.id,
+                          snapshot.revision,
+                          selectedReference.shortName,
+                        ),
+                      )
+                    }
+                  >
+                    Checkout
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(operation) || selectedReference.shortName === currentBranch}
+                    onClick={() =>
+                      window.confirm(`Delete merged branch ${selectedReference.shortName}?`) &&
+                      void mutate("Deleting branch…", () =>
+                        deleteBranch(
+                          snapshot.repository.id,
+                          snapshot.revision,
+                          selectedReference.shortName,
+                        ),
+                      )
+                    }
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(operation) || selectedReference.shortName === currentBranch}
+                    onClick={() =>
+                      window.confirm(`Merge ${selectedReference.shortName} into ${currentBranch ?? "HEAD"}?`) &&
+                      void mutate("Merging…", () =>
+                        mergeBranch(
+                          snapshot.repository.id,
+                          snapshot.revision,
+                          selectedReference.shortName,
+                        ),
+                      )
+                    }
+                  >
+                    Merge
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <span>Choose a branch or tag to enable explicit actions.</span>
+          )}
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const name = branchName.trim();
+              if (!name) return;
+              void mutate("Creating branch…", () =>
+                createBranch(snapshot.repository.id, snapshot.revision, {
+                  name,
+                  startPoint: selected?.oid,
+                }),
+              ).then(() => setBranchName(""));
+            }}
+          >
+            <input
+              aria-label="New branch name"
+              value={branchName}
+              onChange={(event) => setBranchName(event.currentTarget.value)}
+              placeholder="new/branch-name"
+            />
+            <button type="submit" disabled={!branchName.trim() || Boolean(operation)}>
+              Create at selected commit
+            </button>
+          </form>
+          {operation && <span role="status">{operation}</span>}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function parseHistoryFilter(value?: string): { reference: string; query: string } {
+  if (!value) return { reference: "", query: "" };
+  try {
+    const parsed = JSON.parse(value) as { reference?: string; query?: string };
+    return { reference: parsed.reference ?? "", query: parsed.query ?? "" };
+  } catch {
+    return { reference: "", query: value };
+  }
+}
+
+function shortRef(value: string) {
+  return value
+    .replace("HEAD -> ", "")
+    .replace("refs/heads/", "")
+    .replace("refs/remotes/", "")
+    .replace("refs/tags/", "");
+}
+
+function relativeTime(timestamp: number) {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000) - timestamp);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
+  if (seconds < 2_592_000) return `${Math.floor(seconds / 86_400)}d ago`;
+  return new Date(timestamp * 1000).toLocaleDateString();
+}
+
+function HistoryEmpty() {
+  return <div className="history-empty"><div className="history-lines" aria-hidden="true"><i /><i /><i /></div><p className="eyebrow">Commit graph</p><h1>History will appear here.</h1><p>Open a repository to explore commits, branches, tags, and authors.</p></div>;
 }

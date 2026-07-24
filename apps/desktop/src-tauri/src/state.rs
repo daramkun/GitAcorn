@@ -4,11 +4,12 @@ use std::str::FromStr;
 use std::sync::Mutex;
 
 use app_core::{
-    AppError, CommitRequest, DiffTarget, PatchSelection, RepositoryScheduler, RepositoryService,
-    RepositorySidebar,
+    AppError, BranchRequest, CommitRequest, DiffTarget, GitReference, HistoryFilter,
+    PatchSelection, RepositoryScheduler, RepositoryService, RepositorySidebar,
 };
 use git_domain::{
-    DiffDocument, HeadState, RepoId, RepositoryDescriptor, RepositorySnapshot, WorktreeId,
+    DiffDocument, HeadState, HistoryPage, RepoId, RepositoryDescriptor, RepositorySnapshot,
+    WorktreeId,
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use persistence::{SessionStore, SessionTab};
@@ -24,6 +25,16 @@ pub struct SessionTabState {
     pub stored: SessionTab,
     pub snapshot: Option<RepositorySnapshot>,
     pub unavailable: bool,
+}
+
+pub struct SessionTabUpdate {
+    pub page: String,
+    pub selected_path: Option<String>,
+    pub selected_diff: String,
+    pub panel_width: f64,
+    pub history_cursor: Option<String>,
+    pub selected_commit: Option<String>,
+    pub history_filter: Option<String>,
 }
 
 pub struct ApplicationState {
@@ -86,6 +97,9 @@ impl ApplicationState {
                     .map(|tab| tab.selected_diff.clone())
                     .unwrap_or_else(|| "unstaged".to_owned()),
                 panel_width: existing.map(|tab| tab.panel_width).unwrap_or(280.0),
+                history_cursor: existing.and_then(|tab| tab.history_cursor.clone()),
+                selected_commit: existing.and_then(|tab| tab.selected_commit.clone()),
+                history_filter: existing.and_then(|tab| tab.history_filter.clone()),
             })
             .await
             .map_err(persistence_error)?;
@@ -160,6 +174,24 @@ impl ApplicationState {
             .clone();
         self.scheduler
             .read(repo_id, || self.service.sidebar(&descriptor))
+    }
+
+    pub fn repository_history(
+        &self,
+        repo_id: &str,
+        filter: &HistoryFilter,
+    ) -> Result<HistoryPage, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.history(&descriptor, filter))
+    }
+
+    pub fn repository_references(&self, repo_id: &str) -> Result<Vec<GitReference>, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.references(&descriptor))
     }
 
     pub fn repository_diff(
@@ -243,6 +275,50 @@ impl ApplicationState {
     ) -> Result<RepositorySnapshot, AppError> {
         self.mutate(repo_id, revision, |service, repository| {
             service.commit(repository, request)
+        })
+    }
+
+    pub fn create_branch(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        request: &BranchRequest,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.create_branch(repository, request)
+        })
+    }
+
+    pub fn checkout_branch(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        name: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.checkout_branch(repository, name)
+        })
+    }
+
+    pub fn delete_branch(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        name: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.delete_branch(repository, name)
+        })
+    }
+
+    pub fn merge_reference(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        reference: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.merge_reference(repository, reference)
         })
     }
 
@@ -344,20 +420,20 @@ impl ApplicationState {
     pub async fn update_tab(
         &self,
         repo_id: &str,
-        page: String,
-        selected_path: Option<String>,
-        selected_diff: String,
-        panel_width: f64,
+        update: SessionTabUpdate,
     ) -> Result<(), AppError> {
         let tabs = self.load_stored_tabs().await?;
         let mut tab = tabs
             .into_iter()
             .find(|tab| tab.repo_id == repo_id)
             .ok_or(AppError::RepositoryNotOpen)?;
-        tab.page = page;
-        tab.selected_path = selected_path;
-        tab.selected_diff = selected_diff;
-        tab.panel_width = panel_width;
+        tab.page = update.page;
+        tab.selected_path = update.selected_path;
+        tab.selected_diff = update.selected_diff;
+        tab.panel_width = update.panel_width;
+        tab.history_cursor = update.history_cursor;
+        tab.selected_commit = update.selected_commit;
+        tab.history_filter = update.history_filter;
         self.session
             .upsert_tab(&tab)
             .await
@@ -401,6 +477,15 @@ impl ApplicationState {
             };
             self.service.snapshot(&descriptor, next_revision)
         })
+    }
+
+    fn descriptor(&self, repo_id: RepoId) -> Result<RepositoryDescriptor, AppError> {
+        self.repositories
+            .lock()
+            .expect("repository registry lock poisoned")
+            .get(&repo_id)
+            .ok_or(AppError::RepositoryNotOpen)
+            .map(|repository| repository.descriptor.clone())
     }
 
     async fn session_tabs(

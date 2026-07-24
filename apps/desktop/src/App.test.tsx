@@ -7,14 +7,20 @@ import {
   applyPatchSelection,
   activateSessionTab,
   activateWorktree,
+  checkoutBranch,
   chooseRepositoryDirectory,
   closeSessionTab,
+  createBranch,
   createCommit,
+  deleteBranch,
   discardPath,
   getDiff,
+  getHistoryPage,
+  getReferences,
   getRepositorySidebar,
   getRepositorySnapshot,
   listenForRepositoryChanges,
+  mergeBranch,
   openRepository,
   reorderSessionTabs,
   restoreSession,
@@ -36,10 +42,15 @@ vi.mock("./repository", () => ({
   restoreSession: vi.fn(),
   activateSessionTab: vi.fn(),
   activateWorktree: vi.fn(),
+  checkoutBranch: vi.fn(),
   closeSessionTab: vi.fn(),
+  createBranch: vi.fn(),
   createCommit: vi.fn(),
+  deleteBranch: vi.fn(),
   discardPath: vi.fn(),
   getDiff: vi.fn(),
+  getHistoryPage: vi.fn(),
+  getReferences: vi.fn(),
   getRepositorySidebar: vi.fn(),
   reorderSessionTabs: vi.fn(),
   updateSessionTab: vi.fn(),
@@ -47,6 +58,7 @@ vi.mock("./repository", () => ({
   stagePaths: vi.fn(),
   unstagePaths: vi.fn(),
   listenForRepositoryChanges: vi.fn(),
+  mergeBranch: vi.fn(),
   normalizeAppError: (error: unknown) => {
     const value = error as { code?: string; message?: string; details?: string };
     return {
@@ -65,17 +77,23 @@ const mockedOpenRepository = vi.mocked(openRepository);
 const mockedRestoreSession = vi.mocked(restoreSession);
 const mockedActivateTab = vi.mocked(activateSessionTab);
 const mockedActivateWorktree = vi.mocked(activateWorktree);
+const mockedCheckoutBranch = vi.mocked(checkoutBranch);
 const mockedCloseTab = vi.mocked(closeSessionTab);
+const mockedCreateBranch = vi.mocked(createBranch);
 const mockedGetSidebar = vi.mocked(getRepositorySidebar);
 const mockedReorderTabs = vi.mocked(reorderSessionTabs);
 const mockedUpdateTab = vi.mocked(updateSessionTab);
 const mockedGetSnapshot = vi.mocked(getRepositorySnapshot);
 const mockedGetDiff = vi.mocked(getDiff);
+const mockedGetHistory = vi.mocked(getHistoryPage);
+const mockedGetReferences = vi.mocked(getReferences);
 const mockedStagePaths = vi.mocked(stagePaths);
 const mockedUnstagePaths = vi.mocked(unstagePaths);
 const mockedApplyPatch = vi.mocked(applyPatchSelection);
 const mockedDiscardPath = vi.mocked(discardPath);
 const mockedCreateCommit = vi.mocked(createCommit);
+const mockedDeleteBranch = vi.mocked(deleteBranch);
+const mockedMergeBranch = vi.mocked(mergeBranch);
 const mockedListenForChanges = vi.mocked(listenForRepositoryChanges);
 
 const snapshot: RepositorySnapshotDto = {
@@ -185,11 +203,42 @@ describe("App", () => {
         },
       ],
     });
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: "abcdef123456",
+          parents: [],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          subject: "Initial commit",
+          body: "",
+          references: ["HEAD -> refs/heads/main"],
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+    mockedGetReferences.mockResolvedValue([
+      {
+        fullName: "refs/heads/main",
+        shortName: "main",
+        oid: "abcdef123456",
+        kind: "localBranch",
+        ahead: 0,
+        behind: 0,
+      },
+    ]);
     mockedStagePaths.mockResolvedValue(snapshot);
     mockedUnstagePaths.mockResolvedValue(snapshot);
     mockedApplyPatch.mockResolvedValue(snapshot);
     mockedDiscardPath.mockResolvedValue(snapshot);
     mockedCreateCommit.mockResolvedValue({ ...snapshot, changes: [] });
+    mockedCreateBranch.mockResolvedValue(snapshot);
+    mockedCheckoutBranch.mockResolvedValue(snapshot);
+    mockedDeleteBranch.mockResolvedValue(snapshot);
+    mockedMergeBranch.mockResolvedValue(snapshot);
     mockedListenForChanges.mockResolvedValue(vi.fn());
   });
 
@@ -207,7 +256,7 @@ describe("App", () => {
     await screen.findByText("acorn-demo");
     fireEvent.click(screen.getByRole("button", { name: /^History/ }));
 
-    expect(screen.getByRole("heading", { name: "History will appear here." })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Initial commit/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^History/ })).toHaveAttribute(
       "aria-current",
       "page",
@@ -218,6 +267,9 @@ describe("App", () => {
       undefined,
       "unstaged",
       280,
+      undefined,
+      undefined,
+      undefined,
     );
   });
 
@@ -240,6 +292,49 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: /tracked\.txt/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /staged file\.txt/ })).toBeInTheDocument();
     expect(mockedOpenRepository).toHaveBeenCalledWith("C:\\Code\\acorn-demo");
+  });
+
+  it("keeps reference selection separate from explicit checkout", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], page: "history" }],
+    });
+    mockedGetReferences.mockResolvedValue([
+      {
+        fullName: "refs/heads/main",
+        shortName: "main",
+        oid: "abcdef123456",
+        kind: "localBranch",
+        ahead: 0,
+        behind: 0,
+      },
+      {
+        fullName: "refs/heads/topic",
+        shortName: "topic",
+        oid: "123456abcdef",
+        kind: "localBranch",
+        upstream: "origin/topic",
+        ahead: 2,
+        behind: 1,
+      },
+    ]);
+    render(<App />);
+
+    const picker = await screen.findByRole("combobox", {
+      name: "Branch or tag reference",
+    });
+    await screen.findByRole("option", { name: "topic" });
+    fireEvent.change(picker, { target: { value: "refs/heads/topic" } });
+
+    expect(mockedCheckoutBranch).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Checkout" }));
+    await waitFor(() =>
+      expect(mockedCheckoutBranch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "topic",
+      ),
+    );
   });
 
   it("rapidly switches three repositories without mixing page, branch, or selection", async () => {
@@ -297,7 +392,7 @@ describe("App", () => {
 
     await screen.findByText("acorn-demo");
     fireEvent.click(screen.getByRole("button", { name: /^second-repo0$/ }));
-    expect(screen.getByRole("heading", { name: "History will appear here." })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Initial commit/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^third-repo1$/ }));
     expect(screen.getByText("release · Changes")).toBeInTheDocument();
@@ -327,6 +422,9 @@ describe("App", () => {
       undefined,
       "unstaged",
       340,
+      undefined,
+      undefined,
+      undefined,
     );
   });
 

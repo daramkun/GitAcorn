@@ -1,5 +1,11 @@
-use app_core::{AppErrorDto, CommitRequest, PatchSelection, RepositorySidebar};
-use git_domain::{DiffDocument, DiffLineKind, FileChange, HeadState, RepositorySnapshot};
+use app_core::{
+    AppErrorDto, BranchRequest, CommitRequest, GitReference, PatchSelection, ReferenceKind,
+    RepositorySidebar,
+};
+use git_domain::{
+    CommitSummary, DiffDocument, DiffLineKind, FileChange, HeadState, HistoryPage,
+    RepositorySnapshot,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::state::SessionTabState;
@@ -56,6 +62,9 @@ pub struct SessionTabDto {
     pub selected_path: Option<String>,
     pub selected_diff: String,
     pub panel_width: f64,
+    pub history_cursor: Option<String>,
+    pub selected_commit: Option<String>,
+    pub history_filter: Option<String>,
     pub unavailable: bool,
     pub snapshot: Option<RepositorySnapshotDto>,
 }
@@ -188,6 +197,60 @@ pub struct CommitRequestDto {
     pub amend: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchRequestDto {
+    pub name: String,
+    pub start_point: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTabUpdateDto {
+    pub page: String,
+    pub selected_path: Option<String>,
+    pub selected_diff: String,
+    pub panel_width: f64,
+    pub history_cursor: Option<String>,
+    pub selected_commit: Option<String>,
+    pub history_filter: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPageDto {
+    pub schema_version: u16,
+    pub commits: Vec<CommitDto>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDto {
+    pub oid: String,
+    pub parents: Vec<String>,
+    pub author_name: String,
+    pub author_email: String,
+    pub authored_at: i64,
+    pub subject: String,
+    pub body: String,
+    pub references: Vec<String>,
+    pub lane: usize,
+    pub lane_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceDto {
+    pub full_name: String,
+    pub short_name: String,
+    pub oid: String,
+    pub kind: &'static str,
+    pub upstream: Option<String>,
+    pub ahead: u64,
+    pub behind: u64,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositorySidebarDto {
@@ -238,6 +301,9 @@ impl From<Vec<SessionTabState>> for SessionDto {
                     selected_path: tab.stored.selected_path,
                     selected_diff: tab.stored.selected_diff,
                     panel_width: tab.stored.panel_width,
+                    history_cursor: tab.stored.history_cursor,
+                    selected_commit: tab.stored.selected_commit,
+                    history_filter: tab.stored.history_filter,
                     unavailable: tab.unavailable,
                     snapshot: tab.snapshot.map(RepositorySnapshotDto::from),
                 })
@@ -367,6 +433,60 @@ impl From<CommitRequestDto> for CommitRequest {
             summary: request.summary,
             description: request.description,
             amend: request.amend,
+        }
+    }
+}
+
+impl From<BranchRequestDto> for BranchRequest {
+    fn from(request: BranchRequestDto) -> Self {
+        Self {
+            name: request.name,
+            start_point: request.start_point,
+        }
+    }
+}
+
+impl From<HistoryPage> for HistoryPageDto {
+    fn from(page: HistoryPage) -> Self {
+        Self {
+            schema_version: 1,
+            commits: page.commits.into_iter().map(CommitDto::from).collect(),
+            next_cursor: page.next_cursor,
+        }
+    }
+}
+
+impl From<CommitSummary> for CommitDto {
+    fn from(commit: CommitSummary) -> Self {
+        Self {
+            oid: commit.oid,
+            parents: commit.parents,
+            author_name: commit.author_name,
+            author_email: commit.author_email,
+            authored_at: commit.authored_at,
+            subject: commit.subject,
+            body: commit.body,
+            references: commit.references,
+            lane: commit.lane,
+            lane_count: commit.lane_count,
+        }
+    }
+}
+
+impl From<GitReference> for ReferenceDto {
+    fn from(reference: GitReference) -> Self {
+        Self {
+            full_name: reference.full_name,
+            short_name: reference.short_name,
+            oid: reference.oid,
+            kind: match reference.kind {
+                ReferenceKind::LocalBranch => "localBranch",
+                ReferenceKind::RemoteBranch => "remoteBranch",
+                ReferenceKind::Tag => "tag",
+            },
+            upstream: reference.upstream,
+            ahead: reference.ahead,
+            behind: reference.behind,
         }
     }
 }

@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use git_cli::{CancellationToken, GitExecutionError, GitExecutor, GitOutput, GitRequest};
 use git_domain::{
-    DiffDocument, DiffLineKind, RepoId, RepositoryDescriptor, RepositorySnapshot, WorktreeId,
-    parse_porcelain_v2, parse_unified_diff,
+    DiffDocument, DiffLineKind, HistoryPage, RepoId, RepositoryDescriptor, RepositorySnapshot,
+    WorktreeId, parse_history_records, parse_porcelain_v2, parse_unified_diff,
 };
 use uuid::Uuid;
 
@@ -40,6 +40,39 @@ pub struct RefSummary {
 pub struct StashSummary {
     pub reference: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceKind {
+    LocalBranch,
+    RemoteBranch,
+    Tag,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitReference {
+    pub full_name: String,
+    pub short_name: String,
+    pub oid: String,
+    pub kind: ReferenceKind,
+    pub upstream: Option<String>,
+    pub ahead: u64,
+    pub behind: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HistoryFilter {
+    pub cursor: Option<String>,
+    pub reference: Option<String>,
+    pub query: Option<String>,
+    pub author: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchRequest {
+    pub name: String,
+    pub start_point: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +221,138 @@ impl RepositoryService {
             tags: summarize_refs(&tags),
             stashes: parse_stashes(&stashes),
         })
+    }
+
+    pub fn references(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<Vec<GitReference>, AppError> {
+        let output = self.git_bytes(
+            repository,
+            [
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname)%00%(refname:short)%00%(objectname)%00%(upstream:short)%00%(upstream:track)%00%1e",
+                "refs/heads",
+                "refs/remotes",
+                "refs/tags",
+            ],
+        )?;
+        parse_references(&output)
+    }
+
+    pub fn history(
+        &self,
+        repository: &RepositoryDescriptor,
+        filter: &HistoryFilter,
+    ) -> Result<HistoryPage, AppError> {
+        let limit = filter.limit.clamp(1, 200);
+        let offset = parse_history_cursor(filter.cursor.as_deref())?;
+        let mut args = vec![
+            OsString::from("log"),
+            OsString::from("--topo-order"),
+            OsString::from("--date-order"),
+            OsString::from("--decorate=full"),
+            OsString::from("--all"),
+            OsString::from("--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%b%x00%D%x00%x1e"),
+            OsString::from(format!("--skip={offset}")),
+            OsString::from(format!("--max-count={}", limit + 1)),
+        ];
+        if let Some(query) = filter
+            .query
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            args.push(OsString::from("--regexp-ignore-case"));
+            args.push(OsString::from(format!("--grep={}", query.trim())));
+        }
+        if let Some(author) = filter
+            .author
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            args.push(OsString::from(format!("--author={}", author.trim())));
+        }
+        if let Some(reference) = filter
+            .reference
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            args.retain(|arg| arg != "--all");
+            args.push(OsString::from(reference));
+        }
+        let output = self.git_bytes(repository, args)?;
+        let mut commits = parse_history_records(&output).map_err(AppError::InvalidGitOutput)?;
+        let has_more = commits.len() > limit;
+        commits.truncate(limit);
+        Ok(HistoryPage {
+            commits,
+            next_cursor: has_more.then(|| format!("offset:{}", offset + limit)),
+        })
+    }
+
+    pub fn create_branch(
+        &self,
+        repository: &RepositoryDescriptor,
+        request: &BranchRequest,
+    ) -> Result<(), AppError> {
+        let name = self.validate_branch_name(repository, &request.name)?;
+        let mut args = vec![OsString::from("branch"), OsString::from(name)];
+        if let Some(start_point) = request
+            .start_point
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            args.push(OsString::from(start_point));
+        }
+        self.git_unit(repository, args)
+    }
+
+    pub fn checkout_branch(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+    ) -> Result<(), AppError> {
+        self.git_unit(repository, ["switch", name])
+    }
+
+    pub fn delete_branch(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+    ) -> Result<(), AppError> {
+        self.git_unit(repository, ["branch", "--delete", name])
+    }
+
+    pub fn merge_reference(
+        &self,
+        repository: &RepositoryDescriptor,
+        reference: &str,
+    ) -> Result<(), AppError> {
+        let mut request = GitRequest::new(["merge", "--no-edit", "--", reference]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(120);
+        let output = self.run(request)?;
+        if output.exit_code == 0 || repository.git_dir.join("MERGE_HEAD").is_file() {
+            Ok(())
+        } else {
+            ensure_success(output).map(|_| ())
+        }
+    }
+
+    fn validate_branch_name(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+    ) -> Result<String, AppError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "Branch name cannot be empty".to_owned(),
+            ));
+        }
+        self.git_unit(repository, ["check-ref-format", "--branch", name])?;
+        Ok(name.to_owned())
     }
 
     pub fn diff(
@@ -650,6 +815,62 @@ fn parse_stashes(output: &[u8]) -> Vec<StashSummary> {
         .collect()
 }
 
+fn parse_history_cursor(cursor: Option<&str>) -> Result<usize, AppError> {
+    match cursor {
+        None | Some("") => Ok(0),
+        Some(cursor) => cursor
+            .strip_prefix("offset:")
+            .and_then(|value| value.parse().ok())
+            .ok_or_else(|| AppError::InvalidRequest("History cursor is invalid".to_owned())),
+    }
+}
+
+fn parse_references(output: &[u8]) -> Result<Vec<GitReference>, AppError> {
+    output
+        .split(|byte| *byte == 0x1e)
+        .filter(|record| !record.iter().all(u8::is_ascii_whitespace))
+        .map(|record| {
+            let record = record.strip_prefix(b"\n").unwrap_or(record);
+            let fields: Vec<&[u8]> = record.split(|byte| *byte == 0).collect();
+            if fields.len() < 5 {
+                return Err(AppError::InvalidGitOutput(
+                    "reference record has too few fields".to_owned(),
+                ));
+            }
+            let text = |field: &[u8]| String::from_utf8_lossy(field).trim().to_owned();
+            let full_name = text(fields[0]);
+            let kind = if full_name.starts_with("refs/heads/") {
+                ReferenceKind::LocalBranch
+            } else if full_name.starts_with("refs/remotes/") {
+                ReferenceKind::RemoteBranch
+            } else {
+                ReferenceKind::Tag
+            };
+            let tracking = text(fields[4]);
+            let count = |label: &str| {
+                tracking
+                    .split([',', '[', ']'])
+                    .map(str::trim)
+                    .find_map(|part| {
+                        part.strip_prefix(label)
+                            .and_then(|value| value.trim().parse::<u64>().ok())
+                    })
+                    .unwrap_or(0)
+            };
+            let upstream = text(fields[3]);
+            Ok(GitReference {
+                full_name,
+                short_name: text(fields[1]),
+                oid: text(fields[2]),
+                kind,
+                upstream: (!upstream.is_empty()).then_some(upstream),
+                ahead: count("ahead"),
+                behind: count("behind"),
+            })
+        })
+        .collect()
+}
+
 fn ensure_success(output: GitOutput) -> Result<GitOutput, AppError> {
     if output.exit_code == 0 {
         return Ok(output);
@@ -708,7 +929,10 @@ fn parse_git_version(output: &[u8]) -> Result<GitVersion, AppError> {
 mod tests {
     use std::path::Path;
 
-    use super::{GitVersion, parse_git_version, parse_stashes, parse_worktrees, summarize_refs};
+    use super::{
+        GitVersion, ReferenceKind, parse_git_version, parse_references, parse_stashes,
+        parse_worktrees, summarize_refs,
+    };
 
     #[test]
     fn parses_windows_git_version_suffix() {
@@ -739,5 +963,15 @@ mod tests {
         let stashes = parse_stashes(b"stash@{0}\0WIP one\0\nstash@{1}\0WIP two\0\n");
         assert_eq!(stashes.len(), 2);
         assert_eq!(stashes[0].reference, "stash@{0}");
+    }
+
+    #[test]
+    fn parses_detailed_refs_and_tracking_counts() {
+        let refs =
+            parse_references(b"refs/heads/main\0main\0abc\0origin/main\0[ahead 2, behind 3]\0\x1e")
+                .expect("valid refs");
+        assert_eq!(refs[0].kind, ReferenceKind::LocalBranch);
+        assert_eq!(refs[0].ahead, 2);
+        assert_eq!(refs[0].behind, 3);
     }
 }

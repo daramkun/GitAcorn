@@ -8,8 +8,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use repository::{
-    CommitRequest, DiffTarget, GitVersion, PatchSelection, RefSummary, RepositoryService,
-    RepositorySidebar, StashSummary, WorktreeSummary,
+    BranchRequest, CommitRequest, DiffTarget, GitReference, GitVersion, HistoryFilter,
+    PatchSelection, RefSummary, ReferenceKind, RepositoryService, RepositorySidebar, StashSummary,
+    WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;
 

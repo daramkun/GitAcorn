@@ -870,6 +870,42 @@ pnpm build
 - 다음 시작 지점
   - M4 cursor 기반 commit log와 lane graph를 실제 대형 history fixture에서 시작한다.
 
+### M4 체크리스트
+
+- [x] cursor 기반 paginated commit log와 message/reference filter
+- [x] lane 기반 commit graph와 commit detail
+- [x] local/remote branches, tags, upstream ahead/behind
+- [x] branch create/checkout/safe delete
+- [x] branch/tag reference picker와 명시적 checkout 분리
+- [x] 기본 merge와 conflict 상태 진입
+- [x] 탭별 history cursor, filter, 선택 commit SQLite 복원
+- [x] 100k commit 첫 History page benchmark
+
+#### M4 완료 기록 — 2026-07-25
+
+- 구현된 사용자 흐름
+  - 실제 Git commit log를 최대 100개씩 cursor pagination하고 lane, subject, abbreviated OID, refs, author, 상대 시간으로 렌더링
+  - commit message 검색과 전체 local/remote branch 및 tag picker로 History 범위를 필터링하고 선택 commit 상세 확인
+  - reference 선택과 checkout을 분리하고 선택 commit에서 branch 생성, local branch 명시적 checkout, `git branch --delete` 기반 safe delete
+  - upstream tracking의 ahead/behind 표시와 현재 branch로 기본 merge 실행
+  - merge conflict를 실패로 버리지 않고 최신 repository snapshot의 conflict 상태와 Changes 복구 흐름으로 연결
+  - 저장소별 history cursor, filter, 선택 commit을 SQLite schema migration으로 저장·복원
+- 실행한 검증
+  - `cargo fmt --all -- --check` 통과
+  - `cargo clippy --workspace --all-targets -- -D warnings` 통과
+  - `cargo test --workspace` 통과: Rust unit/integration test 36개, large fixture benchmark 1개는 milestone gate로 분리
+  - 실제 temporary Git 저장소에서 cursor pagination, branch create/명시적 checkout, conflict merge snapshot 통합 test 통과
+  - 별도 milestone gate에서 `git fast-import`로 생성한 100k commit fixture의 첫 100개 History page 1초 이내 test 통과
+  - `pnpm lint` 통과
+  - `pnpm test --run` 통과: component test 15개
+  - `pnpm build` 통과
+  - `pnpm --filter @git-acorn/desktop tauri build --no-bundle` 통과
+- 남은 제한
+  - branch delete는 병합된 local branch에 대한 Git의 기본 safe delete만 제공하며 force delete는 제공하지 않는다.
+  - merge abort와 conflict resolution 편집 UI는 계획대로 M6 범위이고, M4에서는 conflict 상태 진입과 Changes 이동 경로까지 제공한다.
+- 다음 시작 지점
+  - M5 clone/fetch/pull/push operation을 Tauri Channel progress, cancel, credential/SSH 흐름과 함께 시작한다.
+
 ## 17. 아키텍처 결정 기록(ADR) 목록
 
 구현 전에 다음 결정을 짧은 ADR로 고정한다.

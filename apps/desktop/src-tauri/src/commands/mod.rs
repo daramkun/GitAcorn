@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 
-use app_core::{AppError, AppErrorDto, DiffTarget, PatchSelection};
+use app_core::{AppError, AppErrorDto, DiffTarget, HistoryFilter, PatchSelection};
 use tauri::{AppHandle, State};
 
 use crate::dto::{
-    AppInfoDto, CommandResult, CommitRequestDto, DiffDto, PatchSelectionDto, RepositorySidebarDto,
-    RepositorySnapshotDto, SessionDto,
+    AppInfoDto, BranchRequestDto, CommandResult, CommitRequestDto, DiffDto, HistoryPageDto,
+    PatchSelectionDto, ReferenceDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
+    SessionTabUpdateDto,
 };
-use crate::state::ApplicationState;
+use crate::state::{ApplicationState, SessionTabUpdate};
 
 #[tauri::command]
 pub fn app_info() -> AppInfoDto {
@@ -112,15 +113,111 @@ pub async fn session_tabs_reorder(
 #[tauri::command]
 pub async fn session_tab_update(
     repo_id: String,
-    page: String,
-    selected_path: Option<String>,
-    selected_diff: String,
-    panel_width: f64,
+    update: SessionTabUpdateDto,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<()> {
     state
-        .update_tab(&repo_id, page, selected_path, selected_diff, panel_width)
+        .update_tab(
+            &repo_id,
+            SessionTabUpdate {
+                page: update.page,
+                selected_path: update.selected_path,
+                selected_diff: update.selected_diff,
+                panel_width: update.panel_width,
+                history_cursor: update.history_cursor,
+                selected_commit: update.selected_commit,
+                history_filter: update.history_filter,
+            },
+        )
         .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn history_page(
+    repo_id: String,
+    cursor: Option<String>,
+    reference: Option<String>,
+    query: Option<String>,
+    author: Option<String>,
+    limit: usize,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<HistoryPageDto> {
+    state
+        .repository_history(
+            &repo_id,
+            &HistoryFilter {
+                cursor,
+                reference,
+                query,
+                author,
+                limit,
+            },
+        )
+        .map(HistoryPageDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn references_list(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<Vec<ReferenceDto>> {
+    state
+        .repository_references(&repo_id)
+        .map(|references| references.into_iter().map(ReferenceDto::from).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn branch_create(
+    repo_id: String,
+    revision: u64,
+    request: BranchRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .create_branch(&repo_id, revision, &request.into())
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn branch_checkout(
+    repo_id: String,
+    revision: u64,
+    name: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .checkout_branch(&repo_id, revision, &name)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn branch_delete(
+    repo_id: String,
+    revision: u64,
+    name: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .delete_branch(&repo_id, revision, &name)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn branch_merge(
+    repo_id: String,
+    revision: u64,
+    reference: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .merge_reference(&repo_id, revision, &reference)
+        .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
 

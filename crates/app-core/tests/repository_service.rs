@@ -1,5 +1,11 @@
-use app_core::{CommitRequest, DiffTarget, PatchSelection, RepositoryService};
+use app_core::{
+    BranchRequest, CommitRequest, DiffTarget, HistoryFilter, PatchSelection, ReferenceKind,
+    RepositoryService,
+};
 use git_domain::{DiffLineKind, HeadState};
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 use test_support::TestRepository;
 
 #[test]
@@ -75,6 +81,164 @@ fn reads_real_repository_sidebar_context() {
     assert_eq!(sidebar.tags.items, ["v0.1.0"]);
     assert_eq!(sidebar.stashes[0].reference, "stash@{0}");
     assert!(sidebar.stashes[0].message.contains("sidebar fixture"));
+}
+
+#[test]
+fn pages_history_and_manages_branches_without_implicit_checkout() {
+    let fixture = TestRepository::init();
+    for index in 1..=4 {
+        fixture.write("tracked.txt", &format!("commit {index}\n"));
+        fixture.git(["add", "tracked.txt"]);
+        fixture.git(["commit", "-m", &format!("history {index}")]);
+    }
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    let first = service
+        .history(
+            &repository,
+            &HistoryFilter {
+                limit: 2,
+                ..HistoryFilter::default()
+            },
+        )
+        .expect("first history page");
+    assert_eq!(first.commits.len(), 2);
+    assert_eq!(first.commits[0].subject, "history 4");
+    let second = service
+        .history(
+            &repository,
+            &HistoryFilter {
+                cursor: first.next_cursor,
+                limit: 2,
+                ..HistoryFilter::default()
+            },
+        )
+        .expect("second history page");
+    assert_eq!(second.commits[0].subject, "history 2");
+
+    service
+        .create_branch(
+            &repository,
+            &BranchRequest {
+                name: "feature/history".to_owned(),
+                start_point: None,
+            },
+        )
+        .expect("create branch");
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["branch", "--show-current"]))
+            .expect("branch text")
+            .trim(),
+        "main",
+        "creating or selecting a ref must not checkout"
+    );
+    let refs = service.references(&repository).expect("refs");
+    assert!(refs.iter().any(|reference| {
+        reference.kind == ReferenceKind::LocalBranch && reference.short_name == "feature/history"
+    }));
+    service
+        .checkout_branch(&repository, "feature/history")
+        .expect("explicit checkout");
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["branch", "--show-current"]))
+            .expect("branch text")
+            .trim(),
+        "feature/history"
+    );
+}
+
+#[test]
+fn merge_enters_conflict_state_without_losing_the_repository_snapshot() {
+    let fixture = TestRepository::init();
+    fixture.git(["switch", "-c", "topic"]);
+    fixture.write("tracked.txt", "topic\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.git(["commit", "-m", "topic change"]);
+    fixture.git(["switch", "main"]);
+    fixture.write("tracked.txt", "main\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.git(["commit", "-m", "main change"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    service
+        .merge_reference(&repository, "topic")
+        .expect("conflicted merge is a valid operation state");
+    let snapshot = service.snapshot(&repository, 2).expect("conflict snapshot");
+
+    assert!(
+        snapshot
+            .status
+            .changes
+            .iter()
+            .any(|change| change.is_conflict)
+    );
+    assert!(repository.git_dir.join("MERGE_HEAD").is_file());
+}
+
+#[test]
+#[ignore = "100k-commit performance fixture; run at milestone and release gates"]
+fn first_history_page_meets_the_large_repository_target() {
+    let directory = tempfile::tempdir().expect("large fixture directory");
+    let init = Command::new("git")
+        .current_dir(directory.path())
+        .args(["init", "-b", "main"])
+        .output()
+        .expect("initialize large fixture");
+    assert!(init.status.success());
+
+    let mut import = Command::new("git")
+        .current_dir(directory.path())
+        .args(["fast-import", "--quiet"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("start fast-import");
+    let stdin = import.stdin.as_mut().expect("fast-import stdin");
+    stdin
+        .write_all(b"blob\nmark :1\ndata 8\ninitial\n")
+        .expect("write blob");
+    for index in 0..100_000_u32 {
+        writeln!(
+            stdin,
+            "commit refs/heads/main\nmark :{}\nauthor Fixture <fixture@gitacorn.local> {} +0000\ncommitter Fixture <fixture@gitacorn.local> {} +0000\ndata {}\ncommit {}",
+            index + 2,
+            1_700_000_000_u64 + index as u64,
+            1_700_000_000_u64 + index as u64,
+            format!("commit {index}").len(),
+            index,
+        )
+        .expect("write commit");
+        if index == 0 {
+            writeln!(stdin, "M 100644 :1 tracked.txt").expect("write initial tree");
+        } else {
+            writeln!(stdin, "from :{}", index + 1).expect("write parent");
+        }
+        writeln!(stdin).expect("finish commit");
+    }
+    drop(import.stdin.take());
+    assert!(import.wait().expect("wait for fast-import").success());
+
+    let service = RepositoryService::default();
+    let repository = service.discover(directory.path()).expect("discover");
+    let started = Instant::now();
+    let page = service
+        .history(
+            &repository,
+            &HistoryFilter {
+                limit: 100,
+                ..HistoryFilter::default()
+            },
+        )
+        .expect("first history page");
+    let elapsed = started.elapsed();
+
+    assert_eq!(page.commits.len(), 100);
+    assert!(page.next_cursor.is_some());
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "first 100k history page took {elapsed:?}"
+    );
 }
 
 #[test]

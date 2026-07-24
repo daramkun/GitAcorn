@@ -32,6 +32,9 @@ pub struct SessionTab {
     pub selected_path: Option<String>,
     pub selected_diff: String,
     pub panel_width: f64,
+    pub history_cursor: Option<String>,
+    pub selected_commit: Option<String>,
+    pub history_filter: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,7 +62,10 @@ impl SessionStore {
                 page TEXT NOT NULL DEFAULT 'changes',
                 selected_path TEXT,
                 selected_diff TEXT NOT NULL DEFAULT 'unstaged',
-                panel_width REAL NOT NULL DEFAULT 280
+                panel_width REAL NOT NULL DEFAULT 280,
+                history_cursor TEXT,
+                selected_commit TEXT,
+                history_filter TEXT
             )",
         )
         .execute(&pool)
@@ -86,6 +92,20 @@ impl SessionStore {
             .execute(&pool)
             .await?;
         }
+        for column in ["history_cursor", "selected_commit", "history_filter"] {
+            let exists: i64 = sqlx::query_scalar(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('session_tabs') WHERE name = '{column}'"
+            ))
+            .fetch_one(&pool)
+            .await?;
+            if exists == 0 {
+                sqlx::query(&format!(
+                    "ALTER TABLE session_tabs ADD COLUMN {column} TEXT"
+                ))
+                .execute(&pool)
+                .await?;
+            }
+        }
         Ok(Self { pool })
     }
 
@@ -105,7 +125,10 @@ impl SessionStore {
                 page TEXT NOT NULL DEFAULT 'changes',
                 selected_path TEXT,
                 selected_diff TEXT NOT NULL DEFAULT 'unstaged',
-                panel_width REAL NOT NULL DEFAULT 280
+                panel_width REAL NOT NULL DEFAULT 280,
+                history_cursor TEXT,
+                selected_commit TEXT,
+                history_filter TEXT
             )",
         )
         .execute(&pool)
@@ -115,7 +138,7 @@ impl SessionStore {
 
     pub async fn load_tabs(&self) -> Result<Vec<SessionTab>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width
+            "SELECT repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width, history_cursor, selected_commit, history_filter
              FROM session_tabs ORDER BY tab_order",
         )
         .fetch_all(&self.pool)
@@ -132,6 +155,9 @@ impl SessionStore {
                 selected_path: row.get("selected_path"),
                 selected_diff: row.get("selected_diff"),
                 panel_width: row.get("panel_width"),
+                history_cursor: row.get("history_cursor"),
+                selected_commit: row.get("selected_commit"),
+                history_filter: row.get("history_filter"),
             })
             .collect())
     }
@@ -145,8 +171,8 @@ impl SessionStore {
         }
         sqlx::query(
             "INSERT INTO session_tabs
-                (repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width, history_cursor, selected_commit, history_filter)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(repo_id) DO UPDATE SET
                 worktree_id = excluded.worktree_id,
                 worktree_path = excluded.worktree_path,
@@ -155,7 +181,10 @@ impl SessionStore {
                 page = excluded.page,
                 selected_path = excluded.selected_path,
                 selected_diff = excluded.selected_diff,
-                panel_width = excluded.panel_width",
+                panel_width = excluded.panel_width,
+                history_cursor = excluded.history_cursor,
+                selected_commit = excluded.selected_commit,
+                history_filter = excluded.history_filter",
         )
         .bind(&tab.repo_id)
         .bind(&tab.worktree_id)
@@ -166,6 +195,9 @@ impl SessionStore {
         .bind(&tab.selected_path)
         .bind(&tab.selected_diff)
         .bind(tab.panel_width)
+        .bind(&tab.history_cursor)
+        .bind(&tab.selected_commit)
+        .bind(&tab.history_filter)
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await
@@ -233,6 +265,9 @@ mod tests {
                     selected_path: Some(format!("{repo_id}.txt")),
                     selected_diff: "staged".to_owned(),
                     panel_width: 320.0,
+                    history_cursor: Some("offset:50".to_owned()),
+                    selected_commit: Some(format!("{repo_id}-oid")),
+                    history_filter: Some("author:Ada".to_owned()),
                 })
                 .await
                 .expect("save tab");
@@ -249,6 +284,8 @@ mod tests {
         assert_eq!(tabs[0].page, "history");
         assert_eq!(tabs[0].selected_path.as_deref(), Some("one.txt"));
         assert_eq!(tabs[0].selected_diff, "staged");
+        assert_eq!(tabs[0].history_cursor.as_deref(), Some("offset:50"));
+        assert_eq!(tabs[0].selected_commit.as_deref(), Some("one-oid"));
     }
 
     #[tokio::test]
@@ -266,6 +303,9 @@ mod tests {
                     selected_path: None,
                     selected_diff: "unstaged".to_owned(),
                     panel_width: 280.0,
+                    history_cursor: None,
+                    selected_commit: None,
+                    history_filter: None,
                 })
                 .await
                 .expect("save tab");
@@ -326,5 +366,6 @@ mod tests {
         assert_eq!(tabs[0].repo_id, "legacy");
         assert_eq!(tabs[0].worktree_id, "");
         assert_eq!(tabs[0].selected_diff, "unstaged");
+        assert!(tabs[0].history_cursor.is_none());
     }
 }

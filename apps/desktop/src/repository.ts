@@ -85,8 +85,40 @@ export type SessionTabDto = {
   selectedPath?: string;
   selectedDiff: DiffTarget;
   panelWidth: number;
+  historyCursor?: string;
+  selectedCommit?: string;
+  historyFilter?: string;
   unavailable: boolean;
   snapshot?: RepositorySnapshotDto;
+};
+
+export type CommitDto = {
+  oid: string;
+  parents: string[];
+  authorName: string;
+  authorEmail: string;
+  authoredAt: number;
+  subject: string;
+  body: string;
+  references: string[];
+  lane: number;
+  laneCount: number;
+};
+
+export type HistoryPageDto = {
+  schemaVersion: 1;
+  commits: CommitDto[];
+  nextCursor?: string;
+};
+
+export type ReferenceDto = {
+  fullName: string;
+  shortName: string;
+  oid: string;
+  kind: "localBranch" | "remoteBranch" | "tag";
+  upstream?: string;
+  ahead: number;
+  behind: number;
 };
 
 export type RepositorySidebarDto = {
@@ -139,14 +171,76 @@ export function updateSessionTab(
   selectedPath: string | undefined,
   selectedDiff: DiffTarget,
   panelWidth: number,
+  historyCursor?: string,
+  selectedCommit?: string,
+  historyFilter?: string,
 ): Promise<void> {
   return invoke("session_tab_update", {
     repoId,
-    page,
-    selectedPath,
-    selectedDiff,
-    panelWidth,
+    update: {
+      page,
+      selectedPath,
+      selectedDiff,
+      panelWidth,
+      historyCursor,
+      selectedCommit,
+      historyFilter,
+    },
   });
+}
+
+export function getHistoryPage(
+  repoId: string,
+  cursor?: string,
+  reference?: string,
+  query?: string,
+  author?: string,
+  limit = 100,
+): Promise<HistoryPageDto> {
+  return invoke<HistoryPageDto>("history_page", {
+    repoId,
+    cursor,
+    reference,
+    query,
+    author,
+    limit,
+  });
+}
+
+export function getReferences(repoId: string): Promise<ReferenceDto[]> {
+  return invoke<ReferenceDto[]>("references_list", { repoId });
+}
+
+export function createBranch(
+  repoId: string,
+  revision: number,
+  request: { name: string; startPoint?: string },
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("branch_create", { repoId, revision, request });
+}
+
+export function checkoutBranch(
+  repoId: string,
+  revision: number,
+  name: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("branch_checkout", { repoId, revision, name });
+}
+
+export function deleteBranch(
+  repoId: string,
+  revision: number,
+  name: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("branch_delete", { repoId, revision, name });
+}
+
+export function mergeBranch(
+  repoId: string,
+  revision: number,
+  reference: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("branch_merge", { repoId, revision, reference });
 }
 
 export function getRepositorySnapshot(repoId: string): Promise<RepositorySnapshotDto> {
