@@ -2,6 +2,8 @@ mod commands;
 mod dto;
 mod state;
 
+use persistence::SessionStore;
+use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
 pub fn run() {
@@ -9,11 +11,23 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(state::ApplicationState::default())
+        .setup(|app| {
+            let database_path = app.path().app_data_dir()?.join("git-acorn.sqlite3");
+            let session = tauri::async_runtime::block_on(SessionStore::open(&database_path))?;
+            app.manage(state::ApplicationState::new(session));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::repository_open,
-            commands::repository_snapshot
+            commands::repository_snapshot,
+            commands::repository_sidebar,
+            commands::worktree_activate,
+            commands::session_restore,
+            commands::session_tab_activate,
+            commands::session_tab_close,
+            commands::session_tabs_reorder,
+            commands::session_tab_update
         ])
         .run(tauri::generate_context!())
         .expect("failed to run GitAcorn");

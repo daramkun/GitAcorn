@@ -41,6 +41,38 @@ export type FileChangeDto = {
   submodule: boolean;
 };
 
+export type SessionDto = {
+  schemaVersion: 1;
+  tabs: SessionTabDto[];
+};
+
+export type SessionTabDto = {
+  repoId: string;
+  worktreeId: string;
+  worktreePath: string;
+  active: boolean;
+  page: "changes" | "history";
+  selectedPath?: string;
+  panelWidth: number;
+  unavailable: boolean;
+  snapshot?: RepositorySnapshotDto;
+};
+
+export type RepositorySidebarDto = {
+  schemaVersion: 1;
+  worktrees: Array<{
+    id: string;
+    path: string;
+    head?: string;
+    branch?: string;
+    isCurrent: boolean;
+    isLocked: boolean;
+  }>;
+  branches: { total: number; items: string[] };
+  tags: { total: number; items: string[] };
+  stashes: Array<{ reference: string; message: string }>;
+};
+
 export async function chooseRepositoryDirectory(): Promise<string | null> {
   const path = await open({
     title: "Open Git repository",
@@ -50,12 +82,45 @@ export async function chooseRepositoryDirectory(): Promise<string | null> {
   return path;
 }
 
-export function openRepository(path: string): Promise<RepositorySnapshotDto> {
-  return invoke<RepositorySnapshotDto>("repository_open", { path });
+export function openRepository(path: string): Promise<SessionDto> {
+  return invoke<SessionDto>("repository_open", { path });
+}
+
+export function restoreSession(): Promise<SessionDto> {
+  return invoke<SessionDto>("session_restore");
+}
+
+export function activateSessionTab(repoId: string): Promise<void> {
+  return invoke("session_tab_activate", { repoId });
+}
+
+export function closeSessionTab(repoId: string): Promise<SessionDto> {
+  return invoke<SessionDto>("session_tab_close", { repoId });
+}
+
+export function reorderSessionTabs(repoIds: string[]): Promise<void> {
+  return invoke("session_tabs_reorder", { repoIds });
+}
+
+export function updateSessionTab(
+  repoId: string,
+  page: "changes" | "history",
+  selectedPath: string | undefined,
+  panelWidth: number,
+): Promise<void> {
+  return invoke("session_tab_update", { repoId, page, selectedPath, panelWidth });
 }
 
 export function getRepositorySnapshot(repoId: string): Promise<RepositorySnapshotDto> {
   return invoke<RepositorySnapshotDto>("repository_snapshot", { repoId });
+}
+
+export function getRepositorySidebar(repoId: string): Promise<RepositorySidebarDto> {
+  return invoke<RepositorySidebarDto>("repository_sidebar", { repoId });
+}
+
+export function activateWorktree(repoId: string, worktreeId: string): Promise<SessionDto> {
+  return invoke<SessionDto>("worktree_activate", { repoId, worktreeId });
 }
 
 export function listenForRepositoryChanges(

@@ -7,7 +7,9 @@ use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
-pub use repository::{GitVersion, RepositoryService};
+pub use repository::{
+    GitVersion, RefSummary, RepositoryService, RepositorySidebar, StashSummary, WorktreeSummary,
+};
 pub use scheduler::RepositoryScheduler;
 
 #[derive(Debug, Error)]
@@ -22,6 +24,8 @@ pub enum AppError {
     RepositoryNotFound,
     #[error("Repository is not open in this session")]
     RepositoryNotOpen,
+    #[error("Worktree is not available in this repository")]
+    WorktreeNotFound,
     #[error(
         "The request used repository revision {expected}, but the current revision is {actual}"
     )]
@@ -34,6 +38,8 @@ pub enum AppError {
     InvalidGitOutput(String),
     #[error("Operation was cancelled")]
     Cancelled,
+    #[error("Application session could not be saved")]
+    Persistence { detail: String },
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -55,11 +61,13 @@ impl From<&AppError> for AppErrorDto {
                 ("repositoryNotFound", vec!["chooseRepository"])
             }
             AppError::RepositoryNotOpen => ("repositoryNotOpen", vec!["chooseRepository"]),
+            AppError::WorktreeNotFound => ("worktreeNotFound", vec!["refresh"]),
             AppError::StaleRevision { .. } => ("staleRevision", vec!["refresh"]),
             AppError::TimedOut => ("timedOut", vec!["retry"]),
             AppError::GitFailed { .. } => ("gitFailed", vec!["retry", "copyDiagnostics"]),
             AppError::InvalidGitOutput(_) => ("invalidGitOutput", vec!["retry", "copyDiagnostics"]),
             AppError::Cancelled => ("cancelled", Vec::new()),
+            AppError::Persistence { .. } => ("persistenceFailed", vec!["retry"]),
         };
         let details = match error {
             AppError::GitFailed {
@@ -67,6 +75,7 @@ impl From<&AppError> for AppErrorDto {
                 detail,
             } => Some(format!("{diagnostic_id}: {detail}")),
             AppError::InvalidGitOutput(detail) => Some(detail.clone()),
+            AppError::Persistence { detail } => Some(detail.clone()),
             _ => None,
         };
 

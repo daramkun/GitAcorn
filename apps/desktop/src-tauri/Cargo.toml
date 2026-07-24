@@ -20,7 +20,9 @@ tauri-build = { version = "2.4", features = [] }
 app-core = { path = "../../../crates/app-core" }
 git-domain = { path = "../../../crates/git-domain" }
 notify = "8.0"
+persistence = { path = "../../../crates/persistence" }
 serde.workspace = true
+sqlx.workspace = true
 tauri = { version = "2.8", features = [] }
 tauri-plugin-dialog = "2.4"
 tracing.workspace = true

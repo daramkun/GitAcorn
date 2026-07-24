@@ -1,6 +1,8 @@
-use app_core::AppErrorDto;
+use app_core::{AppErrorDto, RepositorySidebar};
 use git_domain::{FileChange, HeadState, RepositorySnapshot};
 use serde::Serialize;
+
+use crate::state::SessionTabState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +36,27 @@ pub struct RepositorySnapshotDto {
     pub behind: u64,
     pub stash_count: u64,
     pub changes: Vec<FileChangeDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDto {
+    pub schema_version: u16,
+    pub tabs: Vec<SessionTabDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTabDto {
+    pub repo_id: String,
+    pub worktree_id: String,
+    pub worktree_path: String,
+    pub active: bool,
+    pub page: String,
+    pub selected_path: Option<String>,
+    pub panel_width: f64,
+    pub unavailable: bool,
+    pub snapshot: Option<RepositorySnapshotDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +131,99 @@ impl From<RepositorySnapshot> for RepositorySnapshotDto {
                 .changes
                 .into_iter()
                 .map(FileChangeDto::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositorySidebarDto {
+    pub schema_version: u16,
+    pub worktrees: Vec<WorktreeDto>,
+    pub branches: RefSummaryDto,
+    pub tags: RefSummaryDto,
+    pub stashes: Vec<StashDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeDto {
+    pub id: String,
+    pub path: String,
+    pub head: Option<String>,
+    pub branch: Option<String>,
+    pub is_current: bool,
+    pub is_locked: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefSummaryDto {
+    pub total: usize,
+    pub items: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashDto {
+    pub reference: String,
+    pub message: String,
+}
+
+impl From<Vec<SessionTabState>> for SessionDto {
+    fn from(tabs: Vec<SessionTabState>) -> Self {
+        Self {
+            schema_version: 1,
+            tabs: tabs
+                .into_iter()
+                .map(|tab| SessionTabDto {
+                    repo_id: tab.stored.repo_id,
+                    worktree_id: tab.stored.worktree_id,
+                    worktree_path: tab.stored.worktree_path,
+                    active: tab.stored.active,
+                    page: tab.stored.page,
+                    selected_path: tab.stored.selected_path,
+                    panel_width: tab.stored.panel_width,
+                    unavailable: tab.unavailable,
+                    snapshot: tab.snapshot.map(RepositorySnapshotDto::from),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<RepositorySidebar> for RepositorySidebarDto {
+    fn from(sidebar: RepositorySidebar) -> Self {
+        Self {
+            schema_version: 1,
+            worktrees: sidebar
+                .worktrees
+                .into_iter()
+                .map(|worktree| WorktreeDto {
+                    id: worktree.id.to_string(),
+                    path: worktree.path,
+                    head: worktree.head,
+                    branch: worktree.branch,
+                    is_current: worktree.is_current,
+                    is_locked: worktree.is_locked,
+                })
+                .collect(),
+            branches: RefSummaryDto {
+                total: sidebar.branches.total,
+                items: sidebar.branches.items,
+            },
+            tags: RefSummaryDto {
+                total: sidebar.tags.total,
+                items: sidebar.tags.items,
+            },
+            stashes: sidebar
+                .stashes
+                .into_iter()
+                .map(|stash| StashDto {
+                    reference: stash.reference,
+                    message: stash.message,
+                })
                 .collect(),
         }
     }

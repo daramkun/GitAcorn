@@ -796,12 +796,39 @@ pnpm build
 
 ### M2 체크리스트
 
-- [ ] application session과 열린 repository registry
-- [ ] 다중 저장소 탭, 닫기, 순서 변경, 세션 복원
-- [ ] 저장소별 Changes/History 및 선택 상태 격리
-- [ ] Worktrees와 활성 `WorktreeId`
-- [ ] 최대 5개 Branches/Tags와 Stashes sidebar
-- [ ] active repository의 Fetch/Pull/Push context
+- [x] application session과 열린 repository registry
+- [x] 다중 저장소 탭, 닫기, 순서 변경, 세션 복원
+- [x] 저장소별 Changes/History 및 선택 상태 격리
+- [x] Worktrees와 활성 `WorktreeId`
+- [x] 최대 5개 Branches/Tags와 Stashes sidebar
+- [x] active repository의 Fetch/Pull/Push context
+
+#### M2 완료 기록 — 2026-07-24
+
+- 구현된 사용자 흐름
+  - 여러 저장소 열기 → 탭 전환·닫기·좌우 순서 변경 → SQLite 세션 저장
+  - 앱 재시작 시 탭 순서, 활성 탭, 저장소별 Changes/History, 선택 파일, 패널 폭 복원
+  - 이동·삭제된 저장소를 세션에서 제거하지 않고 `Repository unavailable` placeholder와 재선택 action 표시
+  - 비활성 저장소 watcher refresh를 `RepoId`별 snapshot에 반영하고 탭을 닫아도 backend registry와 watcher 유지
+  - 공통 Git directory 기반 `RepoId`와 canonical path 기반 `WorktreeId`로 linked worktree 식별·전환·복원
+  - 실제 Git CLI에서 worktree, 최근 Branches/Tags 최대 5개, Stashes read model 조회
+  - 활성 저장소의 ahead/behind를 Pull/Push context에 저장소별 표시
+- 실행한 검증
+  - `cargo fmt --all -- --check` 통과
+  - `cargo clippy --workspace --all-targets -- -D warnings` 통과
+  - `cargo test --workspace` 통과: Rust unit/integration test 25개
+  - 실제 temporary Git 저장소에서 branch, tag, stash와 linked worktree identity 통합 test 통과
+  - 기존 session schema의 `WorktreeId` SQLite migration test 통과
+  - `pnpm lint` 통과
+  - `pnpm test --run` 통과: component test 9개
+  - `pnpm build` 통과
+  - Tauri child release build와 `cargo build -p git-acorn-desktop --release` 통과
+  - `target/release/git-acorn-desktop.exe` 시작 smoke test 통과
+- 남은 제한
+  - worktree 생성·삭제·잠금은 Alpha 이후 범위이며 M2에서는 목록, 식별, 전환만 제공한다.
+  - Fetch/Pull/Push 실행은 M5 범위이며 M2에서는 저장소별 context와 count 격리만 제공한다.
+- 다음 시작 지점
+  - M3 staged/unstaged diff parser와 자체 line renderer를 실제 Git fixture에서 시작한다.
 
 ### M3 체크리스트
 
