@@ -482,6 +482,29 @@ button:disabled {
   overflow: hidden;
 }
 
+.clone-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  font-size: 11px;
+}
+
+.clone-bar input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.clone-bar [role="status"] {
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--accent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .file-panel,
 .commit-panel {
   min-width: 0;

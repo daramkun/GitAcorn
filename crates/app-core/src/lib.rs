@@ -1,5 +1,6 @@
 //! Application use cases and errors shared by every UI adapter.
 
+mod remote;
 mod repository;
 mod scheduler;
 
@@ -7,6 +8,7 @@ use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use remote::{CloneRequest, RemoteOperationKind, RemoteProgress, RemoteRequest};
 pub use repository::{
     BranchRequest, CommitRequest, DiffTarget, GitReference, GitVersion, HistoryFilter,
     PatchSelection, RefSummary, ReferenceKind, RepositoryService, RepositorySidebar, StashSummary,
@@ -40,6 +42,12 @@ pub enum AppError {
     InvalidGitOutput(String),
     #[error("Operation was cancelled")]
     Cancelled,
+    #[error("The remote could not be reached")]
+    Offline,
+    #[error("Authentication failed; check your credential helper or SSH agent")]
+    AuthenticationFailed,
+    #[error("Push was rejected because the remote contains newer commits")]
+    NonFastForward,
     #[error("{0}")]
     InvalidRequest(String),
     #[error("Application session could not be saved")]
@@ -71,6 +79,11 @@ impl From<&AppError> for AppErrorDto {
             AppError::GitFailed { .. } => ("gitFailed", vec!["retry", "copyDiagnostics"]),
             AppError::InvalidGitOutput(_) => ("invalidGitOutput", vec!["retry", "copyDiagnostics"]),
             AppError::Cancelled => ("cancelled", Vec::new()),
+            AppError::Offline => ("offline", vec!["retry"]),
+            AppError::AuthenticationFailed => {
+                ("authenticationFailed", vec!["checkCredentials", "retry"])
+            }
+            AppError::NonFastForward => ("nonFastForward", vec!["fetch", "pull", "retry"]),
             AppError::InvalidRequest(_) => ("invalidRequest", vec!["editRequest", "refresh"]),
             AppError::Persistence { .. } => ("persistenceFailed", vec!["retry"]),
         };

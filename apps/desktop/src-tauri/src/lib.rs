@@ -19,6 +19,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::remote_sync,
+            commands::repository_clone,
+            commands::operation_cancel,
             commands::repository_open,
             commands::repository_snapshot,
             commands::repository_sidebar,

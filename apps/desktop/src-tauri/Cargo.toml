@@ -19,6 +19,7 @@ tauri-build = { version = "2.4", features = [] }
 [dependencies]
 app-core = { path = "../../../crates/app-core" }
 git-domain = { path = "../../../crates/git-domain" }
+git-cli = { path = "../../../crates/git-cli" }
 notify = "8.0"
 persistence = { path = "../../../crates/persistence" }
 serde.workspace = true

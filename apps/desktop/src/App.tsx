@@ -11,7 +11,9 @@ import {
   applyPatchSelection,
   activateSessionTab,
   activateWorktree,
+  cancelOperation,
   checkoutBranch,
+  chooseCloneParentDirectory,
   chooseRepositoryDirectory,
   closeSessionTab,
   createBranch,
@@ -29,6 +31,8 @@ import {
   openRepository,
   reorderSessionTabs,
   restoreSession,
+  startClone,
+  startRemoteOperation,
   stagePaths,
   unstagePaths,
   updateSessionTab,
@@ -37,11 +41,13 @@ import {
   type DiffDto,
   type DiffTarget,
   type FileChangeDto,
+  type OperationEventDto,
   type RepositorySnapshotDto,
   type RepositorySidebarDto,
   type ReferenceDto,
   type SessionTabDto,
 } from "./repository";
+import { updateRepositoryOperation } from "./remote-operations";
 
 type Page = "changes" | "history";
 type AppInfoState =
@@ -62,6 +68,12 @@ export function App() {
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
   const [sidebars, setSidebars] = useState<Record<string, RepositorySidebarDto>>({});
   const [error, setError] = useState<AppErrorDto>();
+  const [remoteOperations, setRemoteOperations] = useState<
+    Record<string, OperationEventDto>
+  >({});
+  const [cloneUrl, setCloneUrl] = useState("");
+  const [showClone, setShowClone] = useState(false);
+  const [cloneOperation, setCloneOperation] = useState<OperationEventDto>();
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const activeTab = tabs.find((tab) => tab.active) ?? tabs[0];
   const activeSnapshot = activeTab?.snapshot;
@@ -153,6 +165,58 @@ export function App() {
     } finally {
       setOpening(false);
       setSessionLoading(false);
+    }
+  }
+
+  function handleRemote(kind: "fetch" | "pull" | "push", forceWithLease = false) {
+    if (!activeTab) return;
+    const repoId = activeTab.repoId;
+    setError(undefined);
+    startRemoteOperation(
+      repoId,
+      kind,
+      (event) => {
+        if (event.repoId !== repoId) return;
+        setRemoteOperations((current) =>
+          updateRepositoryOperation(current, repoId, event),
+        );
+        if (event.snapshot) {
+          setTabs((current) =>
+            current.map((tab) =>
+              tab.repoId === repoId ? { ...tab, snapshot: event.snapshot } : tab,
+            ),
+          );
+        }
+        if (event.error) setError(event.error);
+      },
+      forceWithLease,
+    ).catch((reason: unknown) => setError(normalizeAppError(reason)));
+  }
+
+  async function handleClone() {
+    const remoteUrl = cloneUrl.trim();
+    if (!remoteUrl) return;
+    try {
+      const parent = await chooseCloneParentDirectory();
+      if (!parent) return;
+      const separator = parent.includes("\\") && !parent.includes("/") ? "\\" : "/";
+      const destination = `${parent}${parent.endsWith("\\") || parent.endsWith("/") ? "" : separator}${cloneRepositoryName(remoteUrl)}`;
+      setError(undefined);
+      await startClone(remoteUrl, destination, (event) => {
+        setCloneOperation(event);
+        if (event.error) setError(event.error);
+        if (event.state === "succeeded" && event.destination) {
+          openRepository(event.destination)
+            .then((session) => {
+              setTabs(session.tabs);
+              setShowClone(false);
+              setCloneUrl("");
+            })
+            .catch((reason: unknown) => setError(normalizeAppError(reason)));
+        }
+      });
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
     }
   }
 
@@ -281,6 +345,9 @@ export function App() {
         <button className="open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
           <span aria-hidden="true">＋</span>{opening ? " Opening…" : " Open a repository"}
         </button>
+        <button className="open-button" type="button" onClick={() => setShowClone((value) => !value)}>
+          Clone
+        </button>
       </div>
 
       <main className="workspace">
@@ -346,11 +413,38 @@ export function App() {
             </div>
             <div className="remote-actions" aria-label="Remote actions">
               {activeTab && refreshing.has(activeTab.repoId) && <span className="refreshing">Refreshing…</span>}
-              <button type="button" disabled>Fetch</button>
-              <button type="button" disabled>Pull{activeSnapshot?.behind ? ` ${activeSnapshot.behind}` : ""}</button>
-              <button type="button" disabled>Push{activeSnapshot?.ahead ? ` ${activeSnapshot.ahead}` : ""}</button>
+              {activeTab && remoteOperations[activeTab.repoId] &&
+                ["queued", "running"].includes(remoteOperations[activeTab.repoId].state) ? (
+                  <>
+                    <span className="refreshing" role="status">
+                      {remoteOperations[activeTab.repoId].kind} · {remoteOperations[activeTab.repoId].message ?? remoteOperations[activeTab.repoId].state}
+                    </span>
+                    <button type="button" onClick={() => cancelOperation(remoteOperations[activeTab.repoId].operationId).catch((reason: unknown) => setError(normalizeAppError(reason)))}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("fetch")}>Fetch</button>
+                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("pull")}>Pull{activeSnapshot?.behind ? ` ${activeSnapshot.behind}` : ""}</button>
+                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("push")}>Push{activeSnapshot?.ahead ? ` ${activeSnapshot.ahead}` : ""}</button>
+                    <button type="button" disabled={!activeTab} title="Reject if the remote changed since the last fetch" onClick={() => handleRemote("push", true)}>Push with lease</button>
+                  </>
+                )}
             </div>
           </div>
+          {showClone && (
+            <form className="clone-bar" onSubmit={(event) => { event.preventDefault(); void handleClone(); }}>
+              <label htmlFor="clone-url">Repository URL</label>
+              <input id="clone-url" value={cloneUrl} onChange={(event) => setCloneUrl(event.target.value)} placeholder="https://host/owner/repository.git or git@host:owner/repository.git" />
+              {cloneOperation && ["queued", "running"].includes(cloneOperation.state) ? (
+                <>
+                  <span role="status">{cloneOperation.message ?? "Cloning…"}</span>
+                  <button type="button" onClick={() => cancelOperation(cloneOperation.operationId)}>Cancel</button>
+                </>
+              ) : (
+                <button type="submit" disabled={!cloneUrl.trim()}>Choose destination and clone</button>
+              )}
+            </form>
+          )}
           {appInfo.status === "error" && <ErrorBanner title="Could not reach the GitAcorn core." message={appInfo.message} />}
           {error && <ErrorBanner title="Repository session needs attention." message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? "Choose another folder" : undefined} onAction={handleOpenRepository} />}
           {activeTab?.unavailable ? (
@@ -430,6 +524,12 @@ export function App() {
 
 function repositoryName(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? "Repository";
+}
+
+function cloneRepositoryName(remoteUrl: string) {
+  const withoutQuery = remoteUrl.split(/[?#]/, 1)[0].replace(/[\\/]+$/, "");
+  const name = withoutQuery.split(/[\\/:]/).filter(Boolean).at(-1) ?? "repository";
+  return name.replace(/\.git$/i, "") || "repository";
 }
 
 function SidebarGroup({ label, count, children }: { label: string; count?: number; children?: ReactNode }) {

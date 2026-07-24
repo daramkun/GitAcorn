@@ -1,18 +1,166 @@
 use std::path::PathBuf;
 
 use app_core::{AppError, AppErrorDto, DiffTarget, HistoryFilter, PatchSelection};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State, ipc::Channel};
 
 use crate::dto::{
-    AppInfoDto, BranchRequestDto, CommandResult, CommitRequestDto, DiffDto, HistoryPageDto,
-    PatchSelectionDto, ReferenceDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
-    SessionTabUpdateDto,
+    AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitRequestDto, DiffDto,
+    HistoryPageDto, OperationEventDto, OperationStartedDto, PatchSelectionDto, ReferenceDto,
+    RemoteRequestDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto, SessionTabUpdateDto,
 };
 use crate::state::{ApplicationState, SessionTabUpdate};
 
 #[tauri::command]
 pub fn app_info() -> AppInfoDto {
     AppInfoDto::current()
+}
+
+#[tauri::command]
+pub fn remote_sync(
+    repo_id: String,
+    request: RemoteRequestDto,
+    channel: Channel<OperationEventDto>,
+    app: AppHandle,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<OperationStartedDto> {
+    let request =
+        app_core::RemoteRequest::try_from(request).map_err(|error| AppErrorDto::from(&error))?;
+    let (operation_id, parsed_repo_id) = state
+        .begin_remote_operation(&repo_id)
+        .map_err(|error| AppErrorDto::from(&error))?;
+    let operation_id_string = operation_id.to_string();
+    let event_repo_id = repo_id.clone();
+    let kind = request.kind.label().to_owned();
+    let _ = channel.send(operation_event(
+        &operation_id_string,
+        Some(event_repo_id.clone()),
+        kind.clone(),
+        "queued",
+    ));
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ApplicationState>();
+        let _ = channel.send(operation_event(
+            &operation_id_string,
+            Some(event_repo_id.clone()),
+            kind.clone(),
+            "running",
+        ));
+        let result =
+            state.run_remote_operation(operation_id, parsed_repo_id, &request, |progress| {
+                let mut event = operation_event(
+                    &operation_id_string,
+                    Some(event_repo_id.clone()),
+                    kind.clone(),
+                    "running",
+                );
+                event.message = Some(progress.message);
+                event.stream = Some(progress.stream);
+                let _ = channel.send(event);
+            });
+        let mut event = operation_event(
+            &operation_id_string,
+            Some(event_repo_id),
+            kind,
+            match &result {
+                Ok(_) => "succeeded",
+                Err(app_core::AppError::Cancelled) => "cancelled",
+                Err(_) => "failed",
+            },
+        );
+        match result {
+            Ok(snapshot) => event.snapshot = Some(snapshot.into()),
+            Err(error) => event.error = Some(AppErrorDto::from(&error)),
+        }
+        let _ = channel.send(event);
+    });
+    Ok(OperationStartedDto {
+        schema_version: 1,
+        operation_id: operation_id.to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn repository_clone(
+    request: CloneRequestDto,
+    channel: Channel<OperationEventDto>,
+    app: AppHandle,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<OperationStartedDto> {
+    let request: app_core::CloneRequest = request.into();
+    let destination = request.destination.to_string_lossy().into_owned();
+    let operation_id = state.begin_clone_operation();
+    let operation_id_string = operation_id.to_string();
+    let _ = channel.send(operation_event(
+        &operation_id_string,
+        None,
+        "clone".to_owned(),
+        "queued",
+    ));
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ApplicationState>();
+        let _ = channel.send(operation_event(
+            &operation_id_string,
+            None,
+            "clone".to_owned(),
+            "running",
+        ));
+        let result = state.run_clone_operation(operation_id, &request, |progress| {
+            let mut event =
+                operation_event(&operation_id_string, None, "clone".to_owned(), "running");
+            event.message = Some(progress.message);
+            event.stream = Some(progress.stream);
+            let _ = channel.send(event);
+        });
+        let mut event = operation_event(
+            &operation_id_string,
+            None,
+            "clone".to_owned(),
+            match &result {
+                Ok(_) => "succeeded",
+                Err(app_core::AppError::Cancelled) => "cancelled",
+                Err(_) => "failed",
+            },
+        );
+        match result {
+            Ok(()) => event.destination = Some(destination),
+            Err(error) => event.error = Some(AppErrorDto::from(&error)),
+        }
+        let _ = channel.send(event);
+    });
+    Ok(OperationStartedDto {
+        schema_version: 1,
+        operation_id: operation_id.to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn operation_cancel(
+    operation_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<()> {
+    state
+        .cancel_operation(&operation_id)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+fn operation_event(
+    operation_id: &str,
+    repo_id: Option<String>,
+    kind: String,
+    state: &'static str,
+) -> OperationEventDto {
+    OperationEventDto {
+        schema_version: 1,
+        operation_id: operation_id.to_owned(),
+        repo_id,
+        kind,
+        state,
+        message: None,
+        stream: None,
+        snapshot: None,
+        destination: None,
+        error: None,
+    }
 }
 
 #[tauri::command]

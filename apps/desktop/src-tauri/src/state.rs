@@ -4,9 +4,11 @@ use std::str::FromStr;
 use std::sync::Mutex;
 
 use app_core::{
-    AppError, BranchRequest, CommitRequest, DiffTarget, GitReference, HistoryFilter,
-    PatchSelection, RepositoryScheduler, RepositoryService, RepositorySidebar,
+    AppError, BranchRequest, CloneRequest, CommitRequest, DiffTarget, GitReference, HistoryFilter,
+    PatchSelection, RemoteProgress, RemoteRequest, RepositoryScheduler, RepositoryService,
+    RepositorySidebar,
 };
+use git_cli::CancellationToken;
 use git_domain::{
     DiffDocument, HeadState, HistoryPage, RepoId, RepositoryDescriptor, RepositorySnapshot,
     WorktreeId,
@@ -42,6 +44,7 @@ pub struct ApplicationState {
     scheduler: RepositoryScheduler,
     repositories: Mutex<HashMap<RepoId, OpenRepository>>,
     watchers: Mutex<HashMap<WorktreeId, RecommendedWatcher>>,
+    operations: Mutex<HashMap<Uuid, CancellationToken>>,
     session: SessionStore,
 }
 
@@ -52,6 +55,7 @@ impl ApplicationState {
             scheduler: RepositoryScheduler::default(),
             repositories: Mutex::default(),
             watchers: Mutex::default(),
+            operations: Mutex::default(),
             session,
         }
     }
@@ -486,6 +490,99 @@ impl ApplicationState {
             .get(&repo_id)
             .ok_or(AppError::RepositoryNotOpen)
             .map(|repository| repository.descriptor.clone())
+    }
+
+    pub fn begin_remote_operation(&self, repo_id: &str) -> Result<(Uuid, RepoId), AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.descriptor(repo_id)?;
+        let operation_id = Uuid::new_v4();
+        self.operations
+            .lock()
+            .expect("operation registry lock poisoned")
+            .insert(operation_id, CancellationToken::default());
+        Ok((operation_id, repo_id))
+    }
+
+    pub fn begin_clone_operation(&self) -> Uuid {
+        let operation_id = Uuid::new_v4();
+        self.operations
+            .lock()
+            .expect("operation registry lock poisoned")
+            .insert(operation_id, CancellationToken::default());
+        operation_id
+    }
+
+    pub fn run_remote_operation(
+        &self,
+        operation_id: Uuid,
+        repo_id: RepoId,
+        request: &RemoteRequest,
+        progress: impl FnMut(RemoteProgress),
+    ) -> Result<RepositorySnapshot, AppError> {
+        let cancellation = self.operation_token(operation_id)?;
+        let result = self.scheduler.write(repo_id, || {
+            let descriptor = self.descriptor(repo_id)?;
+            self.service
+                .remote_sync(&descriptor, request, &cancellation, progress)?;
+            let next_revision = {
+                let mut repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get_mut(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                repository.revision += 1;
+                repository.revision
+            };
+            self.service.snapshot(&descriptor, next_revision)
+        });
+        self.finish_operation(operation_id);
+        result
+    }
+
+    pub fn run_clone_operation(
+        &self,
+        operation_id: Uuid,
+        request: &CloneRequest,
+        progress: impl FnMut(RemoteProgress),
+    ) -> Result<(), AppError> {
+        let cancellation = self.operation_token(operation_id)?;
+        let result = self
+            .service
+            .clone_repository(request, &cancellation, progress);
+        self.finish_operation(operation_id);
+        result
+    }
+
+    pub fn cancel_operation(&self, operation_id: &str) -> Result<(), AppError> {
+        let operation_id = Uuid::parse_str(operation_id)
+            .map_err(|_| AppError::InvalidRequest("Operation ID is invalid".to_owned()))?;
+        let operations = self
+            .operations
+            .lock()
+            .expect("operation registry lock poisoned");
+        operations
+            .get(&operation_id)
+            .ok_or_else(|| AppError::InvalidRequest("Operation is no longer running".to_owned()))?
+            .cancel();
+        Ok(())
+    }
+
+    fn operation_token(&self, operation_id: Uuid) -> Result<CancellationToken, AppError> {
+        self.operations
+            .lock()
+            .expect("operation registry lock poisoned")
+            .get(&operation_id)
+            .cloned()
+            .ok_or_else(|| AppError::InvalidRequest("Operation is no longer running".to_owned()))
+    }
+
+    fn finish_operation(&self, operation_id: Uuid) {
+        self.operations
+            .lock()
+            .expect("operation registry lock poisoned")
+            .remove(&operation_id);
     }
 
     async fn session_tabs(

@@ -93,6 +93,15 @@ impl GitExecutor {
         request: GitRequest,
         cancellation: &CancellationToken,
     ) -> Result<GitOutput, GitExecutionError> {
+        self.execute_streaming(request, cancellation, |_, _| {})
+    }
+
+    pub fn execute_streaming(
+        &self,
+        request: GitRequest,
+        cancellation: &CancellationToken,
+        mut progress: impl FnMut(bool, &[u8]),
+    ) -> Result<GitOutput, GitExecutionError> {
         let started = Instant::now();
         let mut command = Command::new(&self.executable);
         command
@@ -132,10 +141,19 @@ impl GitExecutor {
                 return Err(GitExecutionError::Io(error));
             }
         }
-        let stdout_reader = read_stream(child.stdout.take().expect("stdout is piped"));
-        let stderr_reader = read_stream(child.stderr.take().expect("stderr is piped"));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let stdout_reader = read_stream(
+            child.stdout.take().expect("stdout is piped"),
+            false,
+            sender.clone(),
+        );
+        let stderr_reader =
+            read_stream(child.stderr.take().expect("stderr is piped"), true, sender);
 
         let completion = loop {
+            for (is_stderr, chunk) in receiver.try_iter() {
+                progress(is_stderr, &chunk);
+            }
             if cancellation.is_cancelled() {
                 break Err(GitExecutionError::Cancelled);
             }
@@ -154,6 +172,9 @@ impl GitExecutor {
         }
         let stdout = join_reader(stdout_reader)?;
         let stderr = join_reader(stderr_reader)?;
+        for (is_stderr, chunk) in receiver.try_iter() {
+            progress(is_stderr, &chunk);
+        }
         let status = completion?;
         Ok(GitOutput {
             stdout,
@@ -175,10 +196,21 @@ fn terminate(child: &mut Child) {
 
 fn read_stream(
     mut stream: impl Read + Send + 'static,
+    is_stderr: bool,
+    sender: std::sync::mpsc::Sender<(bool, Vec<u8>)>,
 ) -> thread::JoinHandle<std::io::Result<Vec<u8>>> {
     thread::spawn(move || {
         let mut output = Vec::new();
-        stream.read_to_end(&mut output)?;
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = stream.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            let chunk = buffer[..count].to_vec();
+            output.extend_from_slice(&chunk);
+            let _ = sender.send((is_stderr, chunk));
+        }
         Ok(output)
     })
 }

@@ -1,6 +1,6 @@
 use app_core::{
-    AppErrorDto, BranchRequest, CommitRequest, GitReference, PatchSelection, ReferenceKind,
-    RepositorySidebar,
+    AppErrorDto, BranchRequest, CloneRequest, CommitRequest, GitReference, PatchSelection,
+    ReferenceKind, RemoteOperationKind, RemoteRequest, RepositorySidebar,
 };
 use git_domain::{
     CommitSummary, DiffDocument, DiffLineKind, FileChange, HeadState, HistoryPage,
@@ -9,6 +9,73 @@ use git_domain::{
 use serde::{Deserialize, Serialize};
 
 use crate::state::SessionTabState;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteRequestDto {
+    pub kind: String,
+    #[serde(default)]
+    pub force_with_lease: bool,
+}
+
+impl TryFrom<RemoteRequestDto> for RemoteRequest {
+    type Error = app_core::AppError;
+
+    fn try_from(request: RemoteRequestDto) -> Result<Self, Self::Error> {
+        let kind = match request.kind.as_str() {
+            "fetch" => RemoteOperationKind::Fetch,
+            "pull" => RemoteOperationKind::Pull,
+            "push" => RemoteOperationKind::Push,
+            _ => {
+                return Err(app_core::AppError::InvalidRequest(
+                    "Remote operation must be fetch, pull, or push".to_owned(),
+                ));
+            }
+        };
+        Ok(Self {
+            kind,
+            force_with_lease: request.force_with_lease,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneRequestDto {
+    pub remote_url: String,
+    pub destination: String,
+}
+
+impl From<CloneRequestDto> for CloneRequest {
+    fn from(request: CloneRequestDto) -> Self {
+        Self {
+            remote_url: request.remote_url,
+            destination: request.destination.into(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationStartedDto {
+    pub schema_version: u16,
+    pub operation_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationEventDto {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub repo_id: Option<String>,
+    pub kind: String,
+    pub state: &'static str,
+    pub message: Option<String>,
+    pub stream: Option<&'static str>,
+    pub snapshot: Option<RepositorySnapshotDto>,
+    pub destination: Option<String>,
+    pub error: Option<AppErrorDto>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -115,7 +115,7 @@ impl std::fmt::Display for GitVersion {
 
 #[derive(Debug, Clone, Default)]
 pub struct RepositoryService {
-    executor: GitExecutor,
+    pub(crate) executor: GitExecutor,
 }
 
 impl RepositoryService {

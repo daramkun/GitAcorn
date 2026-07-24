@@ -906,6 +906,40 @@ pnpm build
 - 다음 시작 지점
   - M5 clone/fetch/pull/push operation을 Tauri Channel progress, cancel, credential/SSH 흐름과 함께 시작한다.
 
+### M5 체크리스트
+
+- [x] clone/fetch/pull/push typed operation API
+- [x] Tauri Channel 기반 repository-scoped progress와 cancel
+- [x] 시스템 Git credential helper와 SSH agent 연동
+- [x] `--force-with-lease`로 제한한 안전한 force push
+- [x] offline, authentication, non-fast-forward 오류와 복구 action
+- [x] 원격 URL·token progress redaction과 비영속 operation registry
+- [x] 실제 local bare remote 통합 test와 탭별 progress 격리 test
+
+#### M5 완료 기록 — 2026-07-25
+
+- 구현된 사용자 흐름
+  - URL과 목적지 선택 → `git clone --progress` → 성공한 저장소를 새 탭으로 열기
+  - 활성 저장소별 Fetch, fast-forward-only Pull, Push, Push with lease 실행
+  - queued/running/terminal 상태와 redacted Git progress를 Tauri Channel로 전달하고 실행 중 작업 취소
+  - 탭을 전환하거나 닫아도 operation은 저장소 ID로 격리되며 다른 탭의 버튼이나 진행률을 잠그지 않음
+  - Git credential helper와 SSH agent/config를 시스템 Git에서 그대로 사용하고 interactive terminal prompt는 비활성화
+  - offline, authentication, non-fast-forward 실패를 retry/fetch/pull/check credentials 복구 action으로 분류
+- 실행한 검증
+  - `cargo fmt --all -- --check` 통과
+  - `cargo clippy --workspace --all-targets -- -D warnings` 통과
+  - `cargo test --workspace` 통과: Rust unit/integration test 42개, large fixture benchmark 1개 제외
+  - 실제 local bare remote에서 clone → fetch → fast-forward pull → push 통합 test 통과
+  - URL credential/query token redaction과 push-only force-with-lease validation test 통과
+  - `pnpm lint` 통과
+  - `pnpm test --run` 통과: component/unit test 18개
+  - `pnpm build` 통과
+- 남은 제한
+  - 앱은 credential이나 SSH 키를 직접 저장하지 않는다. 인증 갱신은 사용자의 기존 Git credential helper 또는 SSH agent에서 수행한다.
+  - operation center의 영구 작업 이력과 진단 복사는 계획대로 M6 범위이며 M5 progress는 메모리에만 유지한다.
+- 다음 시작 지점
+  - M6 stash create/apply/drop과 merge conflict resolution을 operation center 및 Alpha packaging 흐름에 연결한다.
+
 ## 17. 아키텍처 결정 기록(ADR) 목록
 
 구현 전에 다음 결정을 짧은 ADR로 고정한다.

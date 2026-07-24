@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -136,6 +136,24 @@ export type RepositorySidebarDto = {
   stashes: Array<{ reference: string; message: string }>;
 };
 
+export type OperationEventDto = {
+  schemaVersion: 1;
+  operationId: string;
+  repoId?: string;
+  kind: "clone" | "fetch" | "pull" | "push";
+  state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  message?: string;
+  stream?: "stdout" | "stderr";
+  snapshot?: RepositorySnapshotDto;
+  destination?: string;
+  error?: AppErrorDto;
+};
+
+export type OperationStartedDto = {
+  schemaVersion: 1;
+  operationId: string;
+};
+
 export async function chooseRepositoryDirectory(): Promise<string | null> {
   const path = await open({
     title: "Open Git repository",
@@ -147,6 +165,46 @@ export async function chooseRepositoryDirectory(): Promise<string | null> {
 
 export function openRepository(path: string): Promise<SessionDto> {
   return invoke<SessionDto>("repository_open", { path });
+}
+
+export async function chooseCloneParentDirectory(): Promise<string | null> {
+  return open({
+    title: "Choose clone destination",
+    directory: true,
+    multiple: false,
+  });
+}
+
+export function startRemoteOperation(
+  repoId: string,
+  kind: "fetch" | "pull" | "push",
+  onEvent: (event: OperationEventDto) => void,
+  forceWithLease = false,
+): Promise<OperationStartedDto> {
+  const channel = new Channel<OperationEventDto>();
+  channel.onmessage = onEvent;
+  return invoke<OperationStartedDto>("remote_sync", {
+    repoId,
+    request: { kind, forceWithLease },
+    channel,
+  });
+}
+
+export function startClone(
+  remoteUrl: string,
+  destination: string,
+  onEvent: (event: OperationEventDto) => void,
+): Promise<OperationStartedDto> {
+  const channel = new Channel<OperationEventDto>();
+  channel.onmessage = onEvent;
+  return invoke<OperationStartedDto>("repository_clone", {
+    request: { remoteUrl, destination },
+    channel,
+  });
+}
+
+export function cancelOperation(operationId: string): Promise<void> {
+  return invoke("operation_cancel", { operationId });
 }
 
 export function restoreSession(): Promise<SessionDto> {
