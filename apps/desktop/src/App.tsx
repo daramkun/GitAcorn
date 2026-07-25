@@ -13,6 +13,11 @@ import {
   type GraphSegment,
 } from "./commitGraph";
 import {
+  closeAppWindow,
+  minimizeAppWindow,
+  toggleMaximizeAppWindow,
+} from "./windowControls";
+import {
   applyPatchSelection,
   abortMerge,
   activateSessionTab,
@@ -342,12 +347,38 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="titlebar">
-        <div className="brand">
+      <header className="titlebar" data-tauri-drag-region>
+        <div className="brand" data-tauri-drag-region>
           <span className="acorn-mark" aria-hidden="true"><span /></span>
           <span>GitAcorn</span><span className="alpha-badge">ALPHA</span>
         </div>
-        <div className="window-drag-region" />
+        <div className="window-drag-region" data-tauri-drag-region />
+        <div className="window-controls">
+          <button
+            className="window-control"
+            type="button"
+            aria-label={t("Minimize window")}
+            onClick={() => runWindowCommand(minimizeAppWindow)}
+          >
+            <span className="window-control-icon minimize" aria-hidden="true" />
+          </button>
+          <button
+            className="window-control"
+            type="button"
+            aria-label={t("Maximize or restore window")}
+            onClick={() => runWindowCommand(toggleMaximizeAppWindow)}
+          >
+            <span className="window-control-icon maximize" aria-hidden="true" />
+          </button>
+          <button
+            className="window-control close"
+            type="button"
+            aria-label={t("Close window")}
+            onClick={() => runWindowCommand(closeAppWindow)}
+          >
+            <span className="window-control-icon close" aria-hidden="true" />
+          </button>
+        </div>
       </header>
 
       <div className="tabbar" aria-label={t("Repository tabs")}>
@@ -1691,6 +1722,12 @@ function graphSegmentPath(
   const endX = laneX(segment.toLane);
   const middleY = (startY + endY) / 2;
   return `M ${startX} ${startY} C ${startX} ${middleY}, ${endX} ${middleY}, ${endX} ${endY}`;
+}
+
+function runWindowCommand(command: () => Promise<void>) {
+  void command().catch((reason: unknown) => {
+    console.error("Window command failed", reason);
+  });
 }
 
 function parseHistoryFilter(value?: string): { reference: string; query: string } {

@@ -1,6 +1,8 @@
 mod commands;
 mod dto;
 mod state;
+#[cfg(windows)]
+mod windows_snap;
 
 use persistence::SessionStore;
 use tauri::Manager;
@@ -20,6 +22,13 @@ pub fn run() {
                 tracing::warn!(recovered, "recovered interrupted operations");
             }
             app.manage(state::ApplicationState::new(session));
+            #[cfg(windows)]
+            {
+                let window = app
+                    .get_webview_window("main")
+                    .ok_or("main window is unavailable")?;
+                windows_snap::install(&window)?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

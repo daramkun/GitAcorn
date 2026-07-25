@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { getAppInfo } from "./app-info";
 import {
+  closeAppWindow,
+  minimizeAppWindow,
+  toggleMaximizeAppWindow,
+} from "./windowControls";
+import {
   applyPatchSelection,
   activateSessionTab,
   activateWorktree,
@@ -36,6 +41,12 @@ import {
 
 vi.mock("./app-info", () => ({
   getAppInfo: vi.fn(),
+}));
+
+vi.mock("./windowControls", () => ({
+  closeAppWindow: vi.fn(),
+  minimizeAppWindow: vi.fn(),
+  toggleMaximizeAppWindow: vi.fn(),
 }));
 
 vi.mock("./repository", () => ({
@@ -82,6 +93,9 @@ vi.mock("./repository", () => ({
 }));
 
 const mockedGetAppInfo = vi.mocked(getAppInfo);
+const mockedCloseAppWindow = vi.mocked(closeAppWindow);
+const mockedMinimizeAppWindow = vi.mocked(minimizeAppWindow);
+const mockedToggleMaximizeAppWindow = vi.mocked(toggleMaximizeAppWindow);
 const mockedChooseRepository = vi.mocked(chooseRepositoryDirectory);
 const mockedOpenRepository = vi.mocked(openRepository);
 const mockedRestoreSession = vi.mocked(restoreSession);
@@ -162,6 +176,9 @@ const sessionWithSnapshot: SessionDto = {
 
 describe("App", () => {
   beforeEach(() => {
+    mockedCloseAppWindow.mockResolvedValue();
+    mockedMinimizeAppWindow.mockResolvedValue();
+    mockedToggleMaximizeAppWindow.mockResolvedValue();
     mockedGetAppInfo.mockResolvedValue({
       schemaVersion: 1,
       name: "GitAcorn",
@@ -263,6 +280,19 @@ describe("App", () => {
 
     expect(screen.getByText("Connecting to core…")).toBeInTheDocument();
     expect(await screen.findByText("Tauri 2 · v0.1.0")).toBeInTheDocument();
+  });
+
+  it("renders a draggable custom titlebar with native window actions", async () => {
+    render(<App />);
+
+    expect(screen.getByRole("banner")).toHaveAttribute("data-tauri-drag-region");
+    fireEvent.click(screen.getByRole("button", { name: "Minimize window" }));
+    fireEvent.click(screen.getByRole("button", { name: "Maximize or restore window" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close window" }));
+
+    expect(mockedMinimizeAppWindow).toHaveBeenCalledOnce();
+    expect(mockedToggleMaximizeAppWindow).toHaveBeenCalledOnce();
+    expect(mockedCloseAppWindow).toHaveBeenCalledOnce();
   });
 
   it("switches between Changes and History", async () => {

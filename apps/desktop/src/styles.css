@@ -66,7 +66,7 @@ button:focus-visible {
 
 .titlebar {
   border-bottom: 1px solid var(--border);
-  padding: 0 18px;
+  padding-left: 14px;
   background: #120c09;
   user-select: none;
 }
@@ -75,6 +75,7 @@ button:focus-visible {
   display: flex;
   align-items: center;
   gap: 9px;
+  pointer-events: none;
   font-size: 13px;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -124,6 +125,78 @@ button:focus-visible {
 .window-drag-region {
   flex: 1;
   height: 100%;
+}
+
+.window-controls {
+  display: flex;
+  align-self: stretch;
+  height: 100%;
+}
+
+.window-control {
+  position: relative;
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.window-control:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.window-control:focus-visible {
+  outline-offset: -3px;
+}
+
+.window-control.close:hover {
+  color: #fff;
+  background: #c42b1c;
+}
+
+.window-control-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: 11px;
+  height: 11px;
+  transform: translate(-50%, -50%);
+}
+
+.window-control-icon.minimize::before {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  left: 0;
+  height: 1px;
+  background: currentColor;
+  content: "";
+}
+
+.window-control-icon.maximize {
+  border: 1px solid currentColor;
+}
+
+.window-control-icon.close::before,
+.window-control-icon.close::after {
+  position: absolute;
+  top: 5px;
+  left: -1px;
+  width: 13px;
+  height: 1px;
+  background: currentColor;
+  content: "";
+}
+
+.window-control-icon.close::before {
+  transform: rotate(45deg);
+}
+
+.window-control-icon.close::after {
+  transform: rotate(-45deg);
 }
 
 .tabbar {
