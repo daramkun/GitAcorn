@@ -56,6 +56,7 @@ import {
   type SessionTabDto,
 } from "./repository";
 import { updateRepositoryOperation } from "./remote-operations";
+import { localeTag, t } from "./i18n";
 
 type Page = "changes" | "history" | "operations";
 type AppInfoState =
@@ -64,9 +65,9 @@ type AppInfoState =
   | { status: "error"; message: string };
 
 const navigation: ReadonlyArray<{ id: Page; label: string; shortcut: string }> = [
-  { id: "changes", label: "Changes", shortcut: "⌘1" },
-  { id: "history", label: "History", shortcut: "⌘2" },
-  { id: "operations", label: "Operations", shortcut: "⌘3" },
+  { id: "changes", label: t("Changes"), shortcut: "⌘1" },
+  { id: "history", label: t("History"), shortcut: "⌘2" },
+  { id: "operations", label: t("Operations"), shortcut: "⌘3" },
 ];
 
 export function App() {
@@ -90,6 +91,7 @@ export function App() {
   const activeSidebar = activeTab ? sidebars[activeTab.repoId] : undefined;
 
   useEffect(() => {
+    document.documentElement.lang = localeTag();
     let active = true;
     getAppInfo()
       .then((value) => active && setAppInfo({ status: "ready", value }))
@@ -329,8 +331,8 @@ export function App() {
     ? activeSnapshot.head.kind === "branch"
       ? activeSnapshot.head.name
       : activeSnapshot.head.kind === "detached"
-        ? `Detached ${activeSnapshot.head.oid?.slice(0, 8) ?? ""}`
-        : "Unborn branch"
+        ? `${t("Detached")} ${activeSnapshot.head.oid?.slice(0, 8) ?? ""}`
+        : t("Unborn branch")
     : undefined;
 
   return (
@@ -343,11 +345,11 @@ export function App() {
         <div className="window-drag-region" />
       </header>
 
-      <div className="tabbar" aria-label="Repository tabs">
+      <div className="tabbar" aria-label={t("Repository tabs")}>
         <div className="repository-tabs">
           {tabs.length === 0 && (
             <div className="tabbar-empty">
-              {sessionLoading ? "Restoring session…" : "No repositories open"}
+              {sessionLoading ? t("Restoring session…") : t("No repositories open")}
             </div>
           )}
           {tabs.map((tab, index) => (
@@ -366,25 +368,25 @@ export function App() {
                 <span>{tab.unavailable ? "!" : (tab.snapshot?.changes.length ?? 0)}</span>
               </button>
               <div className="tab-controls">
-                <button type="button" aria-label={`Move ${repositoryName(tab.worktreePath)} left`} disabled={index === 0} onClick={() => moveTab(tab.repoId, -1)}>‹</button>
-                <button type="button" aria-label={`Move ${repositoryName(tab.worktreePath)} right`} disabled={index === tabs.length - 1} onClick={() => moveTab(tab.repoId, 1)}>›</button>
-                <button type="button" aria-label={`Close ${repositoryName(tab.worktreePath)}`} onClick={() => closeTab(tab.repoId)}>×</button>
+                <button type="button" aria-label={t("Move {name} left", { name: repositoryName(tab.worktreePath) })} disabled={index === 0} onClick={() => moveTab(tab.repoId, -1)}>‹</button>
+                <button type="button" aria-label={t("Move {name} right", { name: repositoryName(tab.worktreePath) })} disabled={index === tabs.length - 1} onClick={() => moveTab(tab.repoId, 1)}>›</button>
+                <button type="button" aria-label={t("Close {name}", { name: repositoryName(tab.worktreePath) })} onClick={() => closeTab(tab.repoId)}>×</button>
               </div>
             </div>
           ))}
         </div>
         <button className="open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
-          <span aria-hidden="true">＋</span>{opening ? " Opening…" : " Open a repository"}
+          <span aria-hidden="true">＋</span>{" "}{opening ? t("Opening…") : t("Open a repository")}
         </button>
         <button className="open-button" type="button" onClick={() => setShowClone((value) => !value)}>
-          Clone
+          {t("Clone")}
         </button>
       </div>
 
       <main className="workspace">
         <aside className="sidebar">
-          <nav aria-label="Repository navigation">
-            <p className="section-label">Workspace</p>
+          <nav aria-label={t("Repository navigation")}>
+            <p className="section-label">{t("Workspace")}</p>
             {navigation.map((item) => (
               <button
                 key={item.id}
@@ -400,7 +402,7 @@ export function App() {
             ))}
           </nav>
           <div className="sidebar-groups">
-            <SidebarGroup label="Worktrees" count={activeSidebar?.worktrees.length}>
+            <SidebarGroup label={t("Worktrees")} count={activeSidebar?.worktrees.length}>
               {activeSidebar?.worktrees.map((worktree) => (
                 <button
                   type="button"
@@ -409,17 +411,17 @@ export function App() {
                   aria-current={worktree.id === activeTab?.worktreeId ? "true" : undefined}
                   onClick={() => handleWorktreeActivate(worktree.id)}
                 >
-                  {worktree.isCurrent ? "● " : ""}{worktree.branch ?? "Detached"}
-                  {worktree.isLocked ? " · locked" : ""}
+                  {worktree.isCurrent ? "● " : ""}{worktree.branch ?? t("Detached")}
+                  {worktree.isLocked ? ` · ${t("locked")}` : ""}
                 </button>
               ))}
             </SidebarGroup>
-            <SidebarGroup label="Branches" count={activeSidebar?.branches.total}>
+            <SidebarGroup label={t("Branches")} count={activeSidebar?.branches.total}>
               {activeSidebar?.branches.items.map((branch) => (
                 <span key={branch}>{branch === branchLabel ? "● " : ""}{branch}</span>
               ))}
             </SidebarGroup>
-            <SidebarGroup label="Tags" count={activeSidebar?.tags.total}>
+            <SidebarGroup label={t("Tags")} count={activeSidebar?.tags.total}>
               {activeSidebar?.tags.items.map((tag) => <span key={tag}>{tag}</span>)}
             </SidebarGroup>
             <StashControls
@@ -460,54 +462,54 @@ export function App() {
           </div>
           <div className="runtime-status" role="status">
             <span className={appInfo.status === "error" ? "status-dot error" : "status-dot"} />
-            {appInfo.status === "loading" && "Connecting to core…"}
+            {appInfo.status === "loading" && t("Connecting to core…")}
             {appInfo.status === "ready" && `${appInfo.value.runtime} · v${appInfo.value.version}`}
-            {appInfo.status === "error" && "Core unavailable"}
+            {appInfo.status === "error" && t("Core unavailable")}
           </div>
         </aside>
 
         <section className="content" aria-live="polite">
           <div className="contextbar">
             <div>
-              <span className="eyebrow">{activeTab?.worktreePath ?? "Local workspace"}</span>
+              <span className="eyebrow">{activeTab?.worktreePath ?? t("Local workspace")}</span>
               <strong>{activeSnapshot ? `${branchLabel} · ${navigation.find((item) => item.id === page)?.label}` : navigation.find((item) => item.id === page)?.label}</strong>
             </div>
-            <div className="remote-actions" aria-label="Remote actions">
-              {activeTab && refreshing.has(activeTab.repoId) && <span className="refreshing">Refreshing…</span>}
+            <div className="remote-actions" aria-label={t("Remote actions")}>
+              {activeTab && refreshing.has(activeTab.repoId) && <span className="refreshing">{t("Refreshing…")}</span>}
               {activeTab && remoteOperations[activeTab.repoId] &&
                 ["queued", "running"].includes(remoteOperations[activeTab.repoId].state) ? (
                   <>
                     <span className="refreshing" role="status">
-                      {remoteOperations[activeTab.repoId].kind} · {remoteOperations[activeTab.repoId].message ?? remoteOperations[activeTab.repoId].state}
+                      {operationTerm(remoteOperations[activeTab.repoId].kind)} · {remoteOperations[activeTab.repoId].message ?? operationTerm(remoteOperations[activeTab.repoId].state)}
                     </span>
-                    <button type="button" onClick={() => cancelOperation(remoteOperations[activeTab.repoId].operationId).catch((reason: unknown) => setError(normalizeAppError(reason)))}>Cancel</button>
+                    <button type="button" onClick={() => cancelOperation(remoteOperations[activeTab.repoId].operationId).catch((reason: unknown) => setError(normalizeAppError(reason)))}>{t("Cancel")}</button>
                   </>
                 ) : (
                   <>
-                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("fetch")}>Fetch</button>
-                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("pull")}>Pull{activeSnapshot?.behind ? ` ${activeSnapshot.behind}` : ""}</button>
-                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("push")}>Push{activeSnapshot?.ahead ? ` ${activeSnapshot.ahead}` : ""}</button>
-                    <button type="button" disabled={!activeTab} title="Reject if the remote changed since the last fetch" onClick={() => handleRemote("push", true)}>Push with lease</button>
+                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("fetch")}>{t("Fetch")}</button>
+                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("pull")}>{t("Pull")}{activeSnapshot?.behind ? ` ${activeSnapshot.behind}` : ""}</button>
+                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("push")}>{t("Push")}{activeSnapshot?.ahead ? ` ${activeSnapshot.ahead}` : ""}</button>
+                    <button type="button" disabled={!activeTab} title={t("Reject if the remote changed since the last fetch")} onClick={() => handleRemote("push", true)}>{t("Push with lease")}</button>
                   </>
                 )}
             </div>
           </div>
           {showClone && (
             <form className="clone-bar" onSubmit={(event) => { event.preventDefault(); void handleClone(); }}>
-              <label htmlFor="clone-url">Repository URL</label>
+              <label htmlFor="clone-url">{t("Repository URL")}</label>
               <input id="clone-url" value={cloneUrl} onChange={(event) => setCloneUrl(event.target.value)} placeholder="https://host/owner/repository.git or git@host:owner/repository.git" />
               {cloneOperation && ["queued", "running"].includes(cloneOperation.state) ? (
                 <>
-                  <span role="status">{cloneOperation.message ?? "Cloning…"}</span>
-                  <button type="button" onClick={() => cancelOperation(cloneOperation.operationId)}>Cancel</button>
+                  <span role="status">{cloneOperation.message ?? t("Cloning…")}</span>
+                  <button type="button" onClick={() => cancelOperation(cloneOperation.operationId)}>{t("Cancel")}</button>
                 </>
               ) : (
-                <button type="submit" disabled={!cloneUrl.trim()}>Choose destination and clone</button>
+                <button type="submit" disabled={!cloneUrl.trim()}>{t("Choose destination and clone")}</button>
               )}
             </form>
           )}
-          {appInfo.status === "error" && <ErrorBanner title="Could not reach the GitAcorn core." message={appInfo.message} />}
-          {error && <ErrorBanner title="Repository session needs attention." message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? "Choose another folder" : undefined} onAction={handleOpenRepository} />}
+          {appInfo.status === "error" && <ErrorBanner title={t("Could not reach the GitAcorn core.")} message={appInfo.message} />}
+          {error && <ErrorBanner title={t("Repository session needs attention.")} message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? t("Choose another folder") : undefined} onAction={handleOpenRepository} />}
           {activeTab?.unavailable ? (
             <UnavailableRepository tab={activeTab} onLocate={handleOpenRepository} />
           ) : page === "changes" ? (
@@ -596,7 +598,7 @@ function cloneRepositoryName(remoteUrl: string) {
 }
 
 function SidebarGroup({ label, count, children }: { label: string; count?: number; children?: ReactNode }) {
-  return <div className="sidebar-read-group"><div className="sidebar-group"><span>›</span>{label}{count !== undefined && <small>{Math.min(count, 5)} of {count}</small>}</div>{children && <div className="sidebar-items">{children}</div>}</div>;
+  return <div className="sidebar-read-group"><div className="sidebar-group"><span>›</span>{label}{count !== undefined && <small>{t("{visible} of {total}", { visible: Math.min(count, 5), total: count })}</small>}</div>{children && <div className="sidebar-items">{children}</div>}</div>;
 }
 
 function StashControls({
@@ -617,12 +619,12 @@ function StashControls({
   return (
     <div className="sidebar-read-group stash-controls">
       <div className="sidebar-group">
-        <span>›</span>Stashes
-        {snapshot && <small>{Math.min(snapshot.stashCount, 5)} of {snapshot.stashCount}</small>}
+        <span>›</span>{t("Stashes")}
+        {snapshot && <small>{t("{visible} of {total}", { visible: Math.min(snapshot.stashCount, 5), total: snapshot.stashCount })}</small>}
       </div>
       {snapshot && (
         <form
-          aria-label="Create stash"
+          aria-label={t("Create stash")}
           onSubmit={(event) => {
             event.preventDefault();
             onCreate(message, includeUntracked);
@@ -630,8 +632,8 @@ function StashControls({
           }}
         >
           <input
-            aria-label="Stash message"
-            placeholder="Stash message"
+            aria-label={t("Stash message")}
+            placeholder={t("Stash message")}
             value={message}
             onChange={(event) => setMessage(event.currentTarget.value)}
           />
@@ -641,9 +643,9 @@ function StashControls({
               checked={includeUntracked}
               onChange={(event) => setIncludeUntracked(event.currentTarget.checked)}
             />
-            Include untracked
+            {t("Include untracked")}
           </label>
-          <button type="submit" disabled={snapshot.changes.length === 0}>Stash changes</button>
+          <button type="submit" disabled={snapshot.changes.length === 0}>{t("Stash changes")}</button>
         </form>
       )}
       <div className="sidebar-items">
@@ -651,17 +653,17 @@ function StashControls({
           <div className="stash-item" key={stash.reference} title={stash.message}>
             <span>{stash.reference} · {stash.message}</span>
             <div>
-              <button type="button" onClick={() => onApply(stash.reference)}>Apply</button>
+              <button type="button" onClick={() => onApply(stash.reference)}>{t("Apply")}</button>
               <button
                 type="button"
                 className="danger-button"
                 onClick={() => {
-                  if (window.confirm(`Drop ${stash.reference}? The stash entry cannot be recovered.`)) {
+                  if (window.confirm(t("Drop {reference}? The stash entry cannot be recovered.", { reference: stash.reference }))) {
                     onDrop(stash.reference);
                   }
                 }}
               >
-                Drop
+                {t("Drop")}
               </button>
             </div>
           </div>
@@ -690,7 +692,7 @@ function OperationsView({ onError }: { onError: (error: unknown) => void }) {
     try {
       const diagnostics = await getDiagnostics();
       await navigator.clipboard.writeText(diagnostics);
-      setCopyState("Diagnostics copied");
+      setCopyState(t("Diagnostics copied"));
     } catch (reason: unknown) {
       onError(reason);
     }
@@ -700,26 +702,26 @@ function OperationsView({ onError }: { onError: (error: unknown) => void }) {
     <section className="operations-view" aria-labelledby="operations-title">
       <div className="operations-heading">
         <div>
-          <span className="eyebrow">Recovery and diagnostics</span>
-          <h1 id="operations-title">Operation center</h1>
+          <span className="eyebrow">{t("Recovery and diagnostics")}</span>
+          <h1 id="operations-title">{t("Operation center")}</h1>
         </div>
         <div>
-          <button type="button" onClick={refresh}>Refresh</button>
-          <button type="button" onClick={() => void copyDiagnostics()}>Copy diagnostics</button>
+          <button type="button" onClick={refresh}>{t("Refresh")}</button>
+          <button type="button" onClick={() => void copyDiagnostics()}>{t("Copy diagnostics")}</button>
         </div>
       </div>
       {copyState && <p role="status">{copyState}</p>}
       {loading ? (
-        <div className="history-state" role="status">Loading operations…</div>
+        <div className="history-state" role="status">{t("Loading operations…")}</div>
       ) : operations.length === 0 ? (
-        <div className="history-state">No operations have been recorded.</div>
+        <div className="history-state">{t("No operations have been recorded.")}</div>
       ) : (
         <ol className="operation-list">
           {operations.map((operation) => (
             <li key={operation.id}>
-              <span className={`operation-state ${operation.state}`}>{operation.state}</span>
+              <span className={`operation-state ${operation.state}`}>{operationTerm(operation.state)}</span>
               <div>
-                <strong>{operation.kind}</strong>
+                <strong>{operationTerm(operation.kind)}</strong>
                 <span>{operation.summary}</span>
                 {operation.diagnostic && <code>{operation.diagnostic}</code>}
               </div>
@@ -737,7 +739,8 @@ function ErrorBanner({ title, message, detail, actionLabel, onAction }: { title:
 }
 
 function UnavailableRepository({ tab, onLocate }: { tab: SessionTabDto; onLocate: () => void }) {
-  return <div className="welcome-panel"><p className="eyebrow">Repository unavailable</p><h1>{repositoryName(tab.worktreePath)} moved or was deleted.</h1><p>{tab.worktreePath}</p><button type="button" onClick={onLocate}>Locate repository</button></div>;
+  const name = repositoryName(tab.worktreePath);
+  return <div className="welcome-panel"><p className="eyebrow">{t("Repository unavailable")}</p><h1>{t("{name} moved or was deleted.", { name })}</h1><p>{tab.worktreePath}</p><button type="button" onClick={onLocate}>{t("Locate repository")}</button></div>;
 }
 
 function ChangesView({
@@ -834,7 +837,7 @@ function ChangesView({
       const [hunk, line] = key.split(":").map(Number);
       byHunk.set(hunk, [...(byHunk.get(hunk) ?? []), line]);
     }
-    void mutate(selectedTarget === "staged" ? "Unstaging lines…" : "Staging lines…", () =>
+    void mutate(selectedTarget === "staged" ? t("Unstaging lines…") : t("Staging lines…"), () =>
       applyPatchSelection(
         snapshot.repository.id,
         snapshot.revision,
@@ -852,12 +855,12 @@ function ChangesView({
     if (!selected || selectedTarget !== "unstaged") return;
     if (
       !window.confirm(
-        `Discard the displayed working-tree changes in ${selected.path}? This cannot be undone by GitAcorn.`,
+        t("Discard the displayed working-tree changes in {path}? This cannot be undone by GitAcorn.", { path: selected.path }),
       )
     ) {
       return;
     }
-    void mutate("Discarding…", () =>
+    void mutate(t("Discarding…"), () =>
       discardPath(
         snapshot.repository.id,
         snapshot.revision,
@@ -869,7 +872,7 @@ function ChangesView({
 
   function submitCommit() {
     if (!summary.trim()) return;
-    void mutate(amend ? "Amending…" : "Committing…", () =>
+    void mutate(amend ? t("Amending…") : t("Committing…"), () =>
       createCommit(snapshot.repository.id, snapshot.revision, {
         summary,
         description,
@@ -883,11 +886,11 @@ function ChangesView({
       className="changes-layout"
       style={{ "--file-panel-width": `${panelWidth}px` } as CSSProperties}
     >
-      <section className="file-panel" aria-label="Changed files">
+      <section className="file-panel" aria-label={t("Changed files")}>
         <label className="panel-width-control">
-          <span>File panel width</span>
+          <span>{t("File panel width")}</span>
           <input
-            aria-label="Changed files panel width"
+            aria-label={t("Changed files panel width")}
             type="range"
             min="190"
             max="420"
@@ -896,7 +899,7 @@ function ChangesView({
           />
         </label>
         <ChangeSection
-          title="Unstaged"
+          title={t("Unstaged")}
           target="unstaged"
           changes={unstaged}
           selectedPath={selectedPath}
@@ -904,7 +907,7 @@ function ChangesView({
           onSelect={onSelect}
         />
         <ChangeSection
-          title="Staged"
+          title={t("Staged")}
           target="staged"
           changes={staged}
           selectedPath={selectedPath}
@@ -918,17 +921,17 @@ function ChangesView({
             <div className="diff-toolbar">
               <div>
                 <span className="eyebrow">
-                  {selectedTarget === "staged" ? "Staged diff" : "Unstaged diff"}
+                  {selectedTarget === "staged" ? t("Staged diff") : t("Unstaged diff")}
                 </span>
                 <strong>{selected.path}</strong>
               </div>
               {selected.conflict ? (
-                <div className="conflict-actions" aria-label="Conflict resolution">
+                <div className="conflict-actions" aria-label={t("Conflict resolution")}>
                   <button
                     type="button"
                     disabled={Boolean(operation)}
                     onClick={() =>
-                      void mutate("Using our version…", () =>
+                      void mutate(t("Using our version…"), () =>
                         resolveConflict(
                           snapshot.repository.id,
                           snapshot.revision,
@@ -938,13 +941,13 @@ function ChangesView({
                       )
                     }
                   >
-                    Use ours
+                    {t("Use ours")}
                   </button>
                   <button
                     type="button"
                     disabled={Boolean(operation)}
                     onClick={() =>
-                      void mutate("Using their version…", () =>
+                      void mutate(t("Using their version…"), () =>
                         resolveConflict(
                           snapshot.repository.id,
                           snapshot.revision,
@@ -954,13 +957,13 @@ function ChangesView({
                       )
                     }
                   >
-                    Use theirs
+                    {t("Use theirs")}
                   </button>
                   <button
                     type="button"
                     disabled={Boolean(operation)}
                     onClick={() =>
-                      void mutate("Marking resolved…", () =>
+                      void mutate(t("Marking resolved…"), () =>
                         resolveConflict(
                           snapshot.repository.id,
                           snapshot.revision,
@@ -970,21 +973,21 @@ function ChangesView({
                       )
                     }
                   >
-                    Mark current content resolved
+                    {t("Mark current content resolved")}
                   </button>
                   <button
                     type="button"
                     className="danger-button"
                     disabled={Boolean(operation)}
                     onClick={() => {
-                      if (window.confirm("Abort this merge and restore the pre-merge working tree?")) {
-                        void mutate("Aborting merge…", () =>
+                      if (window.confirm(t("Abort this merge and restore the pre-merge working tree?"))) {
+                        void mutate(t("Aborting merge…"), () =>
                           abortMerge(snapshot.repository.id, snapshot.revision),
                         );
                       }
                     }}
                   >
-                    Abort merge…
+                    {t("Abort merge…")}
                   </button>
                 </div>
               ) : (
@@ -994,7 +997,7 @@ function ChangesView({
                   disabled={Boolean(operation)}
                   onClick={() =>
                     void mutate(
-                      selectedTarget === "staged" ? "Unstaging file…" : "Staging file…",
+                      selectedTarget === "staged" ? t("Unstaging file…") : t("Staging file…"),
                       () =>
                         selectedTarget === "staged"
                           ? unstagePaths(snapshot.repository.id, snapshot.revision, [
@@ -1006,14 +1009,14 @@ function ChangesView({
                     )
                   }
                 >
-                  {selectedTarget === "staged" ? "Unstage file" : "Stage file"}
+                  {selectedTarget === "staged" ? t("Unstage file") : t("Stage file")}
                 </button>
                 <button
                   type="button"
                   disabled={selectedLines.size === 0 || Boolean(operation)}
                   onClick={applyLines}
                 >
-                  {selectedTarget === "staged" ? "Unstage" : "Stage"} selected lines
+                  {selectedTarget === "staged" ? t("Unstage selected lines") : t("Stage selected lines")}
                 </button>
                 {selectedTarget === "unstaged" && (
                   <button
@@ -1022,7 +1025,7 @@ function ChangesView({
                     disabled={Boolean(operation)}
                     onClick={discardSelected}
                   >
-                    Discard…
+                    {t("Discard…")}
                   </button>
                 )}
               </div>
@@ -1030,17 +1033,16 @@ function ChangesView({
             </div>
             {operation && <div className="operation-status" role="status">{operation}</div>}
             {selected.conflict ? (
-              <div className="conflict-panel" role="region" aria-label="Conflict resolution guidance">
-                <h2>Resolve merge conflict</h2>
+              <div className="conflict-panel" role="region" aria-label={t("Conflict resolution guidance")}>
+                <h2>{t("Resolve merge conflict")}</h2>
                 <p>
-                  Choose one side, or edit the file in your editor and mark the current
-                  content resolved. Aborting restores the state from before the merge.
+                  {t("Choose one side, or edit the file in your editor and mark the current content resolved. Aborting restores the state from before the merge.")}
                 </p>
               </div>
             ) : diffLoading ? (
-              <div className="diff-state" role="status">Loading diff…</div>
+              <div className="diff-state" role="status">{t("Loading diff…")}</div>
             ) : diff?.binary ? (
-              <div className="diff-state">Binary file. Use the whole-file action.</div>
+              <div className="diff-state">{t("Binary file. Use the whole-file action.")}</div>
             ) : diff && diff.hunks.length > 0 ? (
               <DiffRenderer
                 diff={diff}
@@ -1055,7 +1057,7 @@ function ChangesView({
                 }
                 onApplyHunk={(hunkIndex) =>
                   void mutate(
-                    selectedTarget === "staged" ? "Unstaging hunk…" : "Staging hunk…",
+                    selectedTarget === "staged" ? t("Unstaging hunk…") : t("Staging hunk…"),
                     () =>
                       applyPatchSelection(
                         snapshot.repository.id,
@@ -1066,10 +1068,10 @@ function ChangesView({
                       ),
                   )
                 }
-                actionLabel={selectedTarget === "staged" ? "Unstage hunk" : "Stage hunk"}
+                actionLabel={selectedTarget === "staged" ? t("Unstage hunk") : t("Stage hunk")}
               />
             ) : (
-              <div className="diff-state">No text diff is available for this side.</div>
+              <div className="diff-state">{t("No text diff is available for this side.")}</div>
             )}
           </>
         ) : (
@@ -1077,28 +1079,28 @@ function ChangesView({
             <span className="file-glyph" aria-hidden="true" />
             <h1>
               {snapshot.changes.length === 0
-                ? "Working tree clean"
-                : "Select a changed file"}
+                ? t("Working tree clean")
+                : t("Select a changed file")}
             </h1>
             <p>
               {snapshot.changes.length === 0
-                ? "There are no staged or unstaged changes."
-                : "Choose a file to inspect and stage its diff."}
+                ? t("There are no staged or unstaged changes.")
+                : t("Choose a file to inspect and stage its diff.")}
             </p>
           </div>
         )}
       </section>
-      <aside className="commit-panel" aria-label="Commit form">
-        <div className="panel-heading"><h2>Commit</h2><span>{staged.length}</span></div>
+      <aside className="commit-panel" aria-label={t("Commit form")}>
+        <div className="panel-heading"><h2>{t("Commit")}</h2><span>{staged.length}</span></div>
         <textarea
-          aria-label="Commit summary"
-          placeholder="Summary"
+          aria-label={t("Commit summary")}
+          placeholder={t("Summary")}
           value={summary}
           onChange={(event) => setSummary(event.currentTarget.value)}
         />
         <textarea
-          aria-label="Commit description"
-          placeholder="Description (optional)"
+          aria-label={t("Commit description")}
+          placeholder={t("Description (optional)")}
           value={description}
           onChange={(event) => setDescription(event.currentTarget.value)}
         />
@@ -1108,7 +1110,7 @@ function ChangesView({
             checked={amend}
             onChange={(event) => setAmend(event.currentTarget.checked)}
           />
-          Amend previous commit
+          {t("Amend previous commit")}
         </label>
         <button
           className="primary-action"
@@ -1116,7 +1118,10 @@ function ChangesView({
           disabled={!summary.trim() || (!amend && staged.length === 0) || Boolean(operation)}
           onClick={submitCommit}
         >
-          {amend ? "Amend" : "Commit"} to {snapshot.head.name ?? "HEAD"}
+          {t("{action} to {branch}", {
+            action: amend ? t("Amend") : t("Commit"),
+            branch: snapshot.head.name ?? "HEAD",
+          })}
         </button>
       </aside>
     </div>
@@ -1142,7 +1147,9 @@ function ChangeSection({
     <div className="change-section">
       <div className="panel-heading"><h2>{title}</h2><span>{changes.length}</span></div>
       {changes.length === 0 ? (
-        <div className="panel-empty">No {title.toLowerCase()} changes.</div>
+        <div className="panel-empty">
+          {target === "staged" ? t("No staged changes.") : t("No unstaged changes.")}
+        </div>
       ) : (
         <VirtualChangeList
           changes={changes}
@@ -1203,8 +1210,8 @@ function VirtualChangeList({
                       : change.worktreeStatus}
                 </span>
                 <span className="change-path">{change.path}</span>
-                {partial && <small>partial</small>}
-                {!partial && change.submodule && <small>submodule</small>}
+                {partial && <small>{t("partial")}</small>}
+                {!partial && change.submodule && <small>{t("submodule")}</small>}
               </button>
             );
           })}
@@ -1228,7 +1235,7 @@ function DiffRenderer({
   actionLabel: string;
 }) {
   return (
-    <div className="diff-scroll" aria-label="File diff">
+    <div className="diff-scroll" aria-label={t("File diff")}>
       {diff.hunks.map((hunk) => (
         <div className="diff-hunk" key={hunk.index}>
           <div className="diff-hunk-header">
@@ -1298,7 +1305,7 @@ function VirtualDiffLines({
 }
 
 function ChangesEmpty({ onOpen, opening }: { onOpen: () => void; opening: boolean }) {
-  return <div className="changes-layout"><section className="file-panel" aria-label="Changed files"><ChangeSection title="Unstaged" target="unstaged" changes={[]} onSelect={() => undefined} /><ChangeSection title="Staged" target="staged" changes={[]} onSelect={() => undefined} /></section><section className="welcome-panel"><div className="welcome-art" aria-hidden="true"><span className="branch-line" /><span className="branch-node node-one" /><span className="branch-node node-two" /><span className="branch-node node-three" /></div><p className="eyebrow">A calmer Git workflow</p><h1>Your repositories, clearly in view.</h1><p>Open a local repository to inspect its real staged, unstaged, and untracked changes.</p><button type="button" onClick={onOpen} disabled={opening}>{opening ? "Opening…" : "Open a repository"}</button><small>Git 2.40.0 or newer is required.</small></section><aside className="commit-panel" aria-label="Commit form preview"><div className="panel-heading"><h2>Commit</h2></div><textarea aria-label="Commit summary" placeholder="Summary" disabled /><textarea aria-label="Commit description" placeholder="Description (optional)" disabled /><button type="button" disabled>Commit</button></aside></div>;
+  return <div className="changes-layout"><section className="file-panel" aria-label={t("Changed files")}><ChangeSection title={t("Unstaged")} target="unstaged" changes={[]} onSelect={() => undefined} /><ChangeSection title={t("Staged")} target="staged" changes={[]} onSelect={() => undefined} /></section><section className="welcome-panel"><div className="welcome-art" aria-hidden="true"><span className="branch-line" /><span className="branch-node node-one" /><span className="branch-node node-two" /><span className="branch-node node-three" /></div><p className="eyebrow">{t("A calmer Git workflow")}</p><h1>{t("Your repositories, clearly in view.")}</h1><p>{t("Open a local repository to inspect its real staged, unstaged, and untracked changes.")}</p><button type="button" onClick={onOpen} disabled={opening}>{opening ? t("Opening…") : t("Open a repository")}</button><small>{t("Git 2.40.0 or newer is required.")}</small></section><aside className="commit-panel" aria-label={t("Commit form preview")}><div className="panel-heading"><h2>{t("Commit")}</h2></div><textarea aria-label={t("Commit summary")} placeholder={t("Summary")} disabled /><textarea aria-label={t("Commit description")} placeholder={t("Description (optional)")} disabled /><button type="button" disabled>{t("Commit")}</button></aside></div>;
 }
 
 function HistoryView({
@@ -1421,7 +1428,7 @@ function HistoryView({
 
   return (
     <div className="history-view">
-      <section className="history-list-panel" aria-label="Commit history">
+      <section className="history-list-panel" aria-label={t("Commit history")}>
         <form
           className="history-filterbar"
           onSubmit={(event) => {
@@ -1431,7 +1438,7 @@ function HistoryView({
           }}
         >
           <select
-            aria-label="Branch or tag reference"
+            aria-label={t("Branch or tag reference")}
             value={reference}
             onChange={(event) => {
               const value = event.currentTarget.value;
@@ -1439,25 +1446,25 @@ function HistoryView({
               persistFilter(value, query);
             }}
           >
-            <option value="">All branches and tags</option>
+            <option value="">{t("All branches and tags")}</option>
             {references.map((item) => (
               <option key={item.fullName} value={item.fullName}>
-                {item.kind === "tag" ? "tag: " : ""}{item.shortName}
+                {item.kind === "tag" ? t("tag: ") : ""}{item.shortName}
               </option>
             ))}
           </select>
           <input
-            aria-label="Search commit messages"
+            aria-label={t("Search commit messages")}
             value={draftQuery}
             onChange={(event) => setDraftQuery(event.currentTarget.value)}
-            placeholder="Search subject or body"
+            placeholder={t("Search subject or body")}
           />
-          <button type="submit">Search</button>
+          <button type="submit">{t("Search")}</button>
         </form>
         {loading && commits.length === 0 ? (
-          <div className="history-state" role="status">Loading history…</div>
+          <div className="history-state" role="status">{t("Loading history…")}</div>
         ) : commits.length === 0 ? (
-          <div className="history-state">No commits match this filter.</div>
+          <div className="history-state">{t("No commits match this filter.")}</div>
         ) : (
           <div className="commit-list">
             {commits.map((commit) => (
@@ -1474,7 +1481,7 @@ function HistoryView({
                 <span
                   className={`graph-node lane-${commit.lane % 6}`}
                   style={{ "--lane": commit.lane, "--lanes": commit.laneCount } as CSSProperties}
-                  aria-label={`Graph lane ${commit.lane + 1} of ${commit.laneCount}`}
+                  aria-label={t("Graph lane {lane} of {total}", { lane: commit.lane + 1, total: commit.laneCount })}
                 />
                 <span className="commit-copy">
                   <strong>{commit.subject}</strong>
@@ -1490,15 +1497,15 @@ function HistoryView({
         )}
         {nextCursor && (
           <button className="load-more" type="button" disabled={loading} onClick={loadMore}>
-            {loading ? "Loading…" : "Load older commits"}
+            {loading ? t("Loading…") : t("Load older commits")}
           </button>
         )}
       </section>
 
-      <aside className="commit-detail" aria-label="Commit details">
+      <aside className="commit-detail" aria-label={t("Commit details")}>
         {hasConflicts && (
           <div className="merge-conflict" role="alert">
-            Merge stopped with conflicts. Resolve the highlighted files in Changes.
+            {t("Merge stopped with conflicts. Resolve the highlighted files in Changes.")}
           </div>
         )}
         {selected ? (
@@ -1507,7 +1514,7 @@ function HistoryView({
             <h1>{selected.subject}</h1>
             <p>{selected.authorName} &lt;{selected.authorEmail}&gt;</p>
             <time dateTime={new Date(selected.authoredAt * 1000).toISOString()}>
-              {new Date(selected.authoredAt * 1000).toLocaleString()}
+              {new Date(selected.authoredAt * 1000).toLocaleString(localeTag())}
             </time>
             {selected.body && <pre>{selected.body}</pre>}
             <div className="detail-refs">
@@ -1515,11 +1522,11 @@ function HistoryView({
             </div>
           </>
         ) : (
-          <div className="history-state">Select a commit to inspect it.</div>
+          <div className="history-state">{t("Select a commit to inspect it.")}</div>
         )}
 
         <div className="reference-actions">
-          <h2>Reference actions</h2>
+          <h2>{t("Reference actions")}</h2>
           {selectedReference ? (
             <>
               <strong>{selectedReference.shortName}</strong>
@@ -1534,7 +1541,7 @@ function HistoryView({
                     type="button"
                     disabled={Boolean(operation) || selectedReference.shortName === currentBranch}
                     onClick={() =>
-                      void mutate("Checking out…", () =>
+                      void mutate(t("Checking out…"), () =>
                         checkoutBranch(
                           snapshot.repository.id,
                           snapshot.revision,
@@ -1543,14 +1550,14 @@ function HistoryView({
                       )
                     }
                   >
-                    Checkout
+                    {t("Checkout")}
                   </button>
                   <button
                     type="button"
                     disabled={Boolean(operation) || selectedReference.shortName === currentBranch}
                     onClick={() =>
-                      window.confirm(`Delete merged branch ${selectedReference.shortName}?`) &&
-                      void mutate("Deleting branch…", () =>
+                      window.confirm(t("Delete merged branch {branch}?", { branch: selectedReference.shortName })) &&
+                      void mutate(t("Deleting branch…"), () =>
                         deleteBranch(
                           snapshot.repository.id,
                           snapshot.revision,
@@ -1559,14 +1566,14 @@ function HistoryView({
                       )
                     }
                   >
-                    Delete
+                    {t("Delete")}
                   </button>
                   <button
                     type="button"
                     disabled={Boolean(operation) || selectedReference.shortName === currentBranch}
                     onClick={() =>
-                      window.confirm(`Merge ${selectedReference.shortName} into ${currentBranch ?? "HEAD"}?`) &&
-                      void mutate("Merging…", () =>
+                      window.confirm(t("Merge {branch} into {target}?", { branch: selectedReference.shortName, target: currentBranch ?? "HEAD" })) &&
+                      void mutate(t("Merging…"), () =>
                         mergeBranch(
                           snapshot.repository.id,
                           snapshot.revision,
@@ -1575,20 +1582,20 @@ function HistoryView({
                       )
                     }
                   >
-                    Merge
+                    {t("Merge")}
                   </button>
                 </div>
               )}
             </>
           ) : (
-            <span>Choose a branch or tag to enable explicit actions.</span>
+            <span>{t("Choose a branch or tag to enable explicit actions.")}</span>
           )}
           <form
             onSubmit={(event) => {
               event.preventDefault();
               const name = branchName.trim();
               if (!name) return;
-              void mutate("Creating branch…", () =>
+              void mutate(t("Creating branch…"), () =>
                 createBranch(snapshot.repository.id, snapshot.revision, {
                   name,
                   startPoint: selected?.oid,
@@ -1597,13 +1604,13 @@ function HistoryView({
             }}
           >
             <input
-              aria-label="New branch name"
+              aria-label={t("New branch name")}
               value={branchName}
               onChange={(event) => setBranchName(event.currentTarget.value)}
               placeholder="new/branch-name"
             />
             <button type="submit" disabled={!branchName.trim() || Boolean(operation)}>
-              Create at selected commit
+              {t("Create at selected commit")}
             </button>
           </form>
           {operation && <span role="status">{operation}</span>}
@@ -1633,13 +1640,29 @@ function shortRef(value: string) {
 
 function relativeTime(timestamp: number) {
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - timestamp);
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
-  if (seconds < 2_592_000) return `${Math.floor(seconds / 86_400)}d ago`;
-  return new Date(timestamp * 1000).toLocaleDateString();
+  if (seconds < 60) return t("just now");
+  if (seconds < 3600) return t("{count}m ago", { count: Math.floor(seconds / 60) });
+  if (seconds < 86_400) return t("{count}h ago", { count: Math.floor(seconds / 3600) });
+  if (seconds < 2_592_000) return t("{count}d ago", { count: Math.floor(seconds / 86_400) });
+  return new Date(timestamp * 1000).toLocaleDateString(localeTag());
+}
+
+function operationTerm(value: string): string {
+  switch (value.toLowerCase()) {
+    case "fetch": return t("Fetch");
+    case "pull": return t("Pull");
+    case "push": return t("Push");
+    case "clone": return t("clone");
+    case "queued": return t("queued");
+    case "running": return t("running");
+    case "succeeded": return t("succeeded");
+    case "failed": return t("failed");
+    case "cancelled": return t("cancelled");
+    case "interrupted": return t("interrupted");
+    default: return value;
+  }
 }
 
 function HistoryEmpty() {
-  return <div className="history-empty"><div className="history-lines" aria-hidden="true"><i /><i /><i /></div><p className="eyebrow">Commit graph</p><h1>History will appear here.</h1><p>Open a repository to explore commits, branches, tags, and authors.</p></div>;
+  return <div className="history-empty"><div className="history-lines" aria-hidden="true"><i /><i /><i /></div><p className="eyebrow">{t("Commit graph")}</p><h1>{t("History will appear here.")}</h1><p>{t("Open a repository to explore commits, branches, tags, and authors.")}</p></div>;
 }
