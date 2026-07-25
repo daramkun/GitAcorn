@@ -1,4 +1,4 @@
-name: Windows Alpha release
+name: Desktop Alpha release
 
 on:
   push:
@@ -51,7 +51,7 @@ jobs:
           $config | ConvertTo-Json -Depth 8 | Set-Content apps/desktop/src-tauri/tauri.release.conf.json
 
       - name: Build signed installer and updater artifacts
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -78,3 +78,105 @@ jobs:
           Start-Sleep -Seconds 5
           if ($app.HasExited) { throw "Installed application exited during smoke test" }
           Stop-Process -Id $app.Id
+
+  macos-alpha:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Import Developer ID certificate
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$KEYCHAIN_PASSWORD"
+          certificate_path="$RUNNER_TEMP/git-acorn-certificate.p12"
+          keychain_path="$RUNNER_TEMP/git-acorn.keychain-db"
+          echo "GIT_ACORN_CERTIFICATE=$certificate_path" >> "$GITHUB_ENV"
+          echo "GIT_ACORN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          identity="$(
+            security find-identity -v -p codesigning "$keychain_path" |
+              sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' |
+              head -n 1
+          )"
+          test -n "$identity"
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Build notarized universal DMG and updater artifacts
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: GitAcorn v__VERSION__ Alpha
+          releaseBody: See docs/alpha-release.md for validation and known limitations.
+          releaseDraft: true
+          prerelease: true
+          includeUpdaterJson: true
+          args: --target universal-apple-darwin --config src-tauri/tauri.macos.conf.json
+
+      - name: Verify signature, notarization, architecture, and launch
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="target/universal-apple-darwin/release/bundle/macos/GitAcorn.app"
+          dmg="$(find target/universal-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)"
+          test -d "$app"
+          test -n "$dmg"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          xcrun stapler validate "$dmg"
+          architectures="$(lipo -archs "$app/Contents/MacOS/git-acorn-desktop")"
+          [[ "$architectures" == *arm64* ]]
+          [[ "$architectures" == *x86_64* ]]
+          open "$app"
+          sleep 8
+          pgrep -x git-acorn-desktop
+          pkill -x git-acorn-desktop
+
+      - name: Delete temporary keychain
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${GIT_ACORN_KEYCHAIN:-}" && -f "$GIT_ACORN_KEYCHAIN" ]]; then
+            security delete-keychain "$GIT_ACORN_KEYCHAIN"
+          fi
+          rm -f "${GIT_ACORN_CERTIFICATE:-}"

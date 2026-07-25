@@ -18,6 +18,7 @@ tauri-build = { version = "2.4", features = [] }
 
 [dependencies]
 app-core = { path = "../../../crates/app-core" }
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
 git-domain = { path = "../../../crates/git-domain" }
 git-cli = { path = "../../../crates/git-cli" }
 notify = "8.0"

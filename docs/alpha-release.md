@@ -4,11 +4,15 @@
 
 1. Run every command in the quality gate documented in `architecture-and-roadmap.md`.
 2. Generate one Tauri updater key pair and set `TAURI_SIGNING_PUBLIC_KEY`, `TAURI_SIGNING_PRIVATE_KEY`, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as GitHub Actions secrets.
-3. Push a semantic version tag such as `v0.1.0`.
-4. Confirm the `Windows Alpha release` workflow builds the current-user NSIS installer, signs the updater artifacts, installs them on a clean Windows runner, and opens the installed executable.
-5. Review the generated draft prerelease, attach these notes, and publish it only after the P0/P1 triage is empty.
+3. Export a Developer ID Application certificate and configure `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, and a temporary `KEYCHAIN_PASSWORD` secret.
+4. Configure the notarization secrets `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID`.
+5. Push a semantic version tag such as `v0.1.0`.
+6. Confirm the `Desktop Alpha release` workflow produces both release targets:
+   - Windows current-user NSIS installer and signed updater artifacts, followed by a clean-runner install/start smoke test.
+   - Notarized universal macOS app/DMG and signed updater artifacts, followed by signature, Gatekeeper, stapling, dual-architecture, and launch checks.
+7. Review the generated draft prerelease, attach these notes, and publish it only after the P0/P1 triage is empty.
 
-The signing private key and password must never be stored in the repository, application database, diagnostic output, or workflow logs.
+Signing certificates, private keys, account passwords, and keychain passwords must never be stored in the repository, application database, diagnostic output, or workflow logs.
 
 ## Alpha validation
 
@@ -20,10 +24,12 @@ The signing private key and password must never be stored in the repository, app
 - Restart GitAcorn during an operation and verify the operation center marks it interrupted.
 - Copy diagnostics and verify credentials, remote URL secrets, and file contents are absent.
 - Test keyboard navigation and accessible names at 100%, 150%, and 200% Windows scaling.
+- On both Intel and Apple Silicon Macs, open a repository from Finder-launched GitAcorn and verify system Git discovery, file watching, credential helper/SSH agent access, and keyboard navigation.
 
 ## Known Alpha limits
 
-- The first release targets Windows and requires system Git 2.40 or newer.
+- Windows and macOS Alpha builds require system Git 2.40 or newer.
+- The macOS Alpha is a universal binary for macOS 11 or newer and is distributed outside the App Store as a notarized DMG.
 - GitAcorn uses the configured system credential helper and SSH agent; it does not store credentials.
 - Conflict resolution offers ours, theirs, or staging the content edited in an external editor. An embedded merge editor is not included.
 - Updater artifacts are generated and signed by CI. Automatic in-app update discovery is deferred until a stable public release endpoint exists.

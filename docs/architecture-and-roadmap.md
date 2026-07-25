@@ -665,14 +665,30 @@ pub enum AppError {
 - P0/P1 버그가 없고 destructive operation의 복구 경로가 검증된다.
 - Alpha release artifact와 release note를 생성할 수 있다.
 
+### M7 — macOS Alpha 출시
+
+구현:
+
+- Windows와 macOS에서 같은 품질 게이트를 실행하는 platform regression CI
+- Intel과 Apple Silicon을 함께 지원하는 universal app/DMG
+- Finder에서 실행해도 shell의 Git과 credential helper를 찾는 실행 환경 복원
+- Developer ID Application 서명과 Apple notarization/stapling
+- Tauri updater 서명 artifact와 기존 draft Alpha release 통합
+- codesign, Gatekeeper, stapling, dual-architecture, 앱 시작 smoke gate
+
+완료 조건:
+
+- macOS 11 이상에서 실행 가능한 universal app과 DMG가 생성된다.
+- tag release에서 서명, notarization, stapling 검증을 통과하지 못하면 artifact를 출시하지 않는다.
+- Windows와 macOS test가 같은 commit에서 통과하며 실제 Intel/Apple Silicon 기기 회귀 항목이 release checklist에 기록된다.
+
 ### Alpha 이후 순서
 
-1. macOS packaging, signing, notarization과 platform regression
-2. rebase/cherry-pick/revert와 안전한 history edit
-3. worktree 생성·삭제·잠금, submodule, LFS
-4. GitHub/GitLab forge integration
-5. graph/diff 읽기 경로의 측정 기반 `gix` 최적화
-6. Linux packaging
+1. rebase/cherry-pick/revert와 안전한 history edit
+2. worktree 생성·삭제·잠금, submodule, LFS
+3. GitHub/GitLab forge integration
+4. graph/diff 읽기 경로의 측정 기반 `gix` 최적화
+5. Linux packaging
 
 ## 15. 구현 운영 규칙
 
@@ -970,6 +986,37 @@ pnpm build
   - Windows clean VM 설치·업데이트 회귀는 tag release workflow의 필수 gate이며 로컬 개발 빌드가 이를 대체하지 않는다.
 - 다음 시작 지점
   - Alpha P0/P1 triage와 Windows scaling/accessibility 회귀를 수행한 뒤 macOS packaging, signing, notarization을 시작한다.
+
+### M7 체크리스트
+
+- [x] Windows/macOS platform regression CI matrix
+- [x] macOS 11+ universal app과 DMG bundle 설정
+- [x] Finder launch의 Git/credential helper `PATH` 복원
+- [x] Developer ID certificate 임시 keychain import와 작업 후 삭제
+- [x] Apple ID 기반 notarization과 stapling
+- [x] Tauri updater artifact 서명과 draft Alpha release 통합
+- [x] codesign, Gatekeeper, universal architecture, launch smoke gate
+- [x] Intel/Apple Silicon 실제 기기 release checklist
+
+#### M7 구현 기록 — 2026-07-25
+
+- 구현된 출시 흐름
+  - main/PR 품질 게이트를 Windows와 macOS runner에서 함께 실행해 platform-specific compile/test 회귀 차단
+  - GUI launch 시 shell 환경의 `PATH`를 복원해 Homebrew 등으로 설치한 Git과 credential helper 탐지
+  - tag 또는 수동 dispatch → Developer ID Application certificate를 임시 keychain에 import → universal app/DMG build
+  - Apple notarization과 stapling → Tauri updater 서명 → 기존 draft Alpha release에 Windows/macOS artifact 업로드
+  - codesign, Gatekeeper, stapling, arm64/x86_64 포함 여부와 Finder와 동일한 GUI launch 경로 smoke
+- 실행한 검증
+  - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings` 통과
+  - `cargo test --workspace` 통과: Rust unit/integration test 45개, large fixture benchmark 1개 제외
+  - `pnpm lint`, `pnpm test --run` 통과: component/unit test 21개, `pnpm build` 통과
+  - `pnpm --filter @git-acorn/desktop tauri build --no-bundle --config src-tauri/tauri.macos.conf.json`으로 overlay config와 release binary build 통과
+- 남은 제한
+  - Apple Developer certificate와 notarization account는 CI secret으로만 제공하며 저장소나 진단에 보관하지 않는다.
+  - 실제 서명/notarization과 universal bundle smoke는 tag release의 macOS runner에서만 수행할 수 있다.
+  - Intel/Apple Silicon 실기기에서 credential helper, SSH agent, file watcher를 확인한 뒤 draft Alpha를 수동 publish한다.
+- 다음 시작 지점
+  - rebase/cherry-pick/revert의 안전한 history edit 설계와 실제 Git fixture를 시작한다.
 
 ## 17. 아키텍처 결정 기록(ADR) 목록
 
