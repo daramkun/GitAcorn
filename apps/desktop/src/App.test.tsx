@@ -267,12 +267,39 @@ describe("App", () => {
 
   it("switches between Changes and History", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
-    render(<App />);
+    const graphCommit = (
+      oid: string,
+      subject: string,
+      parents: string[],
+    ) => ({
+      oid,
+      parents,
+      authorName: "Ada",
+      authorEmail: "ada@example.com",
+      authoredAt: 1_700_000_000,
+      subject,
+      body: "",
+      references: [],
+      lane: 0,
+      laneCount: 1,
+    });
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        graphCommit("merge", "Merge topic", ["main", "topic"]),
+        graphCommit("main", "Main change", ["root"]),
+        graphCommit("topic", "Topic change", ["root"]),
+        graphCommit("root", "Initial commit", []),
+      ],
+    });
+    const { container } = render(<App />);
 
     await screen.findByText("acorn-demo");
     fireEvent.click(screen.getByRole("button", { name: /^History/ }));
 
     expect(await screen.findByRole("button", { name: /Initial commit/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: /Graph lane/ })).toHaveLength(4);
+    expect(container.querySelectorAll(".graph-edge").length).toBeGreaterThan(4);
     expect(screen.getByRole("button", { name: /^History/ })).toHaveAttribute(
       "aria-current",
       "page",

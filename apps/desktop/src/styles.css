@@ -1111,16 +1111,17 @@ button:disabled {
 
 .commit-list {
   min-width: 0;
+  --graph-width: 44px;
 }
 
 .commit-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 84px minmax(180px, 1fr) minmax(80px, auto) 72px;
+  grid-template-columns: var(--graph-width) minmax(180px, 1fr) minmax(80px, auto) 72px;
   align-items: center;
   gap: 10px;
   min-height: 56px;
-  padding: 7px 14px 7px 8px;
+  padding: 0 14px 0 8px;
   text-align: left;
   color: var(--text);
   background: transparent;
@@ -1138,35 +1139,38 @@ button:disabled {
   box-shadow: inset 3px 0 var(--accent);
 }
 
-.graph-node {
-  --lane-color: #c27847;
-  position: relative;
+.commit-graph {
   display: block;
-  width: 12px;
-  height: 12px;
-  margin-left: calc(10px + var(--lane) * 14px);
-  border-radius: 50%;
-  background: var(--lane-color);
-  box-shadow: 0 0 0 3px var(--surface);
+  width: var(--graph-width);
+  height: 56px;
+  overflow: visible;
 }
 
-.graph-node::before,
-.graph-node::after {
-  content: "";
-  position: absolute;
-  left: 5px;
-  width: 2px;
-  height: 25px;
-  background: var(--lane-color);
+.graph-edge,
+.graph-commit-node {
+  fill: none;
+  stroke: var(--graph-color);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
-.graph-node::before { bottom: 10px; }
-.graph-node::after { top: 10px; }
-.graph-node.lane-1 { --lane-color: #5a8f7b; }
-.graph-node.lane-2 { --lane-color: #7765a8; }
-.graph-node.lane-3 { --lane-color: #b06073; }
-.graph-node.lane-4 { --lane-color: #4d7fa8; }
-.graph-node.lane-5 { --lane-color: #9a7b42; }
+.graph-edge {
+  stroke-linecap: round;
+}
+
+.graph-commit-node {
+  fill: var(--surface);
+  stroke-width: 3;
+}
+
+.graph-color-0 { --graph-color: #c27847; }
+.graph-color-1 { --graph-color: #5a8f7b; }
+.graph-color-2 { --graph-color: #7765a8; }
+.graph-color-3 { --graph-color: #b06073; }
+.graph-color-4 { --graph-color: #4d7fa8; }
+.graph-color-5 { --graph-color: #9a7b42; }
+.graph-color-6 { --graph-color: #498c98; }
+.graph-color-7 { --graph-color: #986f55; }
 
 .commit-copy {
   display: flex;

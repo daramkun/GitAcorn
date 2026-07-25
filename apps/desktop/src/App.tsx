@@ -8,6 +8,11 @@ import {
 } from "react";
 import { getAppInfo, type AppInfoDto } from "./app-info";
 import {
+  layoutCommitGraph,
+  type CommitGraphRow,
+  type GraphSegment,
+} from "./commitGraph";
+import {
   applyPatchSelection,
   abortMerge,
   activateSessionTab,
@@ -1339,6 +1344,16 @@ function HistoryView({
   const [operation, setOperation] = useState<string>();
   const [branchName, setBranchName] = useState("");
   const selected = commits.find((commit) => commit.oid === selectedOid) ?? commits[0];
+  const graph = useMemo(
+    () =>
+      layoutCommitGraph(
+        query
+          ? commits.map((commit) => ({ oid: commit.oid, parents: [] }))
+          : commits,
+      ),
+    [commits, query],
+  );
+  const graphWidth = Math.max(44, graph.laneCount * 16 + 16);
 
   useEffect(() => {
     let active = true;
@@ -1466,8 +1481,11 @@ function HistoryView({
         ) : commits.length === 0 ? (
           <div className="history-state">{t("No commits match this filter.")}</div>
         ) : (
-          <div className="commit-list">
-            {commits.map((commit) => (
+          <div
+            className="commit-list"
+            style={{ "--graph-width": `${graphWidth}px` } as CSSProperties}
+          >
+            {commits.map((commit, index) => (
               <button
                 type="button"
                 key={commit.oid}
@@ -1478,10 +1496,13 @@ function HistoryView({
                   onPersist({ selectedCommit: commit.oid });
                 }}
               >
-                <span
-                  className={`graph-node lane-${commit.lane % 6}`}
-                  style={{ "--lane": commit.lane, "--lanes": commit.laneCount } as CSSProperties}
-                  aria-label={t("Graph lane {lane} of {total}", { lane: commit.lane + 1, total: commit.laneCount })}
+                <CommitGraph
+                  row={graph.rows[index]}
+                  width={graphWidth}
+                  label={t("Graph lane {lane} of {total}", {
+                    lane: graph.rows[index].nodeLane + 1,
+                    total: graph.rows[index].laneCount,
+                  })}
                 />
                 <span className="commit-copy">
                   <strong>{commit.subject}</strong>
@@ -1618,6 +1639,58 @@ function HistoryView({
       </aside>
     </div>
   );
+}
+
+const GRAPH_ROW_HEIGHT = 56;
+const GRAPH_NODE_Y = GRAPH_ROW_HEIGHT / 2;
+const GRAPH_LANE_GAP = 16;
+const GRAPH_LANE_OFFSET = 12;
+
+function CommitGraph({
+  row,
+  width,
+  label,
+}: {
+  row: CommitGraphRow;
+  width: number;
+  label: string;
+}) {
+  const laneX = (lane: number) => GRAPH_LANE_OFFSET + lane * GRAPH_LANE_GAP;
+
+  return (
+    <svg
+      className="commit-graph"
+      viewBox={`0 0 ${width} ${GRAPH_ROW_HEIGHT}`}
+      role="img"
+      aria-label={label}
+    >
+      {row.segments.map((segment, index) => (
+        <path
+          key={`${segment.from}-${segment.to}-${segment.fromLane}-${segment.toLane}-${index}`}
+          className={`graph-edge graph-color-${segment.color % 8}`}
+          d={graphSegmentPath(segment, laneX)}
+        />
+      ))}
+      <circle
+        className={`graph-commit-node graph-color-${row.nodeColor % 8}`}
+        cx={laneX(row.nodeLane)}
+        cy={GRAPH_NODE_Y}
+        r="5"
+      />
+    </svg>
+  );
+}
+
+function graphSegmentPath(
+  segment: GraphSegment,
+  laneX: (lane: number) => number,
+) {
+  const startY = segment.from === "top" ? 0 : GRAPH_NODE_Y;
+  const endY = segment.to === "node" ? GRAPH_NODE_Y : GRAPH_ROW_HEIGHT;
+  const startX = laneX(segment.fromLane);
+  const endX = laneX(segment.toLane);
+  const middleY = (startY + endY) / 2;
+  return `M ${startX} ${startY} C ${startX} ${middleY}, ${endX} ${middleY}, ${endX} ${endY}`;
 }
 
 function parseHistoryFilter(value?: string): { reference: string; query: string } {
