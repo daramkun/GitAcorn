@@ -385,11 +385,10 @@ export function activateWorktree(repoId: string, worktreeId: string): Promise<Se
 
 export function getDiff(
   repoId: string,
-  revision: number,
   pathBytes: number[],
   target: DiffTarget,
 ): Promise<DiffDto> {
-  return invoke<DiffDto>("diff_get", { repoId, revision, pathBytes, target });
+  return invoke<DiffDto>("diff_get", { repoId, pathBytes, target });
 }
 
 export function stagePaths(

@@ -423,13 +423,12 @@ pub fn branch_merge(
 #[tauri::command]
 pub fn diff_get(
     repo_id: String,
-    revision: u64,
     path_bytes: Vec<u8>,
     target: String,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<DiffDto> {
     state
-        .repository_diff(&repo_id, revision, &path_bytes, parse_diff_target(&target)?)
+        .repository_diff(&repo_id, &path_bytes, parse_diff_target(&target)?)
         .map(DiffDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }

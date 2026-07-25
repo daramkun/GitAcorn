@@ -201,7 +201,6 @@ impl ApplicationState {
     pub fn repository_diff(
         &self,
         repo_id: &str,
-        revision: u64,
         path: &[u8],
         target: DiffTarget,
     ) -> Result<DiffDocument, AppError> {
@@ -214,7 +213,6 @@ impl ApplicationState {
             let repository = repositories
                 .get(&repo_id)
                 .ok_or(AppError::RepositoryNotOpen)?;
-            ensure_revision(revision, repository.revision)?;
             self.service.diff(&repository.descriptor, path, target)
         })
     }

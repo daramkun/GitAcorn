@@ -794,7 +794,6 @@ function ChangesView({
     setDiffLoading(true);
     getDiff(
       snapshot.repository.id,
-      snapshot.revision,
       selected.pathBytes,
       selectedTarget,
     )
