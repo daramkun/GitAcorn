@@ -100,6 +100,72 @@ export function App() {
   const page = activeTab?.page ?? "changes";
   const activeSidebar = activeTab ? sidebars[activeTab.repoId] : undefined;
 
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const saved = localStorage.getItem("gitacorn:sidebar-width");
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 150 && parsed <= 600) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return 206;
+  });
+
+  const handleSidebarMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const nextWidth = Math.max(150, Math.min(600, startWidth + deltaX));
+      setSidebarWidth(nextWidth);
+      try {
+        localStorage.setItem("gitacorn:sidebar-width", String(nextWidth));
+      } catch {
+        // ignore
+      }
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const handleSidebarKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setSidebarWidth((prev) => {
+        const next = Math.max(150, prev - 10);
+        try {
+          localStorage.setItem("gitacorn:sidebar-width", String(next));
+        } catch {}
+        return next;
+      });
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setSidebarWidth((prev) => {
+        const next = Math.min(600, prev + 10);
+        try {
+          localStorage.setItem("gitacorn:sidebar-width", String(next));
+        } catch {}
+        return next;
+      });
+    }
+  };
+
   useEffect(() => {
     document.documentElement.lang = localeTag();
     let active = true;
@@ -419,7 +485,10 @@ export function App() {
         </button>
       </div>
 
-      <main className="workspace">
+      <main
+        className="workspace"
+        style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+      >
         <aside className="sidebar">
           <nav aria-label={t("Repository navigation")}>
             <p className="section-label">{t("Workspace")}</p>
@@ -502,6 +571,15 @@ export function App() {
             {appInfo.status === "ready" && `${appInfo.value.runtime} · v${appInfo.value.version}`}
             {appInfo.status === "error" && t("Core unavailable")}
           </div>
+          <div
+            className="sidebar-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t("Sidebar width")}
+            tabIndex={0}
+            onMouseDown={handleSidebarMouseDown}
+            onKeyDown={handleSidebarKeyDown}
+          />
         </aside>
 
         <section className="content" aria-live="polite">
@@ -917,38 +995,153 @@ function ChangesView({
     );
   }
 
+  const [stageSplitRatio, setStageSplitRatio] = useState(() => {
+    try {
+      const saved = localStorage.getItem("gitacorn:stage-split-ratio");
+      if (saved) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed) && parsed >= 0.1 && parsed <= 0.9) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return 0.5;
+  });
+
+  const handleStageResizerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const filePanelEl = e.currentTarget.closest(".file-panel") as HTMLElement | null;
+    if (!filePanelEl) return;
+    const rect = filePanelEl.getBoundingClientRect();
+    const resizerHeight = 7;
+    const availableHeight = rect.height - resizerHeight;
+    if (availableHeight <= 0) return;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const currentY = moveEvent.clientY - rect.top;
+      const ratio = Math.max(0.1, Math.min(0.9, currentY / availableHeight));
+      setStageSplitRatio(ratio);
+      try {
+        localStorage.setItem("gitacorn:stage-split-ratio", String(ratio));
+      } catch {
+        // ignore
+      }
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const handleStageResizerKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setStageSplitRatio((prev) => {
+        const next = Math.max(0.1, prev - 0.05);
+        try {
+          localStorage.setItem("gitacorn:stage-split-ratio", String(next));
+        } catch {}
+        return next;
+      });
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setStageSplitRatio((prev) => {
+        const next = Math.min(0.9, prev + 0.05);
+        try {
+          localStorage.setItem("gitacorn:stage-split-ratio", String(next));
+        } catch {}
+        return next;
+      });
+    }
+  };
+
+  const handleFilePanelResizerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const nextWidth = Math.max(160, Math.min(600, startWidth + deltaX));
+      onPanelWidth(nextWidth);
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const handleFilePanelResizerKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      onPanelWidth(Math.max(160, panelWidth - 10));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      onPanelWidth(Math.min(600, panelWidth + 10));
+    }
+  };
+
   return (
     <div
       className="changes-layout"
       style={{ "--file-panel-width": `${panelWidth}px` } as CSSProperties}
     >
       <section className="file-panel" aria-label={t("Changed files")}>
-        <label className="panel-width-control">
-          <span>{t("File panel width")}</span>
-          <input
-            aria-label={t("Changed files panel width")}
-            type="range"
-            min="190"
-            max="420"
-            value={panelWidth}
-            onChange={(event) => onPanelWidth(Number(event.currentTarget.value))}
+        <div style={{ flex: `${stageSplitRatio} 1 0%`, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <ChangeSection
+            title={t("Unstaged")}
+            target="unstaged"
+            changes={unstaged}
+            selectedPath={selectedPath}
+            selectedTarget={selectedTarget}
+            onSelect={onSelect}
           />
-        </label>
-        <ChangeSection
-          title={t("Unstaged")}
-          target="unstaged"
-          changes={unstaged}
-          selectedPath={selectedPath}
-          selectedTarget={selectedTarget}
-          onSelect={onSelect}
+        </div>
+        <div
+          className="stage-resizer"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t("Stage and Unstage split height")}
+          tabIndex={0}
+          onMouseDown={handleStageResizerMouseDown}
+          onKeyDown={handleStageResizerKeyDown}
         />
-        <ChangeSection
-          title={t("Staged")}
-          target="staged"
-          changes={staged}
-          selectedPath={selectedPath}
-          selectedTarget={selectedTarget}
-          onSelect={onSelect}
+        <div style={{ flex: `${1 - stageSplitRatio} 1 0%`, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <ChangeSection
+            title={t("Staged")}
+            target="staged"
+            changes={staged}
+            selectedPath={selectedPath}
+            selectedTarget={selectedTarget}
+            onSelect={onSelect}
+          />
+        </div>
+        <div
+          className="file-panel-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("File panel width")}
+          tabIndex={0}
+          onMouseDown={handleFilePanelResizerMouseDown}
+          onKeyDown={handleFilePanelResizerKeyDown}
         />
       </section>
       <section className="selected-file-panel diff-panel">

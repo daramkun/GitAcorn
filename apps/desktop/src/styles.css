@@ -314,6 +314,28 @@ button:focus-visible {
   padding: 7px 11px;
 }
 
+
+.repository-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.open-button,
+.welcome-panel button {
+  border: 1px solid #76502f;
+  border-radius: 6px;
+  background: rgba(200, 135, 67, 0.13);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.open-button {
+  padding: 7px 11px;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.72;
@@ -321,17 +343,47 @@ button:disabled {
 
 .workspace {
   display: grid;
-  grid-template-columns: 206px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width, 206px) minmax(0, 1fr);
   min-height: 0;
 }
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
   padding: 18px 10px 12px;
   border-right: 1px solid var(--border);
   background: #1b120d;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  outline: none;
+}
+
+.sidebar-resizer::after {
+  content: "";
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.sidebar-resizer.resizing::after {
+  background: var(--accent);
 }
 
 .section-label,
@@ -586,38 +638,91 @@ button:disabled {
 }
 
 .file-panel {
-  display: grid;
-  grid-template-rows: 28px minmax(0, 1fr) minmax(0, 1fr);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   border-right: 1px solid var(--border);
 }
 
-.panel-width-control {
+.file-panel-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 10;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 9px;
-  border-bottom: 1px solid var(--border);
-  color: var(--faint);
-  font-size: 9px;
+  justify-content: center;
+  user-select: none;
+  outline: none;
 }
 
-.panel-width-control span {
-  white-space: nowrap;
+.file-panel-resizer::after {
+  content: "";
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  transition: background-color 0.15s ease;
 }
 
-.panel-width-control input {
-  width: 100%;
-  accent-color: var(--accent);
+.file-panel-resizer:hover::after,
+.file-panel-resizer:focus-visible::after,
+.file-panel-resizer.resizing::after {
+  background: var(--accent);
 }
 
 .change-section {
-  display: grid;
-  grid-template-rows: 42px minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+  overflow: hidden;
+  height: 100%;
 }
 
 .change-section + .change-section {
   border-top: 1px solid var(--border);
+}
+
+.stage-resizer {
+  position: relative;
+  z-index: 5;
+  flex: 0 0 7px;
+  height: 7px;
+  min-height: 7px;
+  background: var(--border);
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  outline: none;
+  transition: background-color 0.15s ease;
+}
+
+.stage-resizer::after {
+  content: "";
+  width: 32px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--faint);
+  opacity: 0.5;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.stage-resizer:hover,
+.stage-resizer:focus-visible,
+.stage-resizer.resizing {
+  background: var(--surface-soft);
+}
+
+.stage-resizer:hover::after,
+.stage-resizer:focus-visible::after,
+.stage-resizer.resizing::after {
+  background: var(--accent);
+  opacity: 1;
 }
 
 .commit-panel {
@@ -630,6 +735,7 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   height: 42px;
+  flex: 0 0 42px;
   padding: 0 13px;
   border-bottom: 1px solid var(--border);
 }
@@ -655,12 +761,16 @@ button:disabled {
   color: var(--faint);
   font-size: 11px;
   line-height: 1.5;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .change-list {
   position: relative;
   overflow-y: auto;
   padding: 5px;
+  flex: 1;
+  min-height: 0;
 }
 
 .virtual-list-space {

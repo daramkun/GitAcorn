@@ -470,35 +470,12 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /^third-repo1$/ }));
     expect(screen.getByText("release · Changes")).toBeInTheDocument();
     expect(screen.getByTitle("third-only.txt")).toHaveClass("selected");
-    expect(screen.getByRole("slider", { name: "Changed files panel width" })).toHaveValue("360");
 
     fireEvent.click(screen.getByRole("button", { name: /^acorn-demo2$/ }));
     expect(screen.getByText("main · Changes")).toBeInTheDocument();
     expect(screen.getByTitle("tracked.txt")).toHaveClass("selected");
     expect(mockedActivateTab).toHaveBeenCalledWith(secondSnapshot.repository.id);
     expect(mockedActivateTab).toHaveBeenCalledWith(thirdSnapshot.repository.id);
-  });
-
-  it("persists panel width independently for the active repository", async () => {
-    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
-    render(<App />);
-
-    const slider = await screen.findByRole("slider", {
-      name: "Changed files panel width",
-    });
-    fireEvent.change(slider, { target: { value: "340" } });
-
-    expect(slider).toHaveValue("340");
-    expect(mockedUpdateTab).toHaveBeenCalledWith(
-      snapshot.repository.id,
-      "changes",
-      undefined,
-      "unstaged",
-      340,
-      undefined,
-      undefined,
-      undefined,
-    );
   });
 
   it("activates a worktree by stable id and replaces only that repository snapshot", async () => {
@@ -796,4 +773,84 @@ describe("App", () => {
       await screen.findByText("Interrupted when GitAcorn last exited"),
     ).toBeInTheDocument();
   });
+
+  it("resizes the sidebar and persists width in localStorage", async () => {
+    localStorage.clear();
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    const sidebarResizer = await screen.findByRole("separator", { name: "Sidebar width" });
+    expect(sidebarResizer).toBeInTheDocument();
+
+    fireEvent.mouseDown(sidebarResizer, { clientX: 200 });
+    fireEvent.mouseMove(window, { clientX: 250 });
+    fireEvent.mouseUp(window);
+
+    expect(localStorage.getItem("gitacorn:sidebar-width")).toBe("256");
+
+    fireEvent.keyDown(sidebarResizer, { key: "ArrowLeft" });
+    expect(localStorage.getItem("gitacorn:sidebar-width")).toBe("246");
+  });
+
+  it("resizes Stage and Unstage split height and persists ratio in localStorage", async () => {
+    localStorage.clear();
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    const stageResizer = await screen.findByRole("separator", {
+      name: "Stage and Unstage split height",
+    });
+    expect(stageResizer).toBeInTheDocument();
+
+    const filePanel = stageResizer.closest(".file-panel");
+    expect(filePanel).not.toBeNull();
+    if (filePanel) {
+      vi.spyOn(filePanel, "getBoundingClientRect").mockReturnValue({
+        top: 0,
+        bottom: 500,
+        left: 0,
+        right: 300,
+        width: 300,
+        height: 500,
+        x: 0,
+        y: 0,
+        toJSON: () => {},
+      });
+    }
+
+    fireEvent.mouseDown(stageResizer, { clientY: 200 });
+    fireEvent.mouseMove(window, { clientY: 300 });
+    fireEvent.mouseUp(window);
+
+    expect(localStorage.getItem("gitacorn:stage-split-ratio")).not.toBeNull();
+
+    fireEvent.keyDown(stageResizer, { key: "ArrowDown" });
+    expect(localStorage.getItem("gitacorn:stage-split-ratio")).not.toBeNull();
+  });
+
+  it("resizes the file panel width via mouse dragging", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    const filePanelResizer = await screen.findByRole("separator", {
+      name: "File panel width",
+    });
+    expect(filePanelResizer).toBeInTheDocument();
+
+    fireEvent.mouseDown(filePanelResizer, { clientX: 280 });
+    fireEvent.mouseMove(window, { clientX: 340 });
+    fireEvent.mouseUp(window);
+
+    expect(mockedUpdateTab).toHaveBeenCalledWith(
+      snapshot.repository.id,
+      "changes",
+      undefined,
+      "unstaged",
+      340,
+      undefined,
+      undefined,
+      undefined,
+    );
+  });
 });
+
