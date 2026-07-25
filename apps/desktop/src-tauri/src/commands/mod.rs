@@ -10,8 +10,8 @@ use uuid::Uuid;
 use crate::dto::{
     AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitRequestDto, DiffDto,
     HistoryPageDto, OperationEventDto, OperationRecordDto, OperationStartedDto, PatchSelectionDto,
-    ReferenceDto, RemoteRequestDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
-    SessionTabUpdateDto, StashRequestDto,
+    ReferenceDto, RemoteRequestDto, RemoteTagDto, RepositorySidebarDto, RepositorySnapshotDto,
+    SessionDto, SessionTabUpdateDto, StashRequestDto,
 };
 use crate::state::{ApplicationState, SessionTabUpdate};
 
@@ -365,6 +365,18 @@ pub fn references_list(
     state
         .repository_references(&repo_id)
         .map(|references| references.into_iter().map(ReferenceDto::from).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn remote_tags_list(
+    repo_id: String,
+    remote: Option<String>,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<Vec<RemoteTagDto>> {
+    state
+        .repository_remote_tags(&repo_id, remote.as_deref())
+        .map(|tags| tags.into_iter().map(RemoteTagDto::from).collect())
         .map_err(|error| AppErrorDto::from(&error))
 }
 

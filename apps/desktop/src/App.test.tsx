@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { App } from "./App";
+import { App, buildRemoteBranchTree } from "./App";
 import { getAppInfo } from "./app-info";
 import {
   closeAppWindow,
@@ -24,6 +24,7 @@ import {
   getHistoryPage,
   getOperationHistory,
   getReferences,
+  getRemoteTags,
   getRepositorySidebar,
   getRepositorySnapshot,
   listenForRepositoryChanges,
@@ -71,6 +72,7 @@ vi.mock("./repository", () => ({
   getDiagnostics: vi.fn(),
   getOperationHistory: vi.fn(),
   getReferences: vi.fn(),
+  getRemoteTags: vi.fn(),
   getRepositorySidebar: vi.fn(),
   reorderSessionTabs: vi.fn(),
   resolveConflict: vi.fn(),
@@ -111,6 +113,7 @@ const mockedGetSnapshot = vi.mocked(getRepositorySnapshot);
 const mockedGetDiff = vi.mocked(getDiff);
 const mockedGetHistory = vi.mocked(getHistoryPage);
 const mockedGetReferences = vi.mocked(getReferences);
+const mockedGetRemoteTags = vi.mocked(getRemoteTags);
 const mockedStagePaths = vi.mocked(stagePaths);
 const mockedUnstagePaths = vi.mocked(unstagePaths);
 const mockedApplyPatch = vi.mocked(applyPatchSelection);
@@ -195,6 +198,7 @@ describe("App", () => {
       schemaVersion: 1,
       worktrees: [],
       branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
       tags: { total: 0, items: [] },
       stashes: [],
     });
@@ -260,6 +264,7 @@ describe("App", () => {
         behind: 0,
       },
     ]);
+    mockedGetRemoteTags.mockResolvedValue([]);
     mockedStagePaths.mockResolvedValue(snapshot);
     mockedUnstagePaths.mockResolvedValue(snapshot);
     mockedApplyPatch.mockResolvedValue(snapshot);
@@ -499,6 +504,7 @@ describe("App", () => {
         },
       ],
       branches: { total: 2, items: ["main", "feature"] },
+      remoteBranches: { total: 0, items: [] },
       tags: { total: 0, items: [] },
       stashes: [],
     });
@@ -851,6 +857,29 @@ describe("App", () => {
       undefined,
       undefined,
     );
+  });
+
+  it("builds a hierarchical tree from remote branch short names", () => {
+    const tree = buildRemoteBranchTree([
+      "origin/main",
+      "origin/feature/login",
+      "origin/feature/signup",
+      "upstream/main",
+    ]);
+
+    expect(tree).toHaveLength(2);
+    expect(tree[0].name).toBe("origin");
+    expect(tree[0].count).toBe(3);
+    expect(tree[0].children).toHaveLength(2);
+
+    const featureNode = tree[0].children.find((child) => child.name === "feature");
+    expect(featureNode).toBeDefined();
+    expect(featureNode?.count).toBe(2);
+    expect(featureNode?.children).toHaveLength(2);
+    expect(featureNode?.children[0].name).toBe("login");
+
+    expect(tree[1].name).toBe("upstream");
+    expect(tree[1].count).toBe(1);
   });
 });
 

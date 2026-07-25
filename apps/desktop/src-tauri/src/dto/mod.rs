@@ -1,6 +1,6 @@
 use app_core::{
     AppErrorDto, BranchRequest, CloneRequest, CommitRequest, GitReference, PatchSelection,
-    ReferenceKind, RemoteOperationKind, RemoteRequest, RepositorySidebar,
+    ReferenceKind, RemoteOperationKind, RemoteRequest, RemoteTagSummary, RepositorySidebar,
 };
 use git_domain::{
     CommitSummary, DiffDocument, DiffLineKind, FileChange, HeadState, HistoryPage,
@@ -368,10 +368,19 @@ pub struct ReferenceDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RemoteTagDto {
+    pub remote: String,
+    pub name: String,
+    pub oid: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepositorySidebarDto {
     pub schema_version: u16,
     pub worktrees: Vec<WorktreeDto>,
     pub branches: RefSummaryDto,
+    pub remote_branches: RefSummaryDto,
     pub tags: RefSummaryDto,
     pub stashes: Vec<StashDto>,
 }
@@ -446,6 +455,10 @@ impl From<RepositorySidebar> for RepositorySidebarDto {
             branches: RefSummaryDto {
                 total: sidebar.branches.total,
                 items: sidebar.branches.items,
+            },
+            remote_branches: RefSummaryDto {
+                total: sidebar.remote_branches.total,
+                items: sidebar.remote_branches.items,
             },
             tags: RefSummaryDto {
                 total: sidebar.tags.total,
@@ -602,6 +615,16 @@ impl From<GitReference> for ReferenceDto {
             upstream: reference.upstream,
             ahead: reference.ahead,
             behind: reference.behind,
+        }
+    }
+}
+
+impl From<RemoteTagSummary> for RemoteTagDto {
+    fn from(tag: RemoteTagSummary) -> Self {
+        Self {
+            remote: tag.remote,
+            name: tag.name,
+            oid: tag.oid,
         }
     }
 }

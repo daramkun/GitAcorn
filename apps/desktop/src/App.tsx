@@ -1,4 +1,5 @@
 import {
+  Children,
   useEffect,
   useMemo,
   useRef,
@@ -38,6 +39,7 @@ import {
   getHistoryPage,
   getDiagnostics,
   getOperationHistory,
+  getRemoteTags,
   getReferences,
   getRepositorySidebar,
   getRepositorySnapshot,
@@ -60,6 +62,7 @@ import {
   type FileChangeDto,
   type OperationEventDto,
   type OperationRecordDto,
+  type RemoteTagDto,
   type RepositorySnapshotDto,
   type RepositorySidebarDto,
   type ReferenceDto,
@@ -87,6 +90,9 @@ export function App() {
   const [opening, setOpening] = useState(false);
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
   const [sidebars, setSidebars] = useState<Record<string, RepositorySidebarDto>>({});
+  const [referencesMap, setReferencesMap] = useState<Record<string, ReferenceDto[]>>({});
+  const [remoteTagsMap, setRemoteTagsMap] = useState<Record<string, RemoteTagDto[]>>({});
+  const [loadingRemoteTags, setLoadingRemoteTags] = useState(false);
   const [error, setError] = useState<AppErrorDto>();
   const [remoteOperations, setRemoteOperations] = useState<
     Record<string, OperationEventDto>
@@ -99,6 +105,46 @@ export function App() {
   const activeSnapshot = activeTab?.snapshot;
   const page = activeTab?.page ?? "changes";
   const activeSidebar = activeTab ? sidebars[activeTab.repoId] : undefined;
+
+  const remoteBranchItems = useMemo(() => {
+    if (activeSidebar?.remoteBranches?.items) {
+      return activeSidebar.remoteBranches.items;
+    }
+    if (activeTab?.repoId && referencesMap[activeTab.repoId]) {
+      return referencesMap[activeTab.repoId]
+        .filter((r) => r.kind === "remoteBranch")
+        .map((r) => r.shortName);
+    }
+    return [];
+  }, [activeSidebar, activeTab?.repoId, referencesMap]);
+
+  const remoteBranchTree = useMemo(
+    () => buildBranchTree(remoteBranchItems, true),
+    [remoteBranchItems],
+  );
+
+  const localBranchTree = useMemo(
+    () => buildBranchTree(activeSidebar?.branches.items ?? [], false),
+    [activeSidebar?.branches.items],
+  );
+
+  const handleBranchCheckout = (branchName: string) => {
+    if (!activeSnapshot) return;
+    handleWorkspaceMutation(() =>
+      checkoutBranch(activeSnapshot.repository.id, activeSnapshot.revision, branchName),
+    );
+  };
+
+  const handleFetchRemoteTags = () => {
+    if (!activeTab) return;
+    setLoadingRemoteTags(true);
+    getRemoteTags(activeTab.repoId)
+      .then((tags) =>
+        setRemoteTagsMap((prev) => ({ ...prev, [activeTab.repoId]: tags })),
+      )
+      .catch(() => {})
+      .finally(() => setLoadingRemoteTags(false));
+  };
 
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
@@ -189,13 +235,23 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!activeTab?.snapshot || sidebars[activeTab.repoId]) return;
-    getRepositorySidebar(activeTab.repoId)
-      .then((sidebar) =>
-        setSidebars((current) => ({ ...current, [activeTab.repoId]: sidebar })),
-      )
-      .catch((reason: unknown) => setError(normalizeAppError(reason)));
-  }, [activeTab, sidebars]);
+    if (!activeTab?.snapshot) return;
+    const repoId = activeTab.repoId;
+    if (!sidebars[repoId]) {
+      getRepositorySidebar(repoId)
+        .then((sidebar) =>
+          setSidebars((current) => ({ ...current, [repoId]: sidebar })),
+        )
+        .catch((reason: unknown) => setError(normalizeAppError(reason)));
+    }
+    if (!referencesMap[repoId]) {
+      getReferences(repoId)
+        .then((refs) =>
+          setReferencesMap((current) => ({ ...current, [repoId]: refs })),
+        )
+        .catch(() => {});
+    }
+  }, [activeTab, sidebars, referencesMap]);
 
   useEffect(() => {
     let disposed = false;
@@ -398,6 +454,11 @@ export function App() {
         delete next[activeTab.repoId];
         return next;
       });
+      setReferencesMap((current) => {
+        const next = { ...current };
+        delete next[activeTab.repoId];
+        return next;
+      });
     } catch (reason: unknown) {
       setError(normalizeAppError(reason));
     }
@@ -521,13 +582,61 @@ export function App() {
                 </button>
               ))}
             </SidebarGroup>
-            <SidebarGroup label={t("Branches")} count={activeSidebar?.branches.total}>
-              {activeSidebar?.branches.items.map((branch) => (
-                <span key={branch}>{branch === branchLabel ? "● " : ""}{branch}</span>
+            <SidebarGroup
+              label={t("Local Branches")}
+              count={activeSidebar?.branches.total}
+              initialLimit={999}
+            >
+              {localBranchTree.map((node) => (
+                <BranchTreeNodeView
+                  key={node.id}
+                  node={node}
+                  currentBranchLabel={branchLabel}
+                  referencesList={activeTab ? referencesMap[activeTab.repoId] ?? [] : []}
+                  isRemote={false}
+                  onCheckout={handleBranchCheckout}
+                />
               ))}
             </SidebarGroup>
-            <SidebarGroup label={t("Tags")} count={activeSidebar?.tags.total}>
-              {activeSidebar?.tags.items.map((tag) => <span key={tag}>{tag}</span>)}
+            <SidebarGroup
+              label={t("Remote Branches")}
+              count={activeSidebar?.remoteBranches?.total ?? remoteBranchItems.length}
+              initialLimit={999}
+            >
+              {remoteBranchTree.map((node) => (
+                <BranchTreeNodeView key={node.id} node={node} isRemote={true} />
+              ))}
+            </SidebarGroup>
+            <SidebarGroup
+              label={t("Tags")}
+              count={(activeSidebar?.tags.total ?? 0) + (remoteTagsMap[activeTab?.repoId ?? ""]?.length ?? 0)}
+            >
+              <div className="sub-group-header">
+                <span>{t("Local Tags")} ({activeSidebar?.tags.total ?? 0})</span>
+              </div>
+              {activeSidebar?.tags.items.map((tag) => (
+                <div key={tag} className="tag-item-row">
+                  <span>{tag}</span>
+                </div>
+              ))}
+              <div className="sub-group-header">
+                <span>{t("Remote Tags")} ({remoteTagsMap[activeTab?.repoId ?? ""]?.length ?? 0})</span>
+                <button
+                  type="button"
+                  className="fetch-remote-tags-btn"
+                  disabled={loadingRemoteTags}
+                  onClick={handleFetchRemoteTags}
+                  title={t("Fetch remote tags")}
+                >
+                  {loadingRemoteTags ? "…" : "🔄"}
+                </button>
+              </div>
+              {remoteTagsMap[activeTab?.repoId ?? ""]?.map((tag) => (
+                <div key={`${tag.remote}/${tag.name}`} className="tag-item-row">
+                  <span>{tag.name}</span>
+                  <small className="remote-tag-badge">{tag.remote}</small>
+                </div>
+              ))}
             </SidebarGroup>
             <StashControls
               snapshot={activeSnapshot}
@@ -711,8 +820,262 @@ function cloneRepositoryName(remoteUrl: string) {
   return name.replace(/\.git$/i, "") || "repository";
 }
 
-function SidebarGroup({ label, count, children }: { label: string; count?: number; children?: ReactNode }) {
-  return <div className="sidebar-read-group"><div className="sidebar-group"><span>›</span>{label}{count !== undefined && <small>{t("{visible} of {total}", { visible: Math.min(count, 5), total: count })}</small>}</div>{children && <div className="sidebar-items">{children}</div>}</div>;
+export type BranchTreeNode = {
+  id: string;
+  name: string;
+  fullPath: string;
+  isRemoteRoot: boolean;
+  isFolder: boolean;
+  isLeaf: boolean;
+  count: number;
+  children: BranchTreeNode[];
+};
+
+type BranchTreeBuilderNode = {
+  name: string;
+  path: string;
+  isRemoteRoot: boolean;
+  childrenMap: Map<string, BranchTreeBuilderNode>;
+  count: number;
+};
+
+export function buildBranchTree(
+  branchNames: string[],
+  isRemote = false,
+): BranchTreeNode[] {
+  const rootMap = new Map<string, BranchTreeBuilderNode>();
+
+  for (const name of branchNames) {
+    if (!name) continue;
+    const parts = name.split("/");
+    let currentLevel = rootMap;
+
+    let pathSoFar = "";
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      pathSoFar = pathSoFar ? `${pathSoFar}/${part}` : part;
+      const isRemoteRoot = isRemote && i === 0;
+
+      if (!currentLevel.has(part)) {
+        currentLevel.set(part, {
+          name: part,
+          path: pathSoFar,
+          isRemoteRoot,
+          childrenMap: new Map(),
+          count: 0,
+        });
+      }
+
+      const node = currentLevel.get(part)!;
+      node.count += 1;
+      currentLevel = node.childrenMap;
+    }
+  }
+
+  function convertMap(
+    map: Map<string, BranchTreeBuilderNode>,
+  ): BranchTreeNode[] {
+    const list: BranchTreeNode[] = [];
+    for (const [, val] of map.entries()) {
+      const children = convertMap(val.childrenMap);
+      const isFolder = children.length > 0;
+      const isLeaf = !isFolder;
+
+      list.push({
+        id: val.path,
+        name: val.name,
+        fullPath: val.path,
+        isRemoteRoot: val.isRemoteRoot,
+        isFolder,
+        isLeaf,
+        count: val.count,
+        children,
+      });
+    }
+    return list;
+  }
+
+  return convertMap(rootMap);
+}
+
+export function buildRemoteBranchTree(branchNames: string[]) {
+  return buildBranchTree(branchNames, true);
+}
+
+function BranchTreeNodeView({
+  node,
+  depth = 0,
+  currentBranchLabel,
+  referencesList = [],
+  isRemote = false,
+  onCheckout,
+}: {
+  node: BranchTreeNode;
+  depth?: number;
+  currentBranchLabel?: string;
+  referencesList?: ReferenceDto[];
+  isRemote?: boolean;
+  onCheckout?: (branchName: string) => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(true);
+
+  if (node.isLeaf) {
+    const isCurrent = !isRemote && node.fullPath === currentBranchLabel;
+    const refInfo = !isRemote
+      ? referencesList.find(
+          (r) => r.kind === "localBranch" && r.shortName === node.fullPath,
+        )
+      : undefined;
+    const isLocalOnly = !isRemote && refInfo ? !refInfo.upstream : false;
+
+    return (
+      <div
+        className={`tree-leaf-row branch-item-row ${isCurrent ? "active-branch" : ""}`}
+        style={{ paddingLeft: `${depth * 14 + 6}px` }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!isRemote && onCheckout && !isCurrent) {
+            onCheckout(node.fullPath);
+          }
+        }}
+        onKeyDown={(e) => {
+          if ((e.key === "Enter" || e.key === " ") && !isRemote && onCheckout && !isCurrent) {
+            e.stopPropagation();
+            e.preventDefault();
+            onCheckout(node.fullPath);
+          }
+        }}
+      >
+        <span className="branch-icon" aria-hidden="true">
+          {isCurrent ? "● " : "⎇ "}
+        </span>
+        <span className="branch-name" title={node.fullPath}>
+          {node.name}
+        </span>
+        {isLocalOnly && <span className="badge-local">{t("Local")}</span>}
+        {refInfo && (refInfo.ahead > 0 || refInfo.behind > 0) && (
+          <small className="track-counts">
+            {refInfo.ahead > 0 ? `↑${refInfo.ahead}` : ""}
+            {refInfo.behind > 0 ? `↓${refInfo.behind}` : ""}
+          </small>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="tree-node-group">
+      <div
+        className="tree-node-header"
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        style={{ paddingLeft: `${depth * 14 + 4}px` }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsExpanded((prev) => !prev);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.stopPropagation();
+            e.preventDefault();
+            setIsExpanded((prev) => !prev);
+          }
+        }}
+      >
+        <span className={`group-chevron ${isExpanded ? "open" : ""}`} aria-hidden="true">
+          ›
+        </span>
+        <span className="tree-node-icon" aria-hidden="true">
+          {node.isRemoteRoot ? "☁️ " : "📁 "}
+        </span>
+        <span className="tree-node-label">{node.name}</span>
+        <small className="tree-node-count">({node.count})</small>
+      </div>
+      {isExpanded && (
+        <div
+          className="tree-node-children"
+          style={{
+            borderLeft: depth > 0 ? "1px solid rgba(255, 255, 255, 0.08)" : "none",
+            marginLeft: `${depth * 14 + 8}px`,
+          }}
+        >
+          {node.children.map((child) => (
+            <BranchTreeNodeView
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              currentBranchLabel={currentBranchLabel}
+              referencesList={referencesList}
+              isRemote={isRemote}
+              onCheckout={onCheckout}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SidebarGroup({
+  label,
+  count,
+  children,
+  initialLimit = 5,
+  defaultExpanded = true,
+}: {
+  label: string;
+  count?: number;
+  children?: ReactNode;
+  initialLimit?: number;
+  defaultExpanded?: boolean;
+}) {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+  const [showAll, setShowAll] = useState(false);
+
+  const childArray = Children.toArray(children);
+  const itemCount = count ?? childArray.length;
+  const visibleChildren = showAll ? childArray : childArray.slice(0, initialLimit);
+
+  return (
+    <div className={`sidebar-read-group ${isExpanded ? "expanded" : "collapsed"}`}>
+      <div
+        className="sidebar-group"
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        onClick={() => setIsExpanded((prev) => !prev)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setIsExpanded((prev) => !prev);
+          }
+        }}
+      >
+        <span className={`group-chevron ${isExpanded ? "open" : ""}`} aria-hidden="true">
+          ›
+        </span>
+        {label}
+        {itemCount !== undefined && <small>({itemCount})</small>}
+      </div>
+      {isExpanded && childArray.length > 0 && (
+        <div className="sidebar-items">
+          {visibleChildren}
+          {childArray.length > initialLimit && (
+            <button
+              type="button"
+              className="show-more-btn"
+              onClick={() => setShowAll((prev) => !prev)}
+            >
+              {showAll
+                ? t("Show less")
+                : t("Show all ({count})", { count: childArray.length })}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function StashControls({
@@ -728,61 +1091,108 @@ function StashControls({
   onApply: (reference: string) => void;
   onDrop: (reference: string) => void;
 }) {
+  const [isExpanded, setIsExpanded] = useState(true);
+  const [showAll, setShowAll] = useState(false);
   const [message, setMessage] = useState("");
   const [includeUntracked, setIncludeUntracked] = useState(true);
+
+  const visibleStashes = showAll ? stashes : stashes.slice(0, 5);
+
   return (
-    <div className="sidebar-read-group stash-controls">
-      <div className="sidebar-group">
-        <span>›</span>{t("Stashes")}
-        {snapshot && <small>{t("{visible} of {total}", { visible: Math.min(snapshot.stashCount, 5), total: snapshot.stashCount })}</small>}
+    <div className={`sidebar-read-group stash-controls ${isExpanded ? "expanded" : "collapsed"}`}>
+      <div
+        className="sidebar-group"
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        onClick={() => setIsExpanded((prev) => !prev)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setIsExpanded((prev) => !prev);
+          }
+        }}
+      >
+        <span className={`group-chevron ${isExpanded ? "open" : ""}`} aria-hidden="true">
+          ›
+        </span>
+        {t("Stashes")}
+        {snapshot && <small>({snapshot.stashCount})</small>}
       </div>
-      {snapshot && (
-        <form
-          aria-label={t("Create stash")}
-          onSubmit={(event) => {
-            event.preventDefault();
-            onCreate(message, includeUntracked);
-            setMessage("");
-          }}
-        >
-          <input
-            aria-label={t("Stash message")}
-            placeholder={t("Stash message")}
-            value={message}
-            onChange={(event) => setMessage(event.currentTarget.value)}
-          />
-          <label>
-            <input
-              type="checkbox"
-              checked={includeUntracked}
-              onChange={(event) => setIncludeUntracked(event.currentTarget.checked)}
-            />
-            {t("Include untracked")}
-          </label>
-          <button type="submit" disabled={snapshot.changes.length === 0}>{t("Stash changes")}</button>
-        </form>
-      )}
-      <div className="sidebar-items">
-        {stashes.map((stash) => (
-          <div className="stash-item" key={stash.reference} title={stash.message}>
-            <span>{stash.reference} · {stash.message}</span>
-            <div>
-              <button type="button" onClick={() => onApply(stash.reference)}>{t("Apply")}</button>
+      {isExpanded && (
+        <>
+          {snapshot && (
+            <form
+              aria-label={t("Create stash")}
+              onSubmit={(event) => {
+                event.preventDefault();
+                onCreate(message, includeUntracked);
+                setMessage("");
+              }}
+            >
+              <input
+                aria-label={t("Stash message")}
+                placeholder={t("Stash message")}
+                value={message}
+                onChange={(event) => setMessage(event.currentTarget.value)}
+              />
+              <label>
+                <input
+                  type="checkbox"
+                  checked={includeUntracked}
+                  onChange={(event) => setIncludeUntracked(event.currentTarget.checked)}
+                />
+                {t("Include untracked")}
+              </label>
+              <button type="submit" disabled={snapshot.changes.length === 0}>
+                {t("Stash changes")}
+              </button>
+            </form>
+          )}
+          <div className="sidebar-items">
+            {visibleStashes.map((stash) => (
+              <div className="stash-item" key={stash.reference} title={stash.message}>
+                <span>
+                  {stash.reference} · {stash.message}
+                </span>
+                <div>
+                  <button type="button" onClick={() => onApply(stash.reference)}>
+                    {t("Apply")}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          t("Drop {reference}? The stash entry cannot be recovered.", {
+                            reference: stash.reference,
+                          }),
+                        )
+                      ) {
+                        onDrop(stash.reference);
+                      }
+                    }}
+                  >
+                    {t("Drop")}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {stashes.length > 5 && (
               <button
                 type="button"
-                className="danger-button"
-                onClick={() => {
-                  if (window.confirm(t("Drop {reference}? The stash entry cannot be recovered.", { reference: stash.reference }))) {
-                    onDrop(stash.reference);
-                  }
-                }}
+                className="show-more-btn"
+                onClick={() => setShowAll((prev) => !prev)}
               >
-                {t("Drop")}
+                {showAll
+                  ? t("Show less")
+                  : t("Show all ({count})", { count: stashes.length })}
               </button>
-            </div>
+            )}
           </div>
-        ))}
-      </div>
+        </>
+      )}
     </div>
   );
 }

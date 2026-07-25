@@ -121,6 +121,12 @@ export type ReferenceDto = {
   behind: number;
 };
 
+export type RemoteTagDto = {
+  remote: string;
+  name: string;
+  oid: string;
+};
+
 export type RepositorySidebarDto = {
   schemaVersion: 1;
   worktrees: Array<{
@@ -132,6 +138,7 @@ export type RepositorySidebarDto = {
     isLocked: boolean;
   }>;
   branches: { total: number; items: string[] };
+  remoteBranches: { total: number; items: string[] };
   tags: { total: number; items: string[] };
   stashes: Array<{ reference: string; message: string }>;
 };
@@ -279,6 +286,13 @@ export function getHistoryPage(
 
 export function getReferences(repoId: string): Promise<ReferenceDto[]> {
   return invoke<ReferenceDto[]>("references_list", { repoId });
+}
+
+export function getRemoteTags(
+  repoId: string,
+  remote?: string,
+): Promise<RemoteTagDto[]> {
+  return invoke<RemoteTagDto[]>("remote_tags_list", { repoId, remote });
 }
 
 export function createBranch(

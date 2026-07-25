@@ -16,6 +16,7 @@ use crate::AppError;
 pub struct RepositorySidebar {
     pub worktrees: Vec<WorktreeSummary>,
     pub branches: RefSummary,
+    pub remote_branches: RefSummary,
     pub tags: RefSummary,
     pub stashes: Vec<StashSummary>,
 }
@@ -40,6 +41,13 @@ pub struct RefSummary {
 pub struct StashSummary {
     pub reference: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteTagSummary {
+    pub remote: String,
+    pub name: String,
+    pub oid: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +210,14 @@ impl RepositoryService {
                 "--sort=-committerdate",
                 "--format=%(refname:short)",
                 "refs/heads",
+            ],
+        )?;
+        let remote_branches = self.git_text(
+            repository,
+            [
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname:short)",
                 "refs/remotes",
             ],
         )?;
@@ -219,6 +235,7 @@ impl RepositoryService {
         Ok(RepositorySidebar {
             worktrees: parse_worktrees(&worktrees, &repository.worktree_path),
             branches: summarize_refs(&branches),
+            remote_branches: summarize_refs(&remote_branches),
             tags: summarize_refs(&tags),
             stashes: parse_stashes(&stashes),
         })
@@ -240,6 +257,54 @@ impl RepositoryService {
             ],
         )?;
         parse_references(&output)
+    }
+
+    pub fn remotes(&self, repository: &RepositoryDescriptor) -> Result<Vec<String>, AppError> {
+        let output = self.git_text(repository, ["remote"])?;
+        Ok(output
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect())
+    }
+
+    pub fn remote_tags(
+        &self,
+        repository: &RepositoryDescriptor,
+        remote: Option<&str>,
+    ) -> Result<Vec<RemoteTagSummary>, AppError> {
+        let remotes = self.remotes(repository)?;
+        let mut results = Vec::new();
+        let target_remotes: Vec<&str> = match remote {
+            Some(r) => vec![r],
+            None => remotes.iter().map(String::as_str).collect(),
+        };
+
+        for r in target_remotes {
+            let output = self.git_text(repository, ["ls-remote", "--tags", "--refs", r])?;
+            for line in output.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let oid = parts[0].to_owned();
+                    let refname = parts[1];
+                    let name = refname
+                        .strip_prefix("refs/tags/")
+                        .unwrap_or(refname)
+                        .to_owned();
+                    results.push(RemoteTagSummary {
+                        remote: r.to_owned(),
+                        name,
+                        oid,
+                    });
+                }
+            }
+        }
+        Ok(results)
     }
 
     pub fn history(
@@ -797,7 +862,7 @@ fn summarize_refs(output: &str) -> RefSummary {
         .collect();
     RefSummary {
         total: refs.len(),
-        items: refs.into_iter().take(5).collect(),
+        items: refs,
     }
 }
 
@@ -812,7 +877,6 @@ fn parse_stashes(output: &[u8]) -> Vec<StashSummary> {
             let message = String::from_utf8_lossy(fields.get(1)?).trim().to_owned();
             Some(StashSummary { reference, message })
         })
-        .take(5)
         .collect()
 }
 
@@ -959,7 +1023,7 @@ mod tests {
 
         let refs = summarize_refs("main\nfeature\none\ntwo\nthree\nfour\n");
         assert_eq!(refs.total, 6);
-        assert_eq!(refs.items.len(), 5);
+        assert_eq!(refs.items.len(), 6);
 
         let stashes = parse_stashes(b"stash@{0}\0WIP one\0\nstash@{1}\0WIP two\0\n");
         assert_eq!(stashes.len(), 2);

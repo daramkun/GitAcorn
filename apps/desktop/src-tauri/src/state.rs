@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use app_core::{
     AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
-    GitReference, HistoryFilter, PatchSelection, RemoteProgress, RemoteRequest,
+    GitReference, HistoryFilter, PatchSelection, RemoteProgress, RemoteRequest, RemoteTagSummary,
     RepositoryScheduler, RepositoryService, RepositorySidebar, StashRequest,
 };
 use git_cli::CancellationToken;
@@ -196,6 +196,17 @@ impl ApplicationState {
         let descriptor = self.descriptor(repo_id)?;
         self.scheduler
             .read(repo_id, || self.service.references(&descriptor))
+    }
+
+    pub fn repository_remote_tags(
+        &self,
+        repo_id: &str,
+        remote: Option<&str>,
+    ) -> Result<Vec<RemoteTagSummary>, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.remote_tags(&descriptor, remote))
     }
 
     pub fn repository_diff(

@@ -442,9 +442,32 @@ button:disabled {
 }
 
 .sidebar-groups {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 1px;
   margin-top: 25px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
+.sidebar-groups::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar-groups::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-groups::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.sidebar-groups::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
 }
 
 .sidebar-group {
@@ -455,6 +478,23 @@ button:disabled {
   color: #756253;
   font-size: 12px;
   font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sidebar-group:hover {
+  color: var(--fg);
+}
+
+.group-chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.group-chevron.open {
+  transform: rotate(90deg);
 }
 
 .sidebar-group small {
@@ -479,6 +519,175 @@ button:disabled {
   line-height: 1.7;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.branch-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.branch-item-row .branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-node-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.tree-node-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+}
+
+.tree-node-header:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--accent-strong);
+}
+
+.tree-node-icon {
+  font-size: 10px;
+}
+
+.tree-node-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-node-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.tree-node-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tree-leaf-row {
+  cursor: pointer;
+  border-radius: 3px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.tree-leaf-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.tree-leaf-row.active-branch {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.branch-icon {
+  font-size: 10px;
+  color: var(--accent);
+  opacity: 0.85;
+  margin-right: 2px;
+}
+
+.sub-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0 3px 0;
+  margin-top: 4px;
+  border-bottom: 1px dashed var(--border);
+  color: #756253;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.fetch-remote-tags-btn {
+  margin-top: 4px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.fetch-remote-tags-btn:hover {
+  text-decoration: underline;
+}
+
+.tag-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.remote-tag-badge {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--surface-soft);
+  color: var(--faint);
+  font-size: 8px;
+}
+
+.badge-local {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(217, 119, 6, 0.15);
+  color: #b45309;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.track-counts {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.show-more-btn {
+  margin-top: 2px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.show-more-btn:hover {
+  text-decoration: underline;
 }
 
 .sidebar-items button {

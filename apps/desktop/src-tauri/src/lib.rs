@@ -41,6 +41,7 @@ pub fn run() {
             commands::repository_sidebar,
             commands::history_page,
             commands::references_list,
+            commands::remote_tags_list,
             commands::diff_get,
             commands::stage_paths,
             commands::unstage_paths,

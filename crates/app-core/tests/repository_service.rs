@@ -531,3 +531,13 @@ fn expands_untracked_directories_into_diffable_file_entries() {
         .expect("nested untracked diff");
     assert_eq!(diff.files[0].hunks[0].lines[0].content, "nested content");
 }
+
+#[test]
+fn reads_configured_remotes_list() {
+    let fixture = TestRepository::init();
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    let remotes = service.remotes(&repository).expect("read remotes");
+    assert!(remotes.is_empty());
+}
