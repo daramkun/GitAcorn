@@ -175,6 +175,7 @@ impl RepositoryService {
             OsString::from("-z"),
             OsString::from("--branch"),
             OsString::from("--show-stash"),
+            OsString::from("--untracked-files=all"),
         ]);
         request.working_directory = Some(repository.worktree_path.clone());
         request.timeout = Duration::from_secs(15);

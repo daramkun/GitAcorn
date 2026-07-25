@@ -554,6 +554,24 @@ describe("App", () => {
     );
   });
 
+  it("loads a diff when an unselected changed file is clicked", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /tracked\.txt/ }));
+
+    await waitFor(() =>
+      expect(mockedGetDiff).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.changes[0].pathBytes,
+        "unstaged",
+      ),
+    );
+    expect(
+      await screen.findByRole("button", { name: /modified/ }),
+    ).toBeInTheDocument();
+  });
+
   it("opens the staged side and unstages the whole file", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     render(<App />);

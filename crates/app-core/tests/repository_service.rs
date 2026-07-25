@@ -500,3 +500,34 @@ fn renders_and_partially_stages_an_untracked_file() {
     assert_eq!(change.index_status, b'A');
     assert_eq!(change.worktree_status, b'M');
 }
+
+#[test]
+fn expands_untracked_directories_into_diffable_file_entries() {
+    let fixture = TestRepository::init();
+    std::fs::create_dir_all(fixture.path().join("nested/deeper"))
+        .expect("create nested fixture directory");
+    fixture.write("nested/deeper/new.txt", "nested content\n");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    let snapshot = service.snapshot(&repository, 1).expect("status");
+    assert!(
+        snapshot
+            .status
+            .changes
+            .iter()
+            .any(|change| change.path == b"nested/deeper/new.txt")
+    );
+    assert!(
+        !snapshot
+            .status
+            .changes
+            .iter()
+            .any(|change| change.path.ends_with(b"/"))
+    );
+
+    let diff = service
+        .diff(&repository, b"nested/deeper/new.txt", DiffTarget::Unstaged)
+        .expect("nested untracked diff");
+    assert_eq!(diff.files[0].hunks[0].lines[0].content, "nested content");
+}
