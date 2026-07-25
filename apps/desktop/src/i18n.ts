@@ -3,6 +3,15 @@ export type Locale = "en" | "ko";
 type Parameters = Record<string, string | number>;
 
 const korean = {
+  "Settings": "설정",
+  "Appearance": "모양",
+  "Theme": "테마",
+  "System": "시스템",
+  "Light": "라이트",
+  "Dark": "다크",
+  "System default": "시스템 기본값",
+  "Select theme mode": "테마 모드 선택",
+  "Close settings": "설정 닫기",
   "Changes": "변경 사항",
   "History": "기록",
   "Operations": "작업",

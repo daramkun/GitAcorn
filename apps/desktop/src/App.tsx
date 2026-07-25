@@ -83,6 +83,8 @@ const navigation: ReadonlyArray<{ id: Page; label: string; shortcut: string }> =
   { id: "operations", label: t("Operations"), shortcut: "⌘3" },
 ];
 
+export type ThemeSetting = "system" | "light" | "dark";
+
 export function App() {
   const [appInfo, setAppInfo] = useState<AppInfoState>({ status: "loading" });
   const [tabs, setTabs] = useState<SessionTabDto[]>([]);
@@ -100,6 +102,65 @@ export function App() {
   const [cloneUrl, setCloneUrl] = useState("");
   const [showClone, setShowClone] = useState(false);
   const [cloneOperation, setCloneOperation] = useState<OperationEventDto>();
+  const [showSettings, setShowSettings] = useState(false);
+  const [themeSetting, setThemeSetting] = useState<ThemeSetting>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("gitacorn_theme");
+        if (saved === "light" || saved === "dark" || saved === "system") {
+          return saved;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return "system";
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("gitacorn_theme", themeSetting);
+    } catch {
+      // ignore
+    }
+
+    const applyTheme = () => {
+      let activeTheme: "light" | "dark" = "dark";
+      if (themeSetting === "system") {
+        activeTheme = typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+      } else {
+        activeTheme = themeSetting;
+      }
+      document.documentElement.setAttribute("data-theme", activeTheme);
+    };
+
+    applyTheme();
+
+    if (themeSetting === "system" && typeof window !== "undefined" && window.matchMedia) {
+      const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      const handler = () => applyTheme();
+      if (mediaQuery.addEventListener) {
+        mediaQuery.addEventListener("change", handler);
+        return () => mediaQuery.removeEventListener("change", handler);
+      } else if (mediaQuery.addListener) {
+        mediaQuery.addListener(handler);
+        return () => mediaQuery.removeListener(handler);
+      }
+    }
+  }, [themeSetting]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && showSettings) {
+        setShowSettings(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showSettings]);
+
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const activeTab = tabs.find((tab) => tab.active) ?? tabs[0];
   const activeSnapshot = activeTab?.snapshot;
@@ -552,6 +613,16 @@ export function App() {
           <span>GitAcorn</span><span className="alpha-badge">ALPHA</span>
         </div>
         <div className="window-drag-region" data-tauri-drag-region />
+        <button
+          className="titlebar-settings-button"
+          type="button"
+          aria-label={t("Settings")}
+          title={t("Settings")}
+          onClick={() => setShowSettings(true)}
+        >
+          <span aria-hidden="true">⚙️</span>
+          <span>{t("Settings")}</span>
+        </button>
         <div className="window-controls">
           <button
             className="window-control"
@@ -918,6 +989,66 @@ export function App() {
           )}
         </section>
       </main>
+      {showSettings && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowSettings(false)}
+          role="presentation"
+        >
+          <div
+            className="settings-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
+          >
+            <div className="settings-modal-header">
+              <h2 id="settings-title">{t("Settings")}</h2>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close settings")}
+                onClick={() => setShowSettings(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body">
+              <div className="settings-section">
+                <h3>{t("Appearance")}</h3>
+                <p className="settings-section-desc">{t("Select theme mode")}</p>
+                <div className="theme-options">
+                  <button
+                    type="button"
+                    className={`theme-option-card ${themeSetting === "system" ? "selected" : ""}`}
+                    onClick={() => setThemeSetting("system")}
+                  >
+                    <span className="theme-icon" aria-hidden="true">💻</span>
+                    <span className="theme-label">{t("System")}</span>
+                    <span className="theme-desc">{t("System default")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-option-card ${themeSetting === "light" ? "selected" : ""}`}
+                    onClick={() => setThemeSetting("light")}
+                  >
+                    <span className="theme-icon" aria-hidden="true">☀️</span>
+                    <span className="theme-label">{t("Light")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-option-card ${themeSetting === "dark" ? "selected" : ""}`}
+                    onClick={() => setThemeSetting("dark")}
+                  >
+                    <span className="theme-icon" aria-hidden="true">🌙</span>
+                    <span className="theme-label">{t("Dark")}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2022,6 +2153,72 @@ function DiffRenderer({
   );
 }
 
+const SYNTAX_KEYWORDS = new Set([
+  "abstract", "as", "async", "await", "break", "case", "catch", "class", "const",
+  "continue", "debugger", "default", "def", "delete", "do", "else", "enum",
+  "export", "extends", "false", "final", "finally", "fn", "for", "from",
+  "function", "if", "implements", "import", "in", "instanceof", "interface",
+  "is", "let", "loop", "match", "mod", "move", "mut", "new", "null", "of",
+  "package", "private", "protected", "pub", "public", "return", "self", "static",
+  "struct", "super", "switch", "this", "throw", "trait", "true", "try", "type",
+  "typeof", "undefined", "use", "var", "void", "while", "with", "yield"
+]);
+
+const SYNTAX_TYPES = new Set([
+  "string", "number", "boolean", "any", "unknown", "never", "object", "symbol",
+  "bigint", "void", "Promise", "Record", "Array", "Set", "Map", "Option", "Result",
+  "Vec", "String", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize",
+  "isize", "f32", "f64", "bool", "char", "str"
+]);
+
+export function highlightCodeLine(code: string): React.ReactNode[] {
+  if (!code) return [];
+  const nodes: React.ReactNode[] = [];
+  const regex = /(\/\/.*$|#.*$|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b0x[0-9a-fA-F]+\b|\b\d+(?:\.\d+)?\b|\b[a-zA-Z_$][a-zA-Z0-9_$]*\b|[<>/=+\-*%!&|^~?:]+|[{}()\[\],.;])/gm;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(code)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(code.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    const key = `${match.index}-${token}`;
+
+    if (token.startsWith("//") || token.startsWith("#") || token.startsWith("/*")) {
+      nodes.push(<span key={key} className="tok-comment">{token}</span>);
+    } else if (token.startsWith('"') || token.startsWith("'") || token.startsWith("`")) {
+      nodes.push(<span key={key} className="tok-string">{token}</span>);
+    } else if (/^\d/.test(token)) {
+      nodes.push(<span key={key} className="tok-number">{token}</span>);
+    } else if (SYNTAX_KEYWORDS.has(token)) {
+      nodes.push(<span key={key} className="tok-keyword">{token}</span>);
+    } else if (SYNTAX_TYPES.has(token)) {
+      nodes.push(<span key={key} className="tok-type">{token}</span>);
+    } else if (/^[a-zA-Z_$]/.test(token)) {
+      const rest = code.slice(regex.lastIndex).trimStart();
+      if (rest.startsWith("(")) {
+        nodes.push(<span key={key} className="tok-func">{token}</span>);
+      } else {
+        nodes.push(token);
+      }
+    } else if (/^[<>/=+\-*%!&|^~?:]+$/.test(token)) {
+      nodes.push(<span key={key} className="tok-operator">{token}</span>);
+    } else {
+      nodes.push(<span key={key} className="tok-punctuation">{token}</span>);
+    }
+
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < code.length) {
+    nodes.push(code.slice(lastIndex));
+  }
+
+  return nodes;
+}
+
 function VirtualDiffLines({
   hunkIndex,
   lines,
@@ -2051,7 +2248,12 @@ function VirtualDiffLines({
       >
         <span>{line.oldLine ?? ""}</span>
         <span>{line.newLine ?? ""}</span>
-        <code>{line.kind === "addition" ? "+" : line.kind === "deletion" ? "-" : " "}{line.content}</code>
+        <code>
+          <span className="diff-prefix">
+            {line.kind === "addition" ? "+" : line.kind === "deletion" ? "-" : " "}
+          </span>
+          {highlightCodeLine(line.content)}
+        </code>
       </button>
     );
   });

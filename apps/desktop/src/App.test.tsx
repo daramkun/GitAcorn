@@ -961,5 +961,42 @@ describe("App", () => {
     expect(tree[1].name).toBe("upstream");
     expect(tree[1].count).toBe(1);
   });
+
+  it("opens settings modal and allows changing theme between system, light, and dark", async () => {
+    localStorage.clear();
+    mockedRestoreSession.mockResolvedValueOnce({
+      schemaVersion: 1,
+      tabs: [],
+    });
+
+    render(<App />);
+
+    const settingsBtn = screen.getByRole("button", { name: /settings|설정/i });
+    fireEvent.click(settingsBtn);
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    const lightOption = screen.getByRole("button", { name: /light|라이트/i });
+    fireEvent.click(lightOption);
+
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(localStorage.getItem("gitacorn_theme")).toBe("light");
+
+    const darkOption = screen.getByRole("button", { name: /dark|다크/i });
+    fireEvent.click(darkOption);
+
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(localStorage.getItem("gitacorn_theme")).toBe("dark");
+
+    const systemOption = screen.getByRole("button", { name: /system|시스템/i });
+    fireEvent.click(systemOption);
+
+    expect(localStorage.getItem("gitacorn_theme")).toBe("system");
+
+    const closeBtn = screen.getByRole("button", { name: /close settings|설정 닫기/i });
+    fireEvent.click(closeBtn);
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
 });
 
