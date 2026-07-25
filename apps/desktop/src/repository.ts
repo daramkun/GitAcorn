@@ -81,7 +81,7 @@ export type SessionTabDto = {
   worktreeId: string;
   worktreePath: string;
   active: boolean;
-  page: "changes" | "history";
+  page: "changes" | "history" | "operations";
   selectedPath?: string;
   selectedDiff: DiffTarget;
   panelWidth: number;
@@ -152,6 +152,18 @@ export type OperationEventDto = {
 export type OperationStartedDto = {
   schemaVersion: 1;
   operationId: string;
+};
+
+export type OperationRecordDto = {
+  schemaVersion: number;
+  id: string;
+  repoId?: string;
+  kind: string;
+  state: "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  summary: string;
+  diagnostic?: string;
+  startedAt: string;
+  finishedAt?: string;
 };
 
 export async function chooseRepositoryDirectory(): Promise<string | null> {
@@ -225,7 +237,7 @@ export function reorderSessionTabs(repoIds: string[]): Promise<void> {
 
 export function updateSessionTab(
   repoId: string,
-  page: "changes" | "history",
+  page: "changes" | "history" | "operations",
   selectedPath: string | undefined,
   selectedDiff: DiffTarget,
   panelWidth: number,
@@ -299,6 +311,64 @@ export function mergeBranch(
   reference: string,
 ): Promise<RepositorySnapshotDto> {
   return invoke<RepositorySnapshotDto>("branch_merge", { repoId, revision, reference });
+}
+
+export function createStash(
+  repoId: string,
+  revision: number,
+  message: string,
+  includeUntracked: boolean,
+): Promise<RepositorySnapshotDto> {
+  return invoke("stash_create", {
+    repoId,
+    revision,
+    request: { message, includeUntracked },
+  });
+}
+
+export function applyStash(
+  repoId: string,
+  revision: number,
+  reference: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke("stash_apply", { repoId, revision, reference });
+}
+
+export function dropStash(
+  repoId: string,
+  revision: number,
+  reference: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke("stash_drop", { repoId, revision, reference });
+}
+
+export function resolveConflict(
+  repoId: string,
+  revision: number,
+  pathBytes: number[],
+  resolution: "ours" | "theirs" | "markResolved",
+): Promise<RepositorySnapshotDto> {
+  return invoke("conflict_resolve", {
+    repoId,
+    revision,
+    pathBytes,
+    resolution,
+  });
+}
+
+export function abortMerge(
+  repoId: string,
+  revision: number,
+): Promise<RepositorySnapshotDto> {
+  return invoke("merge_abort", { repoId, revision });
+}
+
+export function getOperationHistory(): Promise<OperationRecordDto[]> {
+  return invoke("operation_history");
+}
+
+export function getDiagnostics(): Promise<string> {
+  return invoke("diagnostics_copy");
 }
 
 export function getRepositorySnapshot(repoId: string): Promise<RepositorySnapshotDto> {

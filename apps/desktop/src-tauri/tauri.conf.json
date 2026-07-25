@@ -26,6 +26,15 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "Korean"],
+        "displayLanguageSelector": false
+      }
+    }
   }
 }

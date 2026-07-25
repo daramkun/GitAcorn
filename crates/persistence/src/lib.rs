@@ -37,6 +37,19 @@ pub struct SessionTab {
     pub history_filter: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationRecord {
+    pub id: String,
+    pub repo_id: Option<String>,
+    pub kind: String,
+    pub state: String,
+    pub summary: String,
+    pub diagnostic: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionStore {
     pool: SqlitePool,
@@ -70,6 +83,7 @@ impl SessionStore {
         )
         .execute(&pool)
         .await?;
+        create_operation_table(&pool).await?;
         let has_worktree_id: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('session_tabs') WHERE name = 'worktree_id'",
         )
@@ -133,7 +147,88 @@ impl SessionStore {
         )
         .execute(&pool)
         .await?;
+        create_operation_table(&pool).await?;
         Ok(Self { pool })
+    }
+
+    pub async fn start_operation(
+        &self,
+        id: &str,
+        repo_id: Option<&str>,
+        kind: &str,
+        summary: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO operation_history
+                (id, repo_id, kind, state, summary, started_at)
+             VALUES (?, ?, ?, 'running', ?, CURRENT_TIMESTAMP)",
+        )
+        .bind(id)
+        .bind(repo_id)
+        .bind(kind)
+        .bind(summary)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn finish_operation(
+        &self,
+        id: &str,
+        state: &str,
+        summary: &str,
+        diagnostic: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE operation_history
+             SET state = ?, summary = ?, diagnostic = ?, finished_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+        )
+        .bind(state)
+        .bind(summary)
+        .bind(diagnostic)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_operations(&self, limit: usize) -> Result<Vec<OperationRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, repo_id, kind, state, summary, diagnostic, started_at, finished_at
+             FROM operation_history
+             ORDER BY started_at DESC, rowid DESC
+             LIMIT ?",
+        )
+        .bind(limit.clamp(1, 200) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| OperationRecord {
+                id: row.get("id"),
+                repo_id: row.get("repo_id"),
+                kind: row.get("kind"),
+                state: row.get("state"),
+                summary: row.get("summary"),
+                diagnostic: row.get("diagnostic"),
+                started_at: row.get("started_at"),
+                finished_at: row.get("finished_at"),
+            })
+            .collect())
+    }
+
+    pub async fn recover_interrupted_operations(&self) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE operation_history
+             SET state = 'interrupted',
+                 summary = 'Interrupted when GitAcorn last exited',
+                 finished_at = CURRENT_TIMESTAMP
+             WHERE state IN ('queued', 'running')",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     pub async fn load_tabs(&self) -> Result<Vec<SessionTab>, sqlx::Error> {
@@ -234,6 +329,24 @@ impl SessionStore {
         }
         transaction.commit().await
     }
+}
+
+async fn create_operation_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS operation_history (
+            id TEXT PRIMARY KEY NOT NULL,
+            repo_id TEXT,
+            kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            diagnostic TEXT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -367,5 +480,24 @@ mod tests {
         assert_eq!(tabs[0].worktree_id, "");
         assert_eq!(tabs[0].selected_diff, "unstaged");
         assert!(tabs[0].history_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn persists_operation_history_and_recovers_interrupted_work() {
+        let store = SessionStore::memory().await.expect("memory store");
+        store
+            .start_operation("one", Some("repo"), "stash-create", "Creating stash")
+            .await
+            .expect("start operation");
+        assert_eq!(
+            store
+                .recover_interrupted_operations()
+                .await
+                .expect("recover"),
+            1
+        );
+        let operations = store.list_operations(20).await.expect("list operations");
+        assert_eq!(operations[0].state, "interrupted");
+        assert!(operations[0].finished_at.is_some());
     }
 }

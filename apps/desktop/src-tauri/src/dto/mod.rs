@@ -6,6 +6,7 @@ use git_domain::{
     CommitSummary, DiffDocument, DiffLineKind, FileChange, HeadState, HistoryPage,
     RepositorySnapshot,
 };
+use persistence::OperationRecord;
 use serde::{Deserialize, Serialize};
 
 use crate::state::SessionTabState;
@@ -75,6 +76,53 @@ pub struct OperationEventDto {
     pub snapshot: Option<RepositorySnapshotDto>,
     pub destination: Option<String>,
     pub error: Option<AppErrorDto>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashRequestDto {
+    pub message: String,
+    #[serde(default)]
+    pub include_untracked: bool,
+}
+
+impl From<StashRequestDto> for app_core::StashRequest {
+    fn from(request: StashRequestDto) -> Self {
+        Self {
+            message: request.message,
+            include_untracked: request.include_untracked,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationRecordDto {
+    pub schema_version: u16,
+    pub id: String,
+    pub repo_id: Option<String>,
+    pub kind: String,
+    pub state: String,
+    pub summary: String,
+    pub diagnostic: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
+impl From<OperationRecord> for OperationRecordDto {
+    fn from(record: OperationRecord) -> Self {
+        Self {
+            schema_version: 1,
+            id: record.id,
+            repo_id: record.repo_id,
+            kind: record.kind,
+            state: record.state,
+            summary: record.summary,
+            diagnostic: record.diagnostic,
+            started_at: record.started_at,
+            finished_at: record.finished_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

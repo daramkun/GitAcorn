@@ -12,10 +12,12 @@ import {
   closeSessionTab,
   createBranch,
   createCommit,
+  createStash,
   deleteBranch,
   discardPath,
   getDiff,
   getHistoryPage,
+  getOperationHistory,
   getReferences,
   getRepositorySidebar,
   getRepositorySnapshot,
@@ -23,6 +25,7 @@ import {
   mergeBranch,
   openRepository,
   reorderSessionTabs,
+  resolveConflict,
   restoreSession,
   stagePaths,
   unstagePaths,
@@ -37,22 +40,29 @@ vi.mock("./app-info", () => ({
 
 vi.mock("./repository", () => ({
   applyPatchSelection: vi.fn(),
+  abortMerge: vi.fn(),
   chooseRepositoryDirectory: vi.fn(),
   openRepository: vi.fn(),
   restoreSession: vi.fn(),
   activateSessionTab: vi.fn(),
   activateWorktree: vi.fn(),
+  applyStash: vi.fn(),
   checkoutBranch: vi.fn(),
   closeSessionTab: vi.fn(),
   createBranch: vi.fn(),
   createCommit: vi.fn(),
+  createStash: vi.fn(),
   deleteBranch: vi.fn(),
   discardPath: vi.fn(),
+  dropStash: vi.fn(),
   getDiff: vi.fn(),
   getHistoryPage: vi.fn(),
+  getDiagnostics: vi.fn(),
+  getOperationHistory: vi.fn(),
   getReferences: vi.fn(),
   getRepositorySidebar: vi.fn(),
   reorderSessionTabs: vi.fn(),
+  resolveConflict: vi.fn(),
   updateSessionTab: vi.fn(),
   getRepositorySnapshot: vi.fn(),
   stagePaths: vi.fn(),
@@ -91,9 +101,12 @@ const mockedStagePaths = vi.mocked(stagePaths);
 const mockedUnstagePaths = vi.mocked(unstagePaths);
 const mockedApplyPatch = vi.mocked(applyPatchSelection);
 const mockedDiscardPath = vi.mocked(discardPath);
+const mockedCreateStash = vi.mocked(createStash);
 const mockedCreateCommit = vi.mocked(createCommit);
 const mockedDeleteBranch = vi.mocked(deleteBranch);
 const mockedMergeBranch = vi.mocked(mergeBranch);
+const mockedResolveConflict = vi.mocked(resolveConflict);
+const mockedGetOperationHistory = vi.mocked(getOperationHistory);
 const mockedListenForChanges = vi.mocked(listenForRepositoryChanges);
 
 const snapshot: RepositorySnapshotDto = {
@@ -239,6 +252,9 @@ describe("App", () => {
     mockedCheckoutBranch.mockResolvedValue(snapshot);
     mockedDeleteBranch.mockResolvedValue(snapshot);
     mockedMergeBranch.mockResolvedValue(snapshot);
+    mockedCreateStash.mockResolvedValue(snapshot);
+    mockedResolveConflict.mockResolvedValue(snapshot);
+    mockedGetOperationHistory.mockResolvedValue([]);
     mockedListenForChanges.mockResolvedValue(vi.fn());
   });
 
@@ -634,5 +650,75 @@ describe("App", () => {
     expect(
       screen.getAllByRole("button", { name: /large-diff-line-/ }).length,
     ).toBeLessThan(100);
+  });
+
+  it("creates a stash including untracked files from the sidebar", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "Stash message" }), {
+      target: { value: "before refactor" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stash changes" }));
+
+    await waitFor(() =>
+      expect(mockedCreateStash).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "before refactor",
+        true,
+      ),
+    );
+  });
+
+  it("offers explicit resolution actions for a conflicted file", async () => {
+    const conflicted = {
+      ...snapshot,
+      changes: [{ ...snapshot.changes[0], conflict: true, indexStatus: "U" }],
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], snapshot: conflicted }],
+    });
+    mockedResolveConflict.mockResolvedValue({
+      ...conflicted,
+      revision: 2,
+      changes: [],
+    });
+    render(<App />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: /tracked\.txt/ }))[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "Use theirs" }));
+
+    await waitFor(() =>
+      expect(mockedResolveConflict).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        snapshot.changes[0].pathBytes,
+        "theirs",
+      ),
+    );
+  });
+
+  it("shows interrupted work in the operation center", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetOperationHistory.mockResolvedValue([
+      {
+        schemaVersion: 1,
+        id: "operation-one",
+        repoId: snapshot.repository.id,
+        kind: "fetch",
+        state: "interrupted",
+        summary: "Interrupted when GitAcorn last exited",
+        startedAt: "2026-07-25 01:00:00",
+      },
+    ]);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Operations/ }));
+
+    expect(
+      await screen.findByText("Interrupted when GitAcorn last exited"),
+    ).toBeInTheDocument();
   });
 });

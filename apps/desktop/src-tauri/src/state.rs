@@ -4,9 +4,9 @@ use std::str::FromStr;
 use std::sync::Mutex;
 
 use app_core::{
-    AppError, BranchRequest, CloneRequest, CommitRequest, DiffTarget, GitReference, HistoryFilter,
-    PatchSelection, RemoteProgress, RemoteRequest, RepositoryScheduler, RepositoryService,
-    RepositorySidebar,
+    AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
+    GitReference, HistoryFilter, PatchSelection, RemoteProgress, RemoteRequest,
+    RepositoryScheduler, RepositoryService, RepositorySidebar, StashRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -14,7 +14,7 @@ use git_domain::{
     WorktreeId,
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use persistence::{SessionStore, SessionTab};
+use persistence::{OperationRecord, SessionStore, SessionTab};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
@@ -324,6 +324,94 @@ impl ApplicationState {
         self.mutate(repo_id, revision, |service, repository| {
             service.merge_reference(repository, reference)
         })
+    }
+
+    pub fn create_stash(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        request: &StashRequest,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.create_stash(repository, request)
+        })
+    }
+
+    pub fn apply_stash(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        reference: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.apply_stash(repository, reference)
+        })
+    }
+
+    pub fn drop_stash(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        reference: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.drop_stash(repository, reference)
+        })
+    }
+
+    pub fn resolve_conflict(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        path: &[u8],
+        resolution: ConflictResolution,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.resolve_conflict(repository, path, resolution)
+        })
+    }
+
+    pub fn abort_merge(
+        &self,
+        repo_id: &str,
+        revision: u64,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.abort_merge(repository)
+        })
+    }
+
+    pub async fn start_operation_record(
+        &self,
+        id: &str,
+        repo_id: Option<&str>,
+        kind: &str,
+        summary: &str,
+    ) -> Result<(), AppError> {
+        self.session
+            .start_operation(id, repo_id, kind, summary)
+            .await
+            .map_err(persistence_error)
+    }
+
+    pub async fn finish_operation_record(
+        &self,
+        id: &str,
+        state: &str,
+        summary: &str,
+        diagnostic: Option<&str>,
+    ) -> Result<(), AppError> {
+        self.session
+            .finish_operation(id, state, summary, diagnostic)
+            .await
+            .map_err(persistence_error)
+    }
+
+    pub async fn operation_history(&self) -> Result<Vec<OperationRecord>, AppError> {
+        self.session
+            .list_operations(100)
+            .await
+            .map_err(persistence_error)
     }
 
     pub async fn activate_worktree(

@@ -9,8 +9,10 @@ import {
 import { getAppInfo, type AppInfoDto } from "./app-info";
 import {
   applyPatchSelection,
+  abortMerge,
   activateSessionTab,
   activateWorktree,
+  applyStash,
   cancelOperation,
   checkoutBranch,
   chooseCloneParentDirectory,
@@ -18,10 +20,14 @@ import {
   closeSessionTab,
   createBranch,
   createCommit,
+  createStash,
   deleteBranch,
   discardPath,
+  dropStash,
   getDiff,
   getHistoryPage,
+  getDiagnostics,
+  getOperationHistory,
   getReferences,
   getRepositorySidebar,
   getRepositorySnapshot,
@@ -30,6 +36,7 @@ import {
   normalizeAppError,
   openRepository,
   reorderSessionTabs,
+  resolveConflict,
   restoreSession,
   startClone,
   startRemoteOperation,
@@ -42,6 +49,7 @@ import {
   type DiffTarget,
   type FileChangeDto,
   type OperationEventDto,
+  type OperationRecordDto,
   type RepositorySnapshotDto,
   type RepositorySidebarDto,
   type ReferenceDto,
@@ -49,7 +57,7 @@ import {
 } from "./repository";
 import { updateRepositoryOperation } from "./remote-operations";
 
-type Page = "changes" | "history";
+type Page = "changes" | "history" | "operations";
 type AppInfoState =
   | { status: "loading" }
   | { status: "ready"; value: AppInfoDto }
@@ -58,6 +66,7 @@ type AppInfoState =
 const navigation: ReadonlyArray<{ id: Page; label: string; shortcut: string }> = [
   { id: "changes", label: "Changes", shortcut: "⌘1" },
   { id: "history", label: "History", shortcut: "⌘2" },
+  { id: "operations", label: "Operations", shortcut: "⌘3" },
 ];
 
 export function App() {
@@ -294,6 +303,28 @@ export function App() {
     }
   }
 
+  async function handleWorkspaceMutation(
+    action: () => Promise<RepositorySnapshotDto>,
+  ) {
+    if (!activeTab) return;
+    try {
+      setError(undefined);
+      const snapshot = await action();
+      setTabs((current) =>
+        current.map((tab) =>
+          tab.repoId === snapshot.repository.id ? { ...tab, snapshot } : tab,
+        ),
+      );
+      setSidebars((current) => {
+        const next = { ...current };
+        delete next[activeTab.repoId];
+        return next;
+      });
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+    }
+  }
+
   const branchLabel = activeSnapshot
     ? activeSnapshot.head.kind === "branch"
       ? activeSnapshot.head.name
@@ -391,11 +422,41 @@ export function App() {
             <SidebarGroup label="Tags" count={activeSidebar?.tags.total}>
               {activeSidebar?.tags.items.map((tag) => <span key={tag}>{tag}</span>)}
             </SidebarGroup>
-            <SidebarGroup label="Stashes" count={activeSnapshot?.stashCount}>
-              {activeSidebar?.stashes.map((stash) => (
-                <span key={stash.reference} title={stash.message}>{stash.reference}</span>
-              ))}
-            </SidebarGroup>
+            <StashControls
+              snapshot={activeSnapshot}
+              stashes={activeSidebar?.stashes ?? []}
+              onCreate={(message, includeUntracked) =>
+                activeSnapshot &&
+                handleWorkspaceMutation(() =>
+                  createStash(
+                    activeSnapshot.repository.id,
+                    activeSnapshot.revision,
+                    message,
+                    includeUntracked,
+                  ),
+                )
+              }
+              onApply={(reference) =>
+                activeSnapshot &&
+                handleWorkspaceMutation(() =>
+                  applyStash(
+                    activeSnapshot.repository.id,
+                    activeSnapshot.revision,
+                    reference,
+                  ),
+                )
+              }
+              onDrop={(reference) =>
+                activeSnapshot &&
+                handleWorkspaceMutation(() =>
+                  dropStash(
+                    activeSnapshot.repository.id,
+                    activeSnapshot.revision,
+                    reference,
+                  ),
+                )
+              }
+            />
           </div>
           <div className="runtime-status" role="status">
             <span className={appInfo.status === "error" ? "status-dot error" : "status-dot"} />
@@ -409,7 +470,7 @@ export function App() {
           <div className="contextbar">
             <div>
               <span className="eyebrow">{activeTab?.worktreePath ?? "Local workspace"}</span>
-              <strong>{activeSnapshot ? `${branchLabel} · ${page === "changes" ? "Changes" : "History"}` : page === "changes" ? "Changes" : "History"}</strong>
+              <strong>{activeSnapshot ? `${branchLabel} · ${navigation.find((item) => item.id === page)?.label}` : navigation.find((item) => item.id === page)?.label}</strong>
             </div>
             <div className="remote-actions" aria-label="Remote actions">
               {activeTab && refreshing.has(activeTab.repoId) && <span className="refreshing">Refreshing…</span>}
@@ -489,7 +550,7 @@ export function App() {
             ) : (
               <ChangesEmpty onOpen={handleOpenRepository} opening={opening || sessionLoading} />
             )
-          ) : (
+          ) : page === "history" ? (
             activeSnapshot && activeTab ? (
               <HistoryView
                 key={activeTab.repoId}
@@ -515,6 +576,8 @@ export function App() {
             ) : (
               <HistoryEmpty />
             )
+          ) : (
+            <OperationsView onError={(reason) => setError(normalizeAppError(reason))} />
           )}
         </section>
       </main>
@@ -534,6 +597,139 @@ function cloneRepositoryName(remoteUrl: string) {
 
 function SidebarGroup({ label, count, children }: { label: string; count?: number; children?: ReactNode }) {
   return <div className="sidebar-read-group"><div className="sidebar-group"><span>›</span>{label}{count !== undefined && <small>{Math.min(count, 5)} of {count}</small>}</div>{children && <div className="sidebar-items">{children}</div>}</div>;
+}
+
+function StashControls({
+  snapshot,
+  stashes,
+  onCreate,
+  onApply,
+  onDrop,
+}: {
+  snapshot?: RepositorySnapshotDto;
+  stashes: RepositorySidebarDto["stashes"];
+  onCreate: (message: string, includeUntracked: boolean) => void;
+  onApply: (reference: string) => void;
+  onDrop: (reference: string) => void;
+}) {
+  const [message, setMessage] = useState("");
+  const [includeUntracked, setIncludeUntracked] = useState(true);
+  return (
+    <div className="sidebar-read-group stash-controls">
+      <div className="sidebar-group">
+        <span>›</span>Stashes
+        {snapshot && <small>{Math.min(snapshot.stashCount, 5)} of {snapshot.stashCount}</small>}
+      </div>
+      {snapshot && (
+        <form
+          aria-label="Create stash"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onCreate(message, includeUntracked);
+            setMessage("");
+          }}
+        >
+          <input
+            aria-label="Stash message"
+            placeholder="Stash message"
+            value={message}
+            onChange={(event) => setMessage(event.currentTarget.value)}
+          />
+          <label>
+            <input
+              type="checkbox"
+              checked={includeUntracked}
+              onChange={(event) => setIncludeUntracked(event.currentTarget.checked)}
+            />
+            Include untracked
+          </label>
+          <button type="submit" disabled={snapshot.changes.length === 0}>Stash changes</button>
+        </form>
+      )}
+      <div className="sidebar-items">
+        {stashes.map((stash) => (
+          <div className="stash-item" key={stash.reference} title={stash.message}>
+            <span>{stash.reference} · {stash.message}</span>
+            <div>
+              <button type="button" onClick={() => onApply(stash.reference)}>Apply</button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={() => {
+                  if (window.confirm(`Drop ${stash.reference}? The stash entry cannot be recovered.`)) {
+                    onDrop(stash.reference);
+                  }
+                }}
+              >
+                Drop
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OperationsView({ onError }: { onError: (error: unknown) => void }) {
+  const [operations, setOperations] = useState<OperationRecordDto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [copyState, setCopyState] = useState("");
+
+  function refresh() {
+    setLoading(true);
+    getOperationHistory()
+      .then(setOperations)
+      .catch(onError)
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(refresh, [onError]);
+
+  async function copyDiagnostics() {
+    try {
+      const diagnostics = await getDiagnostics();
+      await navigator.clipboard.writeText(diagnostics);
+      setCopyState("Diagnostics copied");
+    } catch (reason: unknown) {
+      onError(reason);
+    }
+  }
+
+  return (
+    <section className="operations-view" aria-labelledby="operations-title">
+      <div className="operations-heading">
+        <div>
+          <span className="eyebrow">Recovery and diagnostics</span>
+          <h1 id="operations-title">Operation center</h1>
+        </div>
+        <div>
+          <button type="button" onClick={refresh}>Refresh</button>
+          <button type="button" onClick={() => void copyDiagnostics()}>Copy diagnostics</button>
+        </div>
+      </div>
+      {copyState && <p role="status">{copyState}</p>}
+      {loading ? (
+        <div className="history-state" role="status">Loading operations…</div>
+      ) : operations.length === 0 ? (
+        <div className="history-state">No operations have been recorded.</div>
+      ) : (
+        <ol className="operation-list">
+          {operations.map((operation) => (
+            <li key={operation.id}>
+              <span className={`operation-state ${operation.state}`}>{operation.state}</span>
+              <div>
+                <strong>{operation.kind}</strong>
+                <span>{operation.summary}</span>
+                {operation.diagnostic && <code>{operation.diagnostic}</code>}
+              </div>
+              <time>{operation.startedAt}</time>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
 }
 
 function ErrorBanner({ title, message, detail, actionLabel, onAction }: { title: string; message: string; detail?: string; actionLabel?: string; onAction?: () => void }) {
@@ -589,7 +785,7 @@ function ChangesView({
   useEffect(() => {
     let active = true;
     setSelectedLines(new Set());
-    if (!selected) {
+    if (!selected || selected.conflict) {
       setDiff(undefined);
       return () => {
         active = false;
@@ -727,6 +923,72 @@ function ChangesView({
                 </span>
                 <strong>{selected.path}</strong>
               </div>
+              {selected.conflict ? (
+                <div className="conflict-actions" aria-label="Conflict resolution">
+                  <button
+                    type="button"
+                    disabled={Boolean(operation)}
+                    onClick={() =>
+                      void mutate("Using our version…", () =>
+                        resolveConflict(
+                          snapshot.repository.id,
+                          snapshot.revision,
+                          selected.pathBytes,
+                          "ours",
+                        ),
+                      )
+                    }
+                  >
+                    Use ours
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(operation)}
+                    onClick={() =>
+                      void mutate("Using their version…", () =>
+                        resolveConflict(
+                          snapshot.repository.id,
+                          snapshot.revision,
+                          selected.pathBytes,
+                          "theirs",
+                        ),
+                      )
+                    }
+                  >
+                    Use theirs
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(operation)}
+                    onClick={() =>
+                      void mutate("Marking resolved…", () =>
+                        resolveConflict(
+                          snapshot.repository.id,
+                          snapshot.revision,
+                          selected.pathBytes,
+                          "markResolved",
+                        ),
+                      )
+                    }
+                  >
+                    Mark current content resolved
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    disabled={Boolean(operation)}
+                    onClick={() => {
+                      if (window.confirm("Abort this merge and restore the pre-merge working tree?")) {
+                        void mutate("Aborting merge…", () =>
+                          abortMerge(snapshot.repository.id, snapshot.revision),
+                        );
+                      }
+                    }}
+                  >
+                    Abort merge…
+                  </button>
+                </div>
+              ) : (
               <div>
                 <button
                   type="button"
@@ -765,9 +1027,18 @@ function ChangesView({
                   </button>
                 )}
               </div>
+              )}
             </div>
             {operation && <div className="operation-status" role="status">{operation}</div>}
-            {diffLoading ? (
+            {selected.conflict ? (
+              <div className="conflict-panel" role="region" aria-label="Conflict resolution guidance">
+                <h2>Resolve merge conflict</h2>
+                <p>
+                  Choose one side, or edit the file in your editor and mark the current
+                  content resolved. Aborting restores the state from before the merge.
+                </p>
+              </div>
+            ) : diffLoading ? (
               <div className="diff-state" role="status">Loading diff…</div>
             ) : diff?.binary ? (
               <div className="diff-state">Binary file. Use the whole-file action.</div>

@@ -1,12 +1,17 @@
 use std::path::PathBuf;
 
-use app_core::{AppError, AppErrorDto, DiffTarget, HistoryFilter, PatchSelection};
+use app_core::{
+    AppError, AppErrorDto, ConflictResolution, DiffTarget, HistoryFilter, PatchSelection,
+};
+use git_domain::RepositorySnapshot;
 use tauri::{AppHandle, Manager, State, ipc::Channel};
+use uuid::Uuid;
 
 use crate::dto::{
     AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitRequestDto, DiffDto,
-    HistoryPageDto, OperationEventDto, OperationStartedDto, PatchSelectionDto, ReferenceDto,
-    RemoteRequestDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto, SessionTabUpdateDto,
+    HistoryPageDto, OperationEventDto, OperationRecordDto, OperationStartedDto, PatchSelectionDto,
+    ReferenceDto, RemoteRequestDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
+    SessionTabUpdateDto, StashRequestDto,
 };
 use crate::state::{ApplicationState, SessionTabUpdate};
 
@@ -16,7 +21,7 @@ pub fn app_info() -> AppInfoDto {
 }
 
 #[tauri::command]
-pub fn remote_sync(
+pub async fn remote_sync(
     repo_id: String,
     request: RemoteRequestDto,
     channel: Channel<OperationEventDto>,
@@ -31,6 +36,15 @@ pub fn remote_sync(
     let operation_id_string = operation_id.to_string();
     let event_repo_id = repo_id.clone();
     let kind = request.kind.label().to_owned();
+    state
+        .start_operation_record(
+            &operation_id_string,
+            Some(&repo_id),
+            &kind,
+            &format!("{kind} queued"),
+        )
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
     let _ = channel.send(operation_event(
         &operation_id_string,
         Some(event_repo_id.clone()),
@@ -71,6 +85,24 @@ pub fn remote_sync(
             Ok(snapshot) => event.snapshot = Some(snapshot.into()),
             Err(error) => event.error = Some(AppErrorDto::from(&error)),
         }
+        let diagnostic = event
+            .error
+            .as_ref()
+            .and_then(|error| error.details.as_deref());
+        let summary = event
+            .message
+            .as_deref()
+            .unwrap_or(if event.state == "succeeded" {
+                "Operation completed"
+            } else {
+                "Operation did not complete"
+            });
+        let _ = tauri::async_runtime::block_on(state.finish_operation_record(
+            &operation_id_string,
+            event.state,
+            summary,
+            diagnostic,
+        ));
         let _ = channel.send(event);
     });
     Ok(OperationStartedDto {
@@ -80,7 +112,7 @@ pub fn remote_sync(
 }
 
 #[tauri::command]
-pub fn repository_clone(
+pub async fn repository_clone(
     request: CloneRequestDto,
     channel: Channel<OperationEventDto>,
     app: AppHandle,
@@ -90,6 +122,10 @@ pub fn repository_clone(
     let destination = request.destination.to_string_lossy().into_owned();
     let operation_id = state.begin_clone_operation();
     let operation_id_string = operation_id.to_string();
+    state
+        .start_operation_record(&operation_id_string, None, "clone", "Clone queued")
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
     let _ = channel.send(operation_event(
         &operation_id_string,
         None,
@@ -125,6 +161,21 @@ pub fn repository_clone(
             Ok(()) => event.destination = Some(destination),
             Err(error) => event.error = Some(AppErrorDto::from(&error)),
         }
+        let diagnostic = event
+            .error
+            .as_ref()
+            .and_then(|error| error.details.as_deref());
+        let summary = if event.state == "succeeded" {
+            "Clone completed"
+        } else {
+            "Clone did not complete"
+        };
+        let _ = tauri::async_runtime::block_on(state.finish_operation_record(
+            &operation_id_string,
+            event.state,
+            summary,
+            diagnostic,
+        ));
         let _ = channel.send(event);
     });
     Ok(OperationStartedDto {
@@ -454,6 +505,155 @@ pub fn commit_create(
 ) -> CommandResult<RepositorySnapshotDto> {
     state
         .commit(&repo_id, revision, &request.into())
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn stash_create(
+    repo_id: String,
+    revision: u64,
+    request: StashRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let request = request.into();
+    recorded_mutation(&state, &repo_id, "stash-create", "Created stash", || {
+        state.create_stash(&repo_id, revision, &request)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn stash_apply(
+    repo_id: String,
+    revision: u64,
+    reference: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    recorded_mutation(&state, &repo_id, "stash-apply", "Applied stash", || {
+        state.apply_stash(&repo_id, revision, &reference)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn stash_drop(
+    repo_id: String,
+    revision: u64,
+    reference: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    recorded_mutation(&state, &repo_id, "stash-drop", "Dropped stash", || {
+        state.drop_stash(&repo_id, revision, &reference)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn conflict_resolve(
+    repo_id: String,
+    revision: u64,
+    path_bytes: Vec<u8>,
+    resolution: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let resolution = match resolution.as_str() {
+        "ours" => ConflictResolution::Ours,
+        "theirs" => ConflictResolution::Theirs,
+        "markResolved" => ConflictResolution::MarkResolved,
+        _ => {
+            return Err(AppErrorDto::from(&AppError::InvalidRequest(
+                "Conflict resolution must be ours, theirs, or markResolved".to_owned(),
+            )));
+        }
+    };
+    recorded_mutation(
+        &state,
+        &repo_id,
+        "conflict-resolve",
+        "Resolved conflict",
+        || state.resolve_conflict(&repo_id, revision, &path_bytes, resolution),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn merge_abort(
+    repo_id: String,
+    revision: u64,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    recorded_mutation(&state, &repo_id, "merge-abort", "Aborted merge", || {
+        state.abort_merge(&repo_id, revision)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn operation_history(
+    state: State<'_, ApplicationState>,
+) -> CommandResult<Vec<OperationRecordDto>> {
+    state
+        .operation_history()
+        .await
+        .map(|records| records.into_iter().map(Into::into).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn diagnostics_copy(state: State<'_, ApplicationState>) -> CommandResult<String> {
+    let operations = state
+        .operation_history()
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
+    let mut output = format!(
+        "GitAcorn {}\nOS: {}\nArchitecture: {}\n\nRecent operations:\n",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    for operation in operations.iter().take(20) {
+        output.push_str(&format!(
+            "{} | {} | {} | {}\n",
+            operation.started_at, operation.kind, operation.state, operation.summary
+        ));
+        if let Some(diagnostic) = &operation.diagnostic {
+            output.push_str(&format!("  diagnostic: {diagnostic}\n"));
+        }
+    }
+    Ok(output)
+}
+
+async fn recorded_mutation(
+    state: &ApplicationState,
+    repo_id: &str,
+    kind: &str,
+    success_summary: &str,
+    action: impl FnOnce() -> Result<RepositorySnapshot, AppError>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let operation_id = Uuid::new_v4().to_string();
+    state
+        .start_operation_record(&operation_id, Some(repo_id), kind, "Operation started")
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
+    let result = action();
+    let (operation_state, summary, diagnostic) = match &result {
+        Ok(_) => ("succeeded", success_summary.to_owned(), None),
+        Err(error) => {
+            let dto = AppErrorDto::from(error);
+            ("failed", dto.message, dto.details)
+        }
+    };
+    state
+        .finish_operation_record(
+            &operation_id,
+            operation_state,
+            &summary,
+            diagnostic.as_deref(),
+        )
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
+    result
         .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }

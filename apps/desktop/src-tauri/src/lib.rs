@@ -14,6 +14,11 @@ pub fn run() {
         .setup(|app| {
             let database_path = app.path().app_data_dir()?.join("git-acorn.sqlite3");
             let session = tauri::async_runtime::block_on(SessionStore::open(&database_path))?;
+            let recovered =
+                tauri::async_runtime::block_on(session.recover_interrupted_operations())?;
+            if recovered > 0 {
+                tracing::warn!(recovered, "recovered interrupted operations");
+            }
             app.manage(state::ApplicationState::new(session));
             Ok(())
         })
@@ -37,6 +42,13 @@ pub fn run() {
             commands::branch_checkout,
             commands::branch_delete,
             commands::branch_merge,
+            commands::stash_create,
+            commands::stash_apply,
+            commands::stash_drop,
+            commands::conflict_resolve,
+            commands::merge_abort,
+            commands::operation_history,
+            commands::diagnostics_copy,
             commands::worktree_activate,
             commands::session_restore,
             commands::session_tab_activate,

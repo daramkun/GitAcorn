@@ -3,6 +3,7 @@
 mod remote;
 mod repository;
 mod scheduler;
+mod workspace;
 
 use serde::Serialize;
 use thiserror::Error;
@@ -15,6 +16,7 @@ pub use repository::{
     WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;
+pub use workspace::{ConflictResolution, StashRequest};
 
 #[derive(Debug, Error)]
 pub enum AppError {

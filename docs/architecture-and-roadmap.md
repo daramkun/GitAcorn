@@ -940,6 +940,37 @@ pnpm build
 - 다음 시작 지점
   - M6 stash create/apply/drop과 merge conflict resolution을 operation center 및 Alpha packaging 흐름에 연결한다.
 
+### M6 체크리스트
+
+- [x] stash create/apply/drop과 untracked file 포함 선택
+- [x] conflict 파일 상태와 ours/theirs/current-content resolution
+- [x] merge abort 복구 경로
+- [x] SQLite operation history, 비정상 종료 recovery, 진단 복사
+- [x] Windows NSIS installer와 signed updater artifact release workflow
+- [x] stash/conflict destructive action 확인과 keyboard-accessible 이름
+- [x] 실제 Git fixture, component test, 개인정보 release checklist
+
+#### M6 완료 기록 — 2026-07-25
+
+- 구현된 사용자 흐름
+  - 변경 내용과 선택적인 untracked file을 메시지와 함께 stash하고, 저장소별 stash를 적용하거나 명시적 확인 뒤 삭제
+  - conflict 파일에서 ours/theirs를 선택하거나 외부 편집기의 현재 내용을 resolved로 stage하고, merge 전체를 pre-merge 상태로 abort
+  - 원격·stash·conflict 작업을 SQLite operation history에 기록하고 이전 실행에서 끝나지 않은 작업을 시작 시 `interrupted`로 복구
+  - Operations 화면에서 최근 작업, 실패 진단 ID와 복구 상태를 확인하고 credential·파일 내용 없는 진단 요약 복사
+  - tag 또는 수동 dispatch에서 Windows current-user NSIS installer와 서명된 updater artifact를 draft Alpha release로 생성하고 clean runner install/start smoke 수행
+- 실행한 검증
+  - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` 품질 게이트
+  - 실제 temporary Git 저장소에서 tracked/untracked stash create → apply → drop과 merge conflict → theirs resolution → merge abort 통합 test
+  - SQLite running operation의 interrupted recovery test와 stash/conflict/operation center component test
+  - `pnpm lint`, `pnpm test --run`, `pnpm build` frontend 품질 게이트
+  - `pnpm --filter @git-acorn/desktop tauri build` Windows installer/update artifact gate
+- 남은 제한
+  - updater artifact는 CI secret의 private key로 서명한다. 안정적인 공개 release endpoint가 정해지기 전까지 in-app 자동 update discovery는 제공하지 않는다.
+  - conflict 편집은 외부 editor를 사용하며 GitAcorn 내장 three-way editor는 Alpha 이후 범위다.
+  - Windows clean VM 설치·업데이트 회귀는 tag release workflow의 필수 gate이며 로컬 개발 빌드가 이를 대체하지 않는다.
+- 다음 시작 지점
+  - Alpha P0/P1 triage와 Windows scaling/accessibility 회귀를 수행한 뒤 macOS packaging, signing, notarization을 시작한다.
+
 ## 17. 아키텍처 결정 기록(ADR) 목록
 
 구현 전에 다음 결정을 짧은 ADR로 고정한다.

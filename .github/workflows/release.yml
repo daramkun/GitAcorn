@@ -1,0 +1,80 @@
+name: Windows Alpha release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-alpha:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Prepare updater verification config
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+        run: |
+          if (-not $env:TAURI_SIGNING_PUBLIC_KEY) { throw "TAURI_SIGNING_PUBLIC_KEY is required" }
+          $config = @{
+            bundle = @{ createUpdaterArtifacts = $true }
+            plugins = @{
+              updater = @{
+                pubkey = $env:TAURI_SIGNING_PUBLIC_KEY
+                endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
+                windows = @{ installMode = "passive" }
+              }
+            }
+          }
+          $config | ConvertTo-Json -Depth 8 | Set-Content apps/desktop/src-tauri/tauri.release.conf.json
+
+      - name: Build signed installer and updater artifacts
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: GitAcorn v__VERSION__ Alpha
+          releaseBody: See docs/alpha-release.md for validation and known limitations.
+          releaseDraft: true
+          prerelease: true
+          includeUpdaterJson: true
+          args: --config src-tauri/tauri.release.conf.json
+
+      - name: Smoke-test current-user installer
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced" }
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
+          $installed = Join-Path $env:LOCALAPPDATA "GitAcorn/git-acorn-desktop.exe"
+          if (-not (Test-Path $installed)) { throw "Installed executable was not found at $installed" }
+          $app = Start-Process -FilePath $installed -PassThru
+          Start-Sleep -Seconds 5
+          if ($app.HasExited) { throw "Installed application exited during smoke test" }
+          Stop-Process -Id $app.Id
