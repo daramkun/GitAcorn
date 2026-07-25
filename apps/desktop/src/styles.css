@@ -641,9 +641,18 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.7;
   color: var(--muted);
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 2px 4px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.tag-item-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
 }
 
 .remote-tag-badge {

@@ -421,6 +421,78 @@ export function App() {
     );
   }
 
+  const handleSelectReference = async (
+    refName: string,
+    kind?: "localBranch" | "remoteBranch" | "tag",
+    directOid?: string,
+  ) => {
+    if (!activeTab) return;
+    const repoId = activeTab.repoId;
+
+    let targetOid = directOid;
+    let targetRefName = refName;
+
+    let refs = referencesMap[repoId];
+    if (!refs || refs.length === 0) {
+      try {
+        refs = await getReferences(repoId);
+        setReferencesMap((prev) => ({ ...prev, [repoId]: refs }));
+      } catch {
+        refs = [];
+      }
+    }
+
+    if (refs && refs.length > 0) {
+      const match =
+        refs.find((r) => {
+          if (kind && r.kind !== kind) return false;
+          return (
+            r.shortName === refName ||
+            r.fullName === refName ||
+            r.fullName === `refs/heads/${refName}` ||
+            r.fullName === `refs/remotes/${refName}` ||
+            r.fullName === `refs/tags/${refName}`
+          );
+        }) ??
+        refs.find(
+          (r) =>
+            r.shortName === refName ||
+            r.fullName === refName ||
+            r.fullName === `refs/heads/${refName}` ||
+            r.fullName === `refs/remotes/${refName}` ||
+            r.fullName === `refs/tags/${refName}`,
+        );
+
+      if (match) {
+        targetOid = targetOid ?? match.oid;
+        targetRefName = match.fullName;
+      }
+    }
+
+    if (!targetRefName.startsWith("refs/")) {
+      if (kind === "localBranch") {
+        targetRefName = `refs/heads/${refName}`;
+      } else if (kind === "remoteBranch") {
+        targetRefName = `refs/remotes/${refName}`;
+      } else if (kind === "tag") {
+        targetRefName = `refs/tags/${refName}`;
+      }
+    }
+
+    if (
+      !targetOid &&
+      activeSnapshot?.head?.name === refName &&
+      activeSnapshot?.head?.oid
+    ) {
+      targetOid = activeSnapshot.head.oid;
+    }
+
+    updateActiveTab({
+      page: "history",
+      ...(targetOid ? { selectedCommit: targetOid } : {}),
+    });
+  };
+
   async function handleWorktreeActivate(worktreeId: string) {
     if (!activeTab || activeTab.worktreeId === worktreeId) return;
     try {
@@ -595,6 +667,7 @@ export function App() {
                   referencesList={activeTab ? referencesMap[activeTab.repoId] ?? [] : []}
                   isRemote={false}
                   onCheckout={handleBranchCheckout}
+                  onSelect={(refName) => handleSelectReference(refName, "localBranch")}
                 />
               ))}
             </SidebarGroup>
@@ -604,7 +677,12 @@ export function App() {
               initialLimit={999}
             >
               {remoteBranchTree.map((node) => (
-                <BranchTreeNodeView key={node.id} node={node} isRemote={true} />
+                <BranchTreeNodeView
+                  key={node.id}
+                  node={node}
+                  isRemote={true}
+                  onSelect={(refName) => handleSelectReference(refName, "remoteBranch")}
+                />
               ))}
             </SidebarGroup>
             <SidebarGroup
@@ -615,8 +693,25 @@ export function App() {
                 <span>{t("Local Tags")} ({activeSidebar?.tags.total ?? 0})</span>
               </div>
               {activeSidebar?.tags.items.map((tag) => (
-                <div key={tag} className="tag-item-row">
-                  <span>{tag}</span>
+                <div
+                  key={tag}
+                  className="tag-item-row tree-leaf-row"
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSelectReference(tag, "tag");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      handleSelectReference(tag, "tag");
+                    }
+                  }}
+                >
+                  <span className="branch-icon" aria-hidden="true">🏷️ </span>
+                  <span className="branch-name" title={tag}>{tag}</span>
                 </div>
               ))}
               <div className="sub-group-header">
@@ -632,8 +727,25 @@ export function App() {
                 </button>
               </div>
               {remoteTagsMap[activeTab?.repoId ?? ""]?.map((tag) => (
-                <div key={`${tag.remote}/${tag.name}`} className="tag-item-row">
-                  <span>{tag.name}</span>
+                <div
+                  key={`${tag.remote}/${tag.name}`}
+                  className="tag-item-row tree-leaf-row"
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSelectReference(tag.name, "tag", tag.oid);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      handleSelectReference(tag.name, "tag", tag.oid);
+                    }
+                  }}
+                >
+                  <span className="branch-icon" aria-hidden="true">🏷️ </span>
+                  <span className="branch-name" title={tag.name}>{tag.name}</span>
                   <small className="remote-tag-badge">{tag.remote}</small>
                 </div>
               ))}
@@ -909,6 +1021,7 @@ function BranchTreeNodeView({
   referencesList = [],
   isRemote = false,
   onCheckout,
+  onSelect,
 }: {
   node: BranchTreeNode;
   depth?: number;
@@ -916,6 +1029,7 @@ function BranchTreeNodeView({
   referencesList?: ReferenceDto[];
   isRemote?: boolean;
   onCheckout?: (branchName: string) => void;
+  onSelect?: (fullPath: string) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -934,15 +1048,27 @@ function BranchTreeNodeView({
         style={{ paddingLeft: `${depth * 14 + 6}px` }}
         onClick={(e) => {
           e.stopPropagation();
+          if (onSelect) {
+            onSelect(node.fullPath);
+          } else if (!isRemote && onCheckout && !isCurrent) {
+            onCheckout(node.fullPath);
+          }
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
           if (!isRemote && onCheckout && !isCurrent) {
             onCheckout(node.fullPath);
           }
         }}
         onKeyDown={(e) => {
-          if ((e.key === "Enter" || e.key === " ") && !isRemote && onCheckout && !isCurrent) {
+          if (e.key === "Enter" || e.key === " ") {
             e.stopPropagation();
             e.preventDefault();
-            onCheckout(node.fullPath);
+            if (onSelect) {
+              onSelect(node.fullPath);
+            } else if (!isRemote && onCheckout && !isCurrent) {
+              onCheckout(node.fullPath);
+            }
           }
         }}
       >
@@ -1009,6 +1135,7 @@ function BranchTreeNodeView({
               referencesList={referencesList}
               isRemote={isRemote}
               onCheckout={onCheckout}
+              onSelect={onSelect}
             />
           ))}
         </div>
@@ -1977,6 +2104,7 @@ function HistoryView({
   const [loading, setLoading] = useState(true);
   const [operation, setOperation] = useState<string>();
   const [branchName, setBranchName] = useState("");
+  const selectedRowRef = useRef<HTMLButtonElement | null>(null);
   const selected = commits.find((commit) => commit.oid === selectedOid) ?? commits[0];
   const graph = useMemo(
     () =>
@@ -1988,6 +2116,31 @@ function HistoryView({
     [commits, query],
   );
   const graphWidth = Math.max(44, graph.laneCount * 16 + 16);
+
+  useEffect(() => {
+    if (
+      selectedRowRef.current &&
+      typeof selectedRowRef.current.scrollIntoView === "function"
+    ) {
+      selectedRowRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    }
+  }, [selected?.oid, commits]);
+
+  useEffect(() => {
+    if (tab.selectedCommit) {
+      setSelectedOid(tab.selectedCommit);
+    }
+  }, [tab.selectedCommit]);
+
+  useEffect(() => {
+    const parsed = parseHistoryFilter(tab.historyFilter);
+    setReference(parsed.reference);
+    setQuery(parsed.query);
+    setDraftQuery(parsed.query);
+  }, [tab.historyFilter]);
 
   useEffect(() => {
     let active = true;
@@ -2005,18 +2158,20 @@ function HistoryView({
         setCommits(page.commits);
         setNextCursor(page.nextCursor);
         setReferences(refs);
-        const oid =
-          page.commits.find((commit) => commit.oid === selectedOid)?.oid ??
-          page.commits[0]?.oid;
+        const preferredOid = tab.selectedCommit || selectedOid;
+        const matchedOid = page.commits.find((commit) => commit.oid === preferredOid)?.oid;
+        const oid = matchedOid ?? preferredOid ?? page.commits[0]?.oid;
         setSelectedOid(oid);
-        if (oid && oid !== tab.selectedCommit) onPersist({ selectedCommit: oid });
+        if (!tab.selectedCommit && oid) {
+          onPersist({ selectedCommit: oid });
+        }
       })
       .catch(onError)
       .finally(() => active && setLoading(false));
     return () => {
       active = false;
     };
-  }, [snapshot.repository.id, reference, query]);
+  }, [snapshot.repository.id, reference, query, tab.selectedCommit]);
 
   async function loadMore() {
     if (!nextCursor) return;
@@ -2123,6 +2278,7 @@ function HistoryView({
               <button
                 type="button"
                 key={commit.oid}
+                ref={selected?.oid === commit.oid ? selectedRowRef : undefined}
                 className={selected?.oid === commit.oid ? "commit-row selected" : "commit-row"}
                 aria-current={selected?.oid === commit.oid ? "true" : undefined}
                 onClick={() => {

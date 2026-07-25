@@ -859,6 +859,86 @@ describe("App", () => {
     );
   });
 
+  it("navigates to History tab and selects head commit when a branch or tag in the sidebar is clicked", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 2, items: ["main", "feature/login"] },
+      remoteBranches: { total: 1, items: ["origin/dev"] },
+      tags: { total: 1, items: ["v1.0.0"] },
+      stashes: [],
+    });
+    mockedGetReferences.mockResolvedValue([
+      {
+        fullName: "refs/heads/main",
+        shortName: "main",
+        oid: "abcdef123456",
+        kind: "localBranch",
+        ahead: 0,
+        behind: 0,
+      },
+      {
+        fullName: "refs/heads/feature/login",
+        shortName: "feature/login",
+        oid: "111122223333",
+        kind: "localBranch",
+        ahead: 1,
+        behind: 0,
+      },
+      {
+        fullName: "refs/remotes/origin/dev",
+        shortName: "origin/dev",
+        oid: "444455556666",
+        kind: "remoteBranch",
+        ahead: 0,
+        behind: 0,
+      },
+      {
+        fullName: "refs/tags/v1.0.0",
+        shortName: "v1.0.0",
+        oid: "777788889999",
+        kind: "tag",
+        ahead: 0,
+        behind: 0,
+      },
+    ]);
+
+    render(<App />);
+
+    const featureBranch = await screen.findByText("login");
+    fireEvent.click(featureBranch);
+
+    await waitFor(() =>
+      expect(mockedUpdateTab).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        "history",
+        undefined,
+        "unstaged",
+        280,
+        undefined,
+        "111122223333",
+        undefined,
+      ),
+    );
+
+    const tagItem = await screen.findByText("v1.0.0");
+    fireEvent.click(tagItem);
+
+    await waitFor(() =>
+      expect(mockedUpdateTab).toHaveBeenLastCalledWith(
+        snapshot.repository.id,
+        "history",
+        undefined,
+        "unstaged",
+        280,
+        undefined,
+        "777788889999",
+        undefined,
+      ),
+    );
+  });
+
   it("builds a hierarchical tree from remote branch short names", () => {
     const tree = buildRemoteBranchTree([
       "origin/main",
