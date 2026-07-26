@@ -138,7 +138,7 @@ fn pages_history_and_manages_branches_without_implicit_checkout() {
         reference.kind == ReferenceKind::LocalBranch && reference.short_name == "feature/history"
     }));
     service
-        .checkout_branch(&repository, "feature/history")
+        .checkout_branch(&repository, "feature/history", false, false, false)
         .expect("explicit checkout");
     assert_eq!(
         String::from_utf8(fixture.git_output(["branch", "--show-current"]))
@@ -146,6 +146,184 @@ fn pages_history_and_manages_branches_without_implicit_checkout() {
             .trim(),
         "feature/history"
     );
+}
+
+#[test]
+fn renames_rebases_and_manages_tags_for_local_branches() {
+    let fixture = TestRepository::init();
+    fixture.git(["branch", "topic"]);
+    fixture.write("tracked.txt", "main change\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.git(["commit", "-m", "main change"]);
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .rename_branch(&repository, "topic", "feature/renamed", false)
+        .expect("rename local branch");
+    service
+        .create_tag(&repository, "v1.0.0", "feature/renamed")
+        .expect("create tag at branch");
+    service
+        .rebase_onto(&repository, "feature/renamed")
+        .expect("rebase current branch");
+
+    let references = service.references(&repository).expect("read references");
+    assert!(references.iter().any(|reference| {
+        reference.kind == ReferenceKind::LocalBranch && reference.short_name == "feature/renamed"
+    }));
+    assert!(references.iter().any(|reference| {
+        reference.kind == ReferenceKind::Tag && reference.short_name == "v1.0.0"
+    }));
+
+    service
+        .delete_tag(&repository, "v1.0.0")
+        .expect("delete tag");
+    service
+        .delete_branch(&repository, "feature/renamed")
+        .expect("delete merged branch");
+}
+
+#[test]
+fn optionally_renames_the_upstream_branch_with_the_local_branch() {
+    let fixture = TestRepository::init();
+    fixture.git(["branch", "topic"]);
+    let bare = tempfile::tempdir().expect("bare remote directory");
+    let initialized = Command::new("git")
+        .args(["init", "--bare"])
+        .arg(bare.path())
+        .output()
+        .expect("initialize bare remote");
+    assert!(initialized.status.success());
+    fixture.git([
+        "remote",
+        "add",
+        "origin",
+        bare.path().to_str().expect("UTF-8 remote path"),
+    ]);
+    fixture.git(["push", "--set-upstream", "origin", "topic"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    service
+        .rename_branch(&repository, "topic", "topic-renamed", true)
+        .expect("rename local and upstream branches");
+
+    let references = service.references(&repository).expect("read references");
+    let renamed = references
+        .iter()
+        .find(|reference| {
+            reference.kind == ReferenceKind::LocalBranch && reference.short_name == "topic-renamed"
+        })
+        .expect("renamed local branch");
+    assert_eq!(renamed.upstream.as_deref(), Some("origin/topic-renamed"));
+    let remote_refs = String::from_utf8(fixture.git_output(["ls-remote", "--heads", "origin"]))
+        .expect("UTF-8 remote refs");
+    assert!(remote_refs.contains("refs/heads/topic-renamed"));
+    assert!(!remote_refs.contains("refs/heads/topic\n"));
+}
+
+#[test]
+fn checkout_can_stash_and_reapply_staged_and_untracked_changes() {
+    let fixture = TestRepository::init();
+    fixture.git(["branch", "topic"]);
+    fixture.write("tracked.txt", "staged change\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.write("untracked.txt", "untracked change\n");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .checkout_branch(&repository, "topic", false, false, true)
+        .expect("checkout with automatic stash");
+
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["branch", "--show-current"]))
+            .expect("branch text")
+            .trim(),
+        "topic"
+    );
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["diff", "--cached", "--name-only"]))
+            .expect("staged paths")
+            .trim(),
+        "tracked.txt"
+    );
+    assert!(fixture.path().join("untracked.txt").is_file());
+    assert!(
+        String::from_utf8(fixture.git_output(["stash", "list"]))
+            .expect("stash list")
+            .trim()
+            .is_empty()
+    );
+}
+
+#[test]
+fn checkout_remote_branch_creates_a_tracking_local_branch() {
+    let fixture = TestRepository::init();
+    fixture.git(["branch", "topic"]);
+    let bare = tempfile::tempdir().expect("bare remote directory");
+    let initialized = Command::new("git")
+        .args(["init", "--bare"])
+        .arg(bare.path())
+        .output()
+        .expect("initialize bare remote");
+    assert!(initialized.status.success());
+    fixture.git([
+        "remote",
+        "add",
+        "origin",
+        bare.path().to_str().expect("UTF-8 remote path"),
+    ]);
+    fixture.git(["push", "--set-upstream", "origin", "topic"]);
+    fixture.git(["branch", "--delete", "topic"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    service
+        .checkout_branch(&repository, "origin/topic", true, false, false)
+        .expect("checkout remote branch");
+
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["branch", "--show-current"]))
+            .expect("branch text")
+            .trim(),
+        "topic"
+    );
+    let upstream = String::from_utf8(fixture.git_output([
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{upstream}",
+    ]))
+    .expect("upstream text");
+    assert_eq!(upstream.trim(), "origin/topic");
+}
+
+#[test]
+fn checkout_tag_enters_detached_head_at_the_tagged_commit() {
+    let fixture = TestRepository::init();
+    fixture.git(["tag", "v1.0.0"]);
+    let tagged_oid =
+        String::from_utf8(fixture.git_output(["rev-parse", "v1.0.0"])).expect("tagged oid");
+    fixture.write("tracked.txt", "newer main\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.git(["commit", "-m", "newer main"]);
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .checkout_branch(&repository, "v1.0.0", false, true, false)
+        .expect("checkout tag");
+
+    assert!(
+        String::from_utf8(fixture.git_output(["branch", "--show-current"]))
+            .expect("branch text")
+            .trim()
+            .is_empty()
+    );
+    let head_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"])).expect("head oid");
+    assert_eq!(head_oid.trim(), tagged_oid.trim());
 }
 
 #[test]

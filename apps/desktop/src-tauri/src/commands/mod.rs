@@ -455,10 +455,13 @@ pub fn branch_checkout(
     repo_id: String,
     revision: u64,
     name: String,
+    is_remote: bool,
+    is_tag: bool,
+    auto_stash: bool,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<RepositorySnapshotDto> {
     state
-        .checkout_branch(&repo_id, revision, &name)
+        .checkout_branch(&repo_id, revision, &name, is_remote, is_tag, auto_stash)
         .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
@@ -472,6 +475,61 @@ pub fn branch_delete(
 ) -> CommandResult<RepositorySnapshotDto> {
     state
         .delete_branch(&repo_id, revision, &name)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn branch_rename(
+    repo_id: String,
+    revision: u64,
+    old_name: String,
+    new_name: String,
+    rename_remote: bool,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .rename_branch(&repo_id, revision, &old_name, &new_name, rename_remote)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn branch_rebase(
+    repo_id: String,
+    revision: u64,
+    reference: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .rebase_onto(&repo_id, revision, &reference)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn tag_create(
+    repo_id: String,
+    revision: u64,
+    name: String,
+    target: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .create_tag(&repo_id, revision, &name, &target)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn tag_delete(
+    repo_id: String,
+    revision: u64,
+    name: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .delete_tag(&repo_id, revision, &name)
         .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }

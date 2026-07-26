@@ -36,7 +36,9 @@ import {
   createBranch,
   createCommit,
   createStash,
+  createTag,
   deleteBranch,
+  deleteTag,
   discardPath,
   dropStash,
   getDiff,
@@ -52,6 +54,8 @@ import {
   mergeBranch,
   normalizeAppError,
   openRepository,
+  rebaseBranch,
+  renameBranch,
   reorderSessionTabs,
   removeRemote,
   resolveConflict,
@@ -92,6 +96,20 @@ const navigation: ReadonlyArray<{ id: Page; label: string; shortcut: string }> =
 ];
 
 type MultiSelection = ReturnType<typeof useMultiSelection>;
+
+type ReferenceContextMenu =
+  | { x: number; y: number; kind: "branch"; name: string; upstream?: string }
+  | { x: number; y: number; kind: "tag"; name: string };
+
+type ReferenceEditor =
+  | { mode: "createBranch"; source: string }
+  | { mode: "renameBranch"; name: string; upstream?: string }
+  | { mode: "createTag"; target: string };
+
+type CheckoutTarget = {
+  name: string;
+  kind: "localBranch" | "remoteBranch" | "tag";
+};
 
 function useMultiSelection(items: string[], scope: string) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -308,6 +326,10 @@ export function App() {
     y: number;
     remote?: GitRemoteDto;
   }>();
+  const [referenceContextMenu, setReferenceContextMenu] =
+    useState<ReferenceContextMenu>();
+  const [referenceEditor, setReferenceEditor] = useState<ReferenceEditor>();
+  const [checkoutTarget, setCheckoutTarget] = useState<CheckoutTarget>();
   const [error, setError] = useState<AppErrorDto>();
   const [remoteOperations, setRemoteOperations] = useState<
     Record<string, OperationEventDto>
@@ -368,13 +390,23 @@ export function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (remoteEditor) setRemoteEditor(undefined);
+        else if (checkoutTarget) setCheckoutTarget(undefined);
+        else if (referenceEditor) setReferenceEditor(undefined);
+        else if (referenceContextMenu) setReferenceContextMenu(undefined);
         else if (remoteContextMenu) setRemoteContextMenu(undefined);
         else if (showSettings) setShowSettings(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [remoteContextMenu, remoteEditor, showSettings]);
+  }, [
+    referenceContextMenu,
+    referenceEditor,
+    checkoutTarget,
+    remoteContextMenu,
+    remoteEditor,
+    showSettings,
+  ]);
 
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const activeTab = tabs.find((tab) => tab.active) ?? tabs[0];
@@ -429,11 +461,11 @@ export function App() {
   );
   const tagSelection = useMultiSelection(tagSelectionItems, "tags");
 
-  const handleBranchCheckout = (branchName: string) => {
-    if (!activeSnapshot) return;
-    handleWorkspaceMutation(() =>
-      checkoutBranch(activeSnapshot.repository.id, activeSnapshot.revision, branchName),
-    );
+  const handleBranchCheckout = (branchName: string, isRemote = false) => {
+    setCheckoutTarget({
+      name: branchName,
+      kind: isRemote ? "remoteBranch" : "localBranch",
+    });
   };
 
   const handleFetchRemoteTags = (remote?: string) => {
@@ -583,15 +615,18 @@ export function App() {
   }, [activeTab?.repoId, activeTab?.snapshot]);
 
   useEffect(() => {
-    if (!remoteContextMenu) return;
-    const close = () => setRemoteContextMenu(undefined);
+    if (!remoteContextMenu && !referenceContextMenu) return;
+    const close = () => {
+      setRemoteContextMenu(undefined);
+      setReferenceContextMenu(undefined);
+    };
     window.addEventListener("click", close);
     window.addEventListener("blur", close);
     return () => {
       window.removeEventListener("click", close);
       window.removeEventListener("blur", close);
     };
-  }, [remoteContextMenu]);
+  }, [referenceContextMenu, remoteContextMenu]);
 
   useEffect(() => {
     let disposed = false;
@@ -1179,8 +1214,29 @@ export function App() {
                   selection={branchSelection}
                   selectionPrefix="local:"
                   onSelectSelectionKey={handleActivateBranchSelection}
-                  onCheckout={handleBranchCheckout}
+                  onCheckout={(branchName) =>
+                    handleBranchCheckout(branchName, false)
+                  }
                   onSelect={(refName) => handleSelectReference(refName, "localBranch")}
+                  onContextMenu={(event, refName) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const reference = (activeTab
+                      ? referencesMap[activeTab.repoId] ?? []
+                      : []
+                    ).find(
+                      (item) =>
+                        item.kind === "localBranch" &&
+                        item.shortName === refName,
+                    );
+                    setReferenceContextMenu({
+                      x: event.clientX,
+                      y: event.clientY,
+                      kind: "branch",
+                      name: refName,
+                      upstream: reference?.upstream,
+                    });
+                  }}
                 />
               ))}
             </SidebarGroup>
@@ -1220,6 +1276,9 @@ export function App() {
                   }
                   onSelectTag={(tag) =>
                     handleSelectReference(tag.name, "tag", tag.oid)
+                  }
+                  onCheckout={(branchName) =>
+                    handleBranchCheckout(branchName, true)
                   }
                   onContextMenu={(event) => {
                     event.preventDefault();
@@ -1263,6 +1322,10 @@ export function App() {
                     tagSelection.onClick(`local:${tag}`, e);
                     handleSelectReference(tag, "tag");
                   }}
+                  onDoubleClick={(event) => {
+                    event.stopPropagation();
+                    setCheckoutTarget({ name: tag, kind: "tag" });
+                  }}
                   onKeyDown={(event) => {
                     event.stopPropagation();
                     tagSelection.onKeyDown(
@@ -1271,6 +1334,16 @@ export function App() {
                       handleActivateTagSelection,
                       (index) => focusSelectionIndex(event.currentTarget, index),
                     );
+                  }}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setReferenceContextMenu({
+                      x: event.clientX,
+                      y: event.clientY,
+                      kind: "tag",
+                      name: tag,
+                    });
                   }}
                 >
                   <span className="branch-icon" aria-hidden="true">🏷️ </span>
@@ -1508,6 +1581,142 @@ export function App() {
           </div>
         </div>
       )}
+      {referenceContextMenu && activeSnapshot && (
+        <div
+          className="remote-context-menu"
+          role="menu"
+          style={{ left: referenceContextMenu.x, top: referenceContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {referenceContextMenu.kind === "branch" ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setReferenceEditor({
+                    mode: "createBranch",
+                    source: referenceContextMenu.name,
+                  });
+                  setReferenceContextMenu(undefined);
+                }}
+              >
+                {t("New branch from here")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setReferenceEditor({
+                    mode: "renameBranch",
+                    name: referenceContextMenu.name,
+                    upstream: referenceContextMenu.upstream,
+                  });
+                  setReferenceContextMenu(undefined);
+                }}
+              >
+                {t("Rename branch")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="danger-button"
+                disabled={
+                  activeSnapshot.head.kind === "branch" &&
+                  activeSnapshot.head.name === referenceContextMenu.name
+                }
+                onClick={() => {
+                  const name = referenceContextMenu.name;
+                  setReferenceContextMenu(undefined);
+                  if (
+                    window.confirm(
+                      t("Delete merged branch {branch}?", { branch: name }),
+                    )
+                  ) {
+                    void handleWorkspaceMutation(() =>
+                      deleteBranch(
+                        activeSnapshot.repository.id,
+                        activeSnapshot.revision,
+                        name,
+                      ),
+                    );
+                  }
+                }}
+              >
+                {t("Delete branch")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={
+                  activeSnapshot.head.kind !== "branch" ||
+                  activeSnapshot.head.name === referenceContextMenu.name
+                }
+                onClick={() => {
+                  const name = referenceContextMenu.name;
+                  const current =
+                    activeSnapshot.head.kind === "branch"
+                      ? (activeSnapshot.head.name ?? "HEAD")
+                      : "HEAD";
+                  setReferenceContextMenu(undefined);
+                  if (
+                    window.confirm(
+                      t("Rebase {branch} onto {target}?", {
+                        branch: current,
+                        target: name,
+                      }),
+                    )
+                  ) {
+                    void handleWorkspaceMutation(() =>
+                      rebaseBranch(
+                        activeSnapshot.repository.id,
+                        activeSnapshot.revision,
+                        name,
+                      ),
+                    );
+                  }
+                }}
+              >
+                {t("Rebase current branch onto this branch")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setReferenceEditor({
+                    mode: "createTag",
+                    target: referenceContextMenu.name,
+                  });
+                  setReferenceContextMenu(undefined);
+                }}
+              >
+                {t("Create tag here")}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              className="danger-button"
+              onClick={() => {
+                const name = referenceContextMenu.name;
+                setReferenceContextMenu(undefined);
+                if (window.confirm(t("Delete tag {tag}?", { tag: name }))) {
+                  void handleWorkspaceMutation(() =>
+                    deleteTag(
+                      activeSnapshot.repository.id,
+                      activeSnapshot.revision,
+                      name,
+                    ),
+                  );
+                }
+              }}
+            >
+              {t("Delete tag")}
+            </button>
+          )}
+        </div>
+      )}
       {remoteContextMenu && activeSnapshot && (
         <div
           className="remote-context-menu"
@@ -1608,6 +1817,61 @@ export function App() {
           }
         />
       )}
+      {referenceEditor && activeSnapshot && (
+        <ReferenceEditorDialog
+          editor={referenceEditor}
+          onClose={() => setReferenceEditor(undefined)}
+          onSave={(name, renameRemote) => {
+            if (referenceEditor.mode === "createBranch") {
+              return handleWorkspaceMutation(() =>
+                createBranch(
+                  activeSnapshot.repository.id,
+                  activeSnapshot.revision,
+                  { name, startPoint: referenceEditor.source },
+                ),
+              );
+            }
+            if (referenceEditor.mode === "renameBranch") {
+              return handleWorkspaceMutation(() =>
+                renameBranch(
+                  activeSnapshot.repository.id,
+                  activeSnapshot.revision,
+                  referenceEditor.name,
+                  name,
+                  renameRemote,
+                ),
+              );
+            }
+            return handleWorkspaceMutation(() =>
+              createTag(
+                activeSnapshot.repository.id,
+                activeSnapshot.revision,
+                name,
+                referenceEditor.target,
+              ),
+            );
+          }}
+        />
+      )}
+      {checkoutTarget && activeSnapshot && (
+        <CheckoutDialog
+          target={checkoutTarget}
+          hasChanges={activeSnapshot.changes.length > 0}
+          onClose={() => setCheckoutTarget(undefined)}
+          onCheckout={(autoStash) =>
+            handleWorkspaceMutation(() =>
+              checkoutBranch(
+                activeSnapshot.repository.id,
+                activeSnapshot.revision,
+                checkoutTarget.name,
+                checkoutTarget.kind === "remoteBranch",
+                checkoutTarget.kind === "tag",
+                autoStash,
+              ),
+            )
+          }
+        />
+      )}
     </div>
   );
 }
@@ -1701,6 +1965,202 @@ function RemoteEditor({
                   : mode === "edit"
                     ? t("Save remote")
                     : t("Add remote")}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReferenceEditorDialog({
+  editor,
+  onClose,
+  onSave,
+}: {
+  editor: ReferenceEditor;
+  onClose: () => void;
+  onSave: (name: string, renameRemote: boolean) => Promise<void>;
+}) {
+  const [name, setName] = useState(
+    editor.mode === "renameBranch" ? editor.name : "",
+  );
+  const [renameRemote, setRenameRemote] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const title =
+    editor.mode === "createBranch"
+      ? t("Create branch")
+      : editor.mode === "renameBranch"
+        ? t("Rename branch")
+        : t("Create tag");
+  const fieldLabel =
+    editor.mode === "createTag" ? t("Tag name") : t("Branch name");
+
+  return (
+    <div className="modal-overlay" onClick={onClose} role="presentation">
+      <div
+        className="settings-modal remote-manager-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reference-editor-title"
+      >
+        <div className="settings-modal-header">
+          <h2 id="reference-editor-title">{title}</h2>
+          <button
+            className="settings-close-btn"
+            type="button"
+            aria-label={t("Close reference editor")}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="remote-manager-body">
+          <form
+            className="remote-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const nextName = name.trim();
+              if (!nextName) return;
+              setBusy(true);
+              void onSave(nextName, renameRemote).finally(() => {
+                setBusy(false);
+                onClose();
+              });
+            }}
+          >
+            <label>
+              <span>{fieldLabel}</span>
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                disabled={busy}
+                autoFocus
+              />
+            </label>
+            {editor.mode === "createBranch" && (
+              <small>
+                {t("The new branch will start at {branch}.", {
+                  branch: editor.source,
+                })}
+              </small>
+            )}
+            {editor.mode === "createTag" && (
+              <small>
+                {t("The tag will point to {branch}.", {
+                  branch: editor.target,
+                })}
+              </small>
+            )}
+            {editor.mode === "renameBranch" && editor.upstream && (
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={renameRemote}
+                  onChange={(event) => setRenameRemote(event.target.checked)}
+                  disabled={busy}
+                />
+                <span>
+                  {t("Also rename upstream branch {upstream}", {
+                    upstream: editor.upstream,
+                  })}
+                </span>
+              </label>
+            )}
+            <div className="remote-form-actions">
+              <button type="button" disabled={busy} onClick={onClose}>
+                {t("Cancel")}
+              </button>
+              <button type="submit" disabled={busy || !name.trim()}>
+                {busy ? t("Saving…") : title}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CheckoutDialog({
+  target,
+  hasChanges,
+  onClose,
+  onCheckout,
+}: {
+  target: CheckoutTarget;
+  hasChanges: boolean;
+  onClose: () => void;
+  onCheckout: (autoStash: boolean) => Promise<void>;
+}) {
+  const [autoStash, setAutoStash] = useState(hasChanges);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="modal-overlay" onClick={onClose} role="presentation">
+      <div
+        className="settings-modal remote-manager-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="checkout-dialog-title"
+      >
+        <div className="settings-modal-header">
+          <h2 id="checkout-dialog-title">{t("Checkout branch")}</h2>
+          <button
+            className="settings-close-btn"
+            type="button"
+            aria-label={t("Close checkout dialog")}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="remote-manager-body">
+          <form
+            className="remote-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setBusy(true);
+              void onCheckout(autoStash).finally(() => {
+                setBusy(false);
+                onClose();
+              });
+            }}
+          >
+            <p>
+              {target.kind === "remoteBranch"
+                ? t("Check out remote branch {branch} as a tracking branch?", {
+                    branch: target.name,
+                  })
+                : target.kind === "tag"
+                  ? t("Check out tag {tag} in detached HEAD mode?", {
+                      tag: target.name,
+                    })
+                  : t("Check out branch {branch}?", { branch: target.name })}
+            </p>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={autoStash}
+                onChange={(event) => setAutoStash(event.target.checked)}
+                disabled={busy}
+              />
+              <span>{t("Automatically stash and reapply local changes")}</span>
+            </label>
+            <small>
+              {t(
+                "Includes untracked files and restores staged changes after checkout.",
+              )}
+            </small>
+            <div className="remote-form-actions">
+              <button type="button" disabled={busy} onClick={onClose}>
+                {t("Cancel")}
+              </button>
+              <button type="submit" disabled={busy}>
+                {busy ? t("Checking out…") : t("Checkout")}
               </button>
             </div>
           </form>
@@ -1826,6 +2286,7 @@ function BranchTreeNodeView({
   onSelectSelectionKey,
   onCheckout,
   onSelect,
+  onContextMenu,
 }: {
   node: BranchTreeNode;
   depth?: number;
@@ -1838,6 +2299,10 @@ function BranchTreeNodeView({
   onSelectSelectionKey?: (selectionKey: string) => void;
   onCheckout?: (branchName: string) => void;
   onSelect?: (fullPath: string) => void;
+  onContextMenu?: (
+    event: ReactMouseEvent<HTMLElement>,
+    branchName: string,
+  ) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -1885,10 +2350,11 @@ function BranchTreeNodeView({
         }}
         onDoubleClick={(e) => {
           e.stopPropagation();
-          if (!isRemote && onCheckout && !isCurrent) {
+          if (onCheckout) {
             onCheckout(referencePath);
           }
         }}
+        onContextMenu={(event) => onContextMenu?.(event, referencePath)}
         onKeyDown={(event) => {
           event.stopPropagation();
           const activate = (item = selectionKey) => {
@@ -1986,6 +2452,7 @@ function BranchTreeNodeView({
               onSelectSelectionKey={onSelectSelectionKey}
               onCheckout={onCheckout}
               onSelect={onSelect}
+              onContextMenu={onContextMenu}
             />
           ))}
         </div>
@@ -2005,6 +2472,7 @@ function RemoteReferenceNode({
   onTagSelection,
   onSelectBranch,
   onSelectTag,
+  onCheckout,
   onContextMenu,
 }: {
   name: string;
@@ -2017,6 +2485,7 @@ function RemoteReferenceNode({
   onTagSelection: (selectionKey: string) => void;
   onSelectBranch: (refName: string) => void;
   onSelectTag: (tag: RemoteTagDto) => void;
+  onCheckout: (branchName: string) => void;
   onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -2061,6 +2530,7 @@ function RemoteReferenceNode({
               pathPrefix={name}
               onSelectSelectionKey={onBranchSelection}
               onSelect={onSelectBranch}
+              onCheckout={onCheckout}
             />
           ))}
           {tags.map((tag) => {

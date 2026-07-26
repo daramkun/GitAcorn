@@ -350,9 +350,12 @@ impl ApplicationState {
         repo_id: &str,
         revision: u64,
         name: &str,
+        is_remote: bool,
+        is_tag: bool,
+        auto_stash: bool,
     ) -> Result<RepositorySnapshot, AppError> {
         self.mutate(repo_id, revision, |service, repository| {
-            service.checkout_branch(repository, name)
+            service.checkout_branch(repository, name, is_remote, is_tag, auto_stash)
         })
     }
 
@@ -364,6 +367,53 @@ impl ApplicationState {
     ) -> Result<RepositorySnapshot, AppError> {
         self.mutate(repo_id, revision, |service, repository| {
             service.delete_branch(repository, name)
+        })
+    }
+
+    pub fn rename_branch(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        old_name: &str,
+        new_name: &str,
+        rename_remote: bool,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.rename_branch(repository, old_name, new_name, rename_remote)
+        })
+    }
+
+    pub fn rebase_onto(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        reference: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.rebase_onto(repository, reference)
+        })
+    }
+
+    pub fn create_tag(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        name: &str,
+        target: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.create_tag(repository, name, target)
+        })
+    }
+
+    pub fn delete_tag(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        name: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.delete_tag(repository, name)
         })
     }
 

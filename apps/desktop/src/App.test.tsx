@@ -20,6 +20,7 @@ import {
   createCommit,
   createStash,
   deleteBranch,
+  deleteTag,
   discardPath,
   getDiff,
   getHistoryPage,
@@ -32,6 +33,7 @@ import {
   listenForRepositoryChanges,
   mergeBranch,
   openRepository,
+  renameBranch,
   reorderSessionTabs,
   removeRemote,
   resolveConflict,
@@ -69,7 +71,9 @@ vi.mock("./repository", () => ({
   createBranch: vi.fn(),
   createCommit: vi.fn(),
   createStash: vi.fn(),
+  createTag: vi.fn(),
   deleteBranch: vi.fn(),
+  deleteTag: vi.fn(),
   discardPath: vi.fn(),
   dropStash: vi.fn(),
   getDiff: vi.fn(),
@@ -90,6 +94,8 @@ vi.mock("./repository", () => ({
   unstagePaths: vi.fn(),
   listenForRepositoryChanges: vi.fn(),
   mergeBranch: vi.fn(),
+  rebaseBranch: vi.fn(),
+  renameBranch: vi.fn(),
   normalizeAppError: (error: unknown) => {
     const value = error as { code?: string; message?: string; details?: string };
     return {
@@ -133,6 +139,8 @@ const mockedDiscardPath = vi.mocked(discardPath);
 const mockedCreateStash = vi.mocked(createStash);
 const mockedCreateCommit = vi.mocked(createCommit);
 const mockedDeleteBranch = vi.mocked(deleteBranch);
+const mockedRenameBranch = vi.mocked(renameBranch);
+const mockedDeleteTag = vi.mocked(deleteTag);
 const mockedMergeBranch = vi.mocked(mergeBranch);
 const mockedResolveConflict = vi.mocked(resolveConflict);
 const mockedGetOperationHistory = vi.mocked(getOperationHistory);
@@ -289,6 +297,8 @@ describe("App", () => {
     mockedCreateBranch.mockResolvedValue(snapshot);
     mockedCheckoutBranch.mockResolvedValue(snapshot);
     mockedDeleteBranch.mockResolvedValue(snapshot);
+    mockedRenameBranch.mockResolvedValue(snapshot);
+    mockedDeleteTag.mockResolvedValue(snapshot);
     mockedMergeBranch.mockResolvedValue(snapshot);
     mockedCreateStash.mockResolvedValue(snapshot);
     mockedResolveConflict.mockResolvedValue(snapshot);
@@ -1023,6 +1033,193 @@ describe("App", () => {
     expect(v1).toHaveAttribute("aria-pressed", "true");
     expect(v2).toHaveAttribute("aria-pressed", "true");
     expect(mockedCheckoutBranch).not.toHaveBeenCalled();
+  });
+
+  it("opens a checkout dialog on local branch double-click and auto-stashes changes", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 2, items: ["main", "topic"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const topic = await screen.findByRole("button", { name: "Branch topic" });
+    fireEvent.doubleClick(topic);
+    expect(
+      screen.getByRole("dialog", { name: "Checkout branch" }),
+    ).toBeInTheDocument();
+    const autoStash = screen.getByRole("checkbox", {
+      name: "Automatically stash and reapply local changes",
+    });
+    expect(autoStash).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Checkout" }));
+
+    expect(mockedCheckoutBranch).toHaveBeenCalledWith(
+      snapshot.repository.id,
+      snapshot.revision,
+      "topic",
+      false,
+      false,
+      true,
+    );
+  });
+
+  it("opens a checkout dialog for remote branches and can skip auto-stash", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 1, items: ["main"] },
+      remoteBranches: { total: 1, items: ["origin/dev"] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const remote = await screen.findByRole("button", {
+      name: "Branch origin/dev",
+    });
+    fireEvent.doubleClick(remote);
+    expect(
+      screen.getByText(
+        "Check out remote branch origin/dev as a tracking branch?",
+      ),
+    ).toBeInTheDocument();
+    const autoStash = screen.getByRole("checkbox", {
+      name: "Automatically stash and reapply local changes",
+    });
+    fireEvent.click(autoStash);
+    expect(autoStash).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Checkout" }));
+
+    expect(mockedCheckoutBranch).toHaveBeenCalledWith(
+      snapshot.repository.id,
+      snapshot.revision,
+      "origin/dev",
+      true,
+      false,
+      false,
+    );
+  });
+
+  it("opens a detached checkout dialog on local tag double-click", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 1, items: ["main"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 1, items: ["v1.0.0"] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const tag = await screen.findByRole("button", { name: /v1\.0\.0/ });
+    fireEvent.doubleClick(tag);
+    expect(
+      screen.getByText(
+        "Check out tag v1.0.0 in detached HEAD mode?",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Checkout" }));
+
+    expect(mockedCheckoutBranch).toHaveBeenCalledWith(
+      snapshot.repository.id,
+      snapshot.revision,
+      "v1.0.0",
+      false,
+      true,
+      true,
+    );
+  });
+
+  it("shows branch actions and renames an upstream branch from its context menu", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 2, items: ["main", "topic"] },
+      remoteBranches: { total: 1, items: ["origin/topic"] },
+      tags: { total: 1, items: ["v1.0.0"] },
+      stashes: [],
+    });
+    mockedGetReferences.mockResolvedValue([
+      {
+        fullName: "refs/heads/main",
+        shortName: "main",
+        oid: "abcdef123456",
+        kind: "localBranch",
+        ahead: 0,
+        behind: 0,
+      },
+      {
+        fullName: "refs/heads/topic",
+        shortName: "topic",
+        oid: "123456abcdef",
+        kind: "localBranch",
+        upstream: "origin/topic",
+        ahead: 0,
+        behind: 0,
+      },
+    ]);
+    render(<App />);
+
+    const topic = await screen.findByRole("button", { name: "Branch topic" });
+    fireEvent.contextMenu(topic, { clientX: 100, clientY: 140 });
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual([
+      "New branch from here",
+      "Rename branch",
+      "Delete branch",
+      "Rebase current branch onto this branch",
+      "Create tag here",
+    ]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename branch" }));
+    fireEvent.change(screen.getByLabelText("Branch name"), {
+      target: { value: "topic-renamed" },
+    });
+    fireEvent.click(
+      screen.getByLabelText("Also rename upstream branch origin/topic"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Rename branch" }));
+    await waitFor(() =>
+      expect(mockedRenameBranch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "topic",
+        "topic-renamed",
+        true,
+      ),
+    );
+  });
+
+  it("deletes a local tag from its right-click context menu", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 1, items: ["main"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 1, items: ["v1.0.0"] },
+      stashes: [],
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+
+    const tag = await screen.findByRole("button", { name: /v1\.0\.0/ });
+    fireEvent.contextMenu(tag, { clientX: 100, clientY: 140 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete tag" }));
+    expect(mockedDeleteTag).toHaveBeenCalledWith(
+      snapshot.repository.id,
+      snapshot.revision,
+      "v1.0.0",
+    );
+    confirm.mockRestore();
   });
 
   it("adds, edits, and removes remotes from right-click context menus", async () => {

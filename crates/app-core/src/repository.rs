@@ -469,8 +469,102 @@ impl RepositoryService {
         &self,
         repository: &RepositoryDescriptor,
         name: &str,
+        is_remote: bool,
+        is_tag: bool,
+        auto_stash: bool,
     ) -> Result<(), AppError> {
-        self.git_unit(repository, ["switch", name])
+        let references = self.references(repository)?;
+        let reference_kind = if is_tag {
+            ReferenceKind::Tag
+        } else if is_remote {
+            ReferenceKind::RemoteBranch
+        } else {
+            ReferenceKind::LocalBranch
+        };
+        if !references
+            .iter()
+            .any(|reference| reference.kind == reference_kind && reference.short_name == name)
+        {
+            return Err(AppError::InvalidRequest(format!(
+                "Branch {name} does not exist"
+            )));
+        }
+
+        let stash_before = auto_stash
+            .then(|| self.git_text(repository, ["stash", "list", "-1", "--format=%H"]))
+            .transpose()?;
+        if auto_stash {
+            self.create_stash(
+                repository,
+                &crate::StashRequest {
+                    message: "GitAcorn automatic checkout stash".to_owned(),
+                    include_untracked: true,
+                },
+            )?;
+        }
+        let stash_after = auto_stash
+            .then(|| self.git_text(repository, ["stash", "list", "-1", "--format=%H"]))
+            .transpose()?;
+        let created_stash =
+            auto_stash && stash_before != stash_after && stash_after.as_deref() != Some("");
+
+        let checkout_result = if is_tag {
+            self.git_unit(repository, ["switch", "--detach", name])
+        } else if is_remote {
+            self.checkout_remote_branch(repository, name, &references)
+        } else {
+            self.git_unit(repository, ["switch", name])
+        };
+        if let Err(error) = checkout_result {
+            if created_stash {
+                let _ = self.apply_stash(repository, "stash@{0}");
+                if self
+                    .git_text(repository, ["diff", "--name-only", "--diff-filter=U"])
+                    .is_ok_and(|output| output.trim().is_empty())
+                {
+                    let _ = self.drop_stash(repository, "stash@{0}");
+                }
+            }
+            return Err(error);
+        }
+
+        if created_stash {
+            self.apply_stash(repository, "stash@{0}")?;
+            if self
+                .git_text(repository, ["diff", "--name-only", "--diff-filter=U"])?
+                .trim()
+                .is_empty()
+            {
+                self.drop_stash(repository, "stash@{0}")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn checkout_remote_branch(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+        references: &[GitReference],
+    ) -> Result<(), AppError> {
+        if let Some(local) = references.iter().find(|reference| {
+            reference.kind == ReferenceKind::LocalBranch
+                && reference.upstream.as_deref() == Some(name)
+        }) {
+            return self.git_unit(repository, ["switch", &local.short_name]);
+        }
+        if self
+            .remote_names(repository)?
+            .into_iter()
+            .filter(|remote| name.starts_with(&format!("{remote}/")))
+            .max_by_key(String::len)
+            .is_none()
+        {
+            return Err(AppError::InvalidRequest(format!(
+                "Remote branch {name} is invalid"
+            )));
+        }
+        self.git_unit(repository, ["switch", "--track", name])
     }
 
     pub fn delete_branch(
@@ -479,6 +573,126 @@ impl RepositoryService {
         name: &str,
     ) -> Result<(), AppError> {
         self.git_unit(repository, ["branch", "--delete", name])
+    }
+
+    pub fn rename_branch(
+        &self,
+        repository: &RepositoryDescriptor,
+        old_name: &str,
+        new_name: &str,
+        rename_remote: bool,
+    ) -> Result<(), AppError> {
+        let old_name = self.validate_branch_name(repository, old_name)?;
+        let new_name = self.validate_branch_name(repository, new_name)?;
+        let upstream = if rename_remote {
+            self.references(repository)?
+                .into_iter()
+                .find(|reference| {
+                    reference.kind == ReferenceKind::LocalBranch && reference.short_name == old_name
+                })
+                .and_then(|reference| reference.upstream)
+        } else {
+            None
+        };
+
+        self.git_unit(
+            repository,
+            [
+                OsString::from("branch"),
+                OsString::from("--move"),
+                OsString::from(&old_name),
+                OsString::from(&new_name),
+            ],
+        )?;
+
+        let Some(upstream) = upstream else {
+            return Ok(());
+        };
+        let Some(remote) = self
+            .remote_names(repository)?
+            .into_iter()
+            .filter(|remote| upstream.starts_with(&format!("{remote}/")))
+            .max_by_key(String::len)
+        else {
+            return Ok(());
+        };
+        let remote_branch = upstream
+            .strip_prefix(&format!("{remote}/"))
+            .expect("remote prefix checked above");
+        let push_result = self.git_unit(
+            repository,
+            [
+                OsString::from("push"),
+                OsString::from("--atomic"),
+                OsString::from(&remote),
+                OsString::from(format!("refs/heads/{new_name}:refs/heads/{new_name}")),
+                OsString::from(format!(":refs/heads/{remote_branch}")),
+            ],
+        );
+        if let Err(error) = push_result {
+            let _ = self.git_unit(
+                repository,
+                [
+                    OsString::from("branch"),
+                    OsString::from("--move"),
+                    OsString::from(&new_name),
+                    OsString::from(&old_name),
+                ],
+            );
+            return Err(error);
+        }
+        self.git_unit(
+            repository,
+            [
+                OsString::from("branch"),
+                OsString::from("--set-upstream-to"),
+                OsString::from(format!("{remote}/{new_name}")),
+                OsString::from(&new_name),
+            ],
+        )
+    }
+
+    pub fn rebase_onto(
+        &self,
+        repository: &RepositoryDescriptor,
+        reference: &str,
+    ) -> Result<(), AppError> {
+        let reference = self.validate_branch_name(repository, reference)?;
+        let mut request = GitRequest::new([
+            OsString::from("rebase"),
+            OsString::from("--"),
+            OsString::from(reference),
+        ]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(120);
+        let output = self.run(request)?;
+        if output.exit_code == 0
+            || repository.git_dir.join("rebase-merge").is_dir()
+            || repository.git_dir.join("rebase-apply").is_dir()
+        {
+            Ok(())
+        } else {
+            ensure_success(output).map(|_| ())
+        }
+    }
+
+    pub fn create_tag(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+        target: &str,
+    ) -> Result<(), AppError> {
+        let name = self.validate_tag_name(repository, name)?;
+        self.git_unit(repository, ["tag", &name, target])
+    }
+
+    pub fn delete_tag(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+    ) -> Result<(), AppError> {
+        let name = self.validate_tag_name(repository, name)?;
+        self.git_unit(repository, ["tag", "--delete", &name])
     }
 
     pub fn merge_reference(
@@ -509,6 +723,27 @@ impl RepositoryService {
             ));
         }
         self.git_unit(repository, ["check-ref-format", "--branch", name])?;
+        Ok(name.to_owned())
+    }
+
+    fn validate_tag_name(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+    ) -> Result<String, AppError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "Tag name cannot be empty".to_owned(),
+            ));
+        }
+        self.git_unit(
+            repository,
+            [
+                OsString::from("check-ref-format"),
+                OsString::from(format!("refs/tags/{name}")),
+            ],
+        )?;
         Ok(name.to_owned())
     }
 

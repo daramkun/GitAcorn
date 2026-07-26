@@ -346,8 +346,18 @@ export function checkoutBranch(
   repoId: string,
   revision: number,
   name: string,
+  isRemote = false,
+  isTag = false,
+  autoStash = false,
 ): Promise<RepositorySnapshotDto> {
-  return invoke<RepositorySnapshotDto>("branch_checkout", { repoId, revision, name });
+  return invoke<RepositorySnapshotDto>("branch_checkout", {
+    repoId,
+    revision,
+    name,
+    isRemote,
+    isTag,
+    autoStash,
+  });
 }
 
 export function deleteBranch(
@@ -356,6 +366,56 @@ export function deleteBranch(
   name: string,
 ): Promise<RepositorySnapshotDto> {
   return invoke<RepositorySnapshotDto>("branch_delete", { repoId, revision, name });
+}
+
+export function renameBranch(
+  repoId: string,
+  revision: number,
+  oldName: string,
+  newName: string,
+  renameRemote: boolean,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("branch_rename", {
+    repoId,
+    revision,
+    oldName,
+    newName,
+    renameRemote,
+  });
+}
+
+export function rebaseBranch(
+  repoId: string,
+  revision: number,
+  reference: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("branch_rebase", {
+    repoId,
+    revision,
+    reference,
+  });
+}
+
+export function createTag(
+  repoId: string,
+  revision: number,
+  name: string,
+  target: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("tag_create", {
+    repoId,
+    revision,
+    name,
+    target,
+  });
+}
+
+export function deleteTag(
+  repoId: string,
+  revision: number,
+  name: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("tag_delete", { repoId, revision, name });
 }
 
 export function mergeBranch(

@@ -791,6 +791,15 @@ button:disabled {
   background: var(--surface-soft);
 }
 
+.remote-context-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.remote-context-menu button:disabled:hover {
+  background: transparent;
+}
+
 .remote-context-menu .danger-button {
   color: var(--danger);
 }
@@ -2266,6 +2275,22 @@ button:disabled {
   color: var(--text);
   font: inherit;
   box-sizing: border-box;
+}
+
+.remote-form small {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.remote-form .checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.remote-form .checkbox-row input {
+  width: auto;
+  margin: 0;
 }
 
 .remote-form-actions {
