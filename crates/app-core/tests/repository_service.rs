@@ -650,4 +650,41 @@ fn reads_configured_remotes_list() {
 
     let remotes = service.remotes(&repository).expect("read remotes");
     assert!(remotes.is_empty());
+
+    service
+        .add_remote(&repository, "origin", "https://example.com/acorn.git")
+        .expect("add remote");
+    assert_eq!(
+        service.remotes(&repository).expect("read added remote"),
+        [app_core::GitRemote {
+            name: "origin".to_owned(),
+            url: "https://example.com/acorn.git".to_owned(),
+        }]
+    );
+
+    service
+        .update_remote(
+            &repository,
+            "origin",
+            "upstream",
+            "ssh://git@example.com/acorn.git",
+        )
+        .expect("update remote");
+    assert_eq!(
+        service.remotes(&repository).expect("read updated remote"),
+        [app_core::GitRemote {
+            name: "upstream".to_owned(),
+            url: "ssh://git@example.com/acorn.git".to_owned(),
+        }]
+    );
+
+    service
+        .remove_remote(&repository, "upstream")
+        .expect("remove remote");
+    assert!(
+        service
+            .remotes(&repository)
+            .expect("read remotes")
+            .is_empty()
+    );
 }

@@ -10,6 +10,7 @@ import {
 } from "./windowControls";
 import {
   applyPatchSelection,
+  addRemote,
   activateSessionTab,
   activateWorktree,
   checkoutBranch,
@@ -23,6 +24,7 @@ import {
   getDiff,
   getHistoryPage,
   getOperationHistory,
+  getRemotes,
   getReferences,
   getRemoteTags,
   getRepositorySidebar,
@@ -31,11 +33,13 @@ import {
   mergeBranch,
   openRepository,
   reorderSessionTabs,
+  removeRemote,
   resolveConflict,
   restoreSession,
   stagePaths,
   unstagePaths,
   updateSessionTab,
+  updateRemote,
   type RepositorySnapshotDto,
   type SessionDto,
 } from "./repository";
@@ -52,6 +56,7 @@ vi.mock("./windowControls", () => ({
 
 vi.mock("./repository", () => ({
   applyPatchSelection: vi.fn(),
+  addRemote: vi.fn(),
   abortMerge: vi.fn(),
   chooseRepositoryDirectory: vi.fn(),
   openRepository: vi.fn(),
@@ -71,12 +76,15 @@ vi.mock("./repository", () => ({
   getHistoryPage: vi.fn(),
   getDiagnostics: vi.fn(),
   getOperationHistory: vi.fn(),
+  getRemotes: vi.fn(),
   getReferences: vi.fn(),
   getRemoteTags: vi.fn(),
   getRepositorySidebar: vi.fn(),
   reorderSessionTabs: vi.fn(),
+  removeRemote: vi.fn(),
   resolveConflict: vi.fn(),
   updateSessionTab: vi.fn(),
+  updateRemote: vi.fn(),
   getRepositorySnapshot: vi.fn(),
   stagePaths: vi.fn(),
   unstagePaths: vi.fn(),
@@ -114,6 +122,10 @@ const mockedGetDiff = vi.mocked(getDiff);
 const mockedGetHistory = vi.mocked(getHistoryPage);
 const mockedGetReferences = vi.mocked(getReferences);
 const mockedGetRemoteTags = vi.mocked(getRemoteTags);
+const mockedGetRemotes = vi.mocked(getRemotes);
+const mockedAddRemote = vi.mocked(addRemote);
+const mockedUpdateRemote = vi.mocked(updateRemote);
+const mockedRemoveRemote = vi.mocked(removeRemote);
 const mockedStagePaths = vi.mocked(stagePaths);
 const mockedUnstagePaths = vi.mocked(unstagePaths);
 const mockedApplyPatch = vi.mocked(applyPatchSelection);
@@ -265,6 +277,10 @@ describe("App", () => {
       },
     ]);
     mockedGetRemoteTags.mockResolvedValue([]);
+    mockedGetRemotes.mockResolvedValue([]);
+    mockedAddRemote.mockResolvedValue({ ...snapshot, revision: 2 });
+    mockedUpdateRemote.mockResolvedValue({ ...snapshot, revision: 2 });
+    mockedRemoveRemote.mockResolvedValue({ ...snapshot, revision: 2 });
     mockedStagePaths.mockResolvedValue(snapshot);
     mockedUnstagePaths.mockResolvedValue(snapshot);
     mockedApplyPatch.mockResolvedValue(snapshot);
@@ -1007,6 +1023,119 @@ describe("App", () => {
     expect(v1).toHaveAttribute("aria-pressed", "true");
     expect(v2).toHaveAttribute("aria-pressed", "true");
     expect(mockedCheckoutBranch).not.toHaveBeenCalled();
+  });
+
+  it("adds, edits, and removes remotes from right-click context menus", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetRemotes.mockResolvedValue([
+      { name: "origin", url: "https://example.com/old.git" },
+    ]);
+    render(<App />);
+
+    const origin = await screen.findByRole("button", { name: "Remote origin" });
+    fireEvent.contextMenu(origin, { clientX: 120, clientY: 160 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit remote" }));
+    fireEvent.change(screen.getByLabelText("Remote name"), {
+      target: { value: "upstream" },
+    });
+    fireEvent.change(screen.getByLabelText("Remote URL"), {
+      target: { value: "https://example.com/new.git" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save remote" }));
+    await waitFor(() =>
+      expect(mockedUpdateRemote).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "origin",
+        { name: "upstream", url: "https://example.com/new.git" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Edit remote" })).not.toBeInTheDocument(),
+    );
+
+    const remoteHeader = origin
+      .closest(".sidebar-read-group")
+      ?.querySelector<HTMLElement>(".sidebar-group");
+    expect(remoteHeader).not.toBeNull();
+    fireEvent.contextMenu(remoteHeader!, { clientX: 80, clientY: 120 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add remote" }));
+    fireEvent.change(screen.getByLabelText("Remote name"), {
+      target: { value: "mirror" },
+    });
+    fireEvent.change(screen.getByLabelText("Remote URL"), {
+      target: { value: "ssh://git@example.com/mirror.git" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add remote" }));
+    await waitFor(() =>
+      expect(mockedAddRemote).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        2,
+        { name: "mirror", url: "ssh://git@example.com/mirror.git" },
+      ),
+    );
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Remote origin" }),
+      { clientX: 120, clientY: 160 },
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove remote" }));
+    await waitFor(() =>
+      expect(mockedRemoveRemote).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        2,
+        "origin",
+      ),
+    );
+    confirm.mockRestore();
+  });
+
+  it("groups remote branches and remote tags under Remote", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 1, items: ["main"] },
+      remoteBranches: { total: 1, items: ["origin/dev"] },
+      tags: { total: 1, items: ["v1.0.0"] },
+      stashes: [],
+    });
+    mockedGetRemoteTags.mockResolvedValue([
+      { remote: "origin", name: "v9.0.0", oid: "999999999999" },
+    ]);
+    render(<App />);
+
+    const remoteBranch = await screen.findByRole("button", {
+      name: "Branch origin/dev",
+    });
+    const remoteGroup = remoteBranch.closest(".sidebar-read-group");
+    const remoteNode = remoteBranch.closest(".remote-reference-node");
+    expect(remoteGroup).not.toBeNull();
+    expect(remoteNode).not.toBeNull();
+    expect(remoteGroup?.querySelector(".sidebar-group")).toHaveTextContent("Remote");
+    expect(screen.queryByText(/Remote Branches/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Remote Tags/)).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Remote origin" }),
+      { clientX: 120, clientY: 160 },
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Refresh remote tags" }),
+    );
+    const remoteTag = await screen.findByRole("button", { name: "Tag v9.0.0" });
+    expect(remoteNode).toContainElement(remoteTag);
+    expect(mockedGetRemoteTags).toHaveBeenCalledWith(
+      snapshot.repository.id,
+      "origin",
+    );
+
+    const localTag = screen.getByText("v1.0.0");
+    const localTagsGroup = localTag.closest(".sidebar-read-group");
+    expect(localTagsGroup?.querySelector(".sidebar-group")).toHaveTextContent("Tags");
+    expect(localTagsGroup).toContainElement(localTag);
+    expect(localTagsGroup).not.toContainElement(remoteTag);
   });
 
   it("validates and submits the commit form", async () => {

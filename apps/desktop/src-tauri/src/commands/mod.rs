@@ -9,9 +9,9 @@ use uuid::Uuid;
 
 use crate::dto::{
     AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitRequestDto, DiffDto,
-    HistoryPageDto, OperationEventDto, OperationRecordDto, OperationStartedDto, PatchSelectionDto,
-    ReferenceDto, RemoteRequestDto, RemoteTagDto, RepositorySidebarDto, RepositorySnapshotDto,
-    SessionDto, SessionTabUpdateDto, StashRequestDto,
+    GitRemoteDto, HistoryPageDto, OperationEventDto, OperationRecordDto, OperationStartedDto,
+    PatchSelectionDto, ReferenceDto, RemoteMutationRequestDto, RemoteRequestDto, RemoteTagDto,
+    RepositorySidebarDto, RepositorySnapshotDto, SessionDto, SessionTabUpdateDto, StashRequestDto,
 };
 use crate::state::{ApplicationState, SessionTabUpdate};
 
@@ -377,6 +377,63 @@ pub fn remote_tags_list(
     state
         .repository_remote_tags(&repo_id, remote.as_deref())
         .map(|tags| tags.into_iter().map(RemoteTagDto::from).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn remotes_list(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<Vec<GitRemoteDto>> {
+    state
+        .repository_remotes(&repo_id)
+        .map(|remotes| remotes.into_iter().map(GitRemoteDto::from).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn remote_add(
+    repo_id: String,
+    revision: u64,
+    request: RemoteMutationRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .add_remote(&repo_id, revision, &request.name, &request.url)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn remote_update(
+    repo_id: String,
+    revision: u64,
+    existing_name: String,
+    request: RemoteMutationRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .update_remote(
+            &repo_id,
+            revision,
+            &existing_name,
+            &request.name,
+            &request.url,
+        )
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn remote_remove(
+    repo_id: String,
+    revision: u64,
+    name: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .remove_remote(&repo_id, revision, &name)
+        .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
 

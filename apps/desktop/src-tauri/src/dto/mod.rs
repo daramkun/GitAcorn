@@ -1,6 +1,7 @@
 use app_core::{
-    AppErrorDto, BranchRequest, CloneRequest, CommitRequest, GitReference, PatchSelection,
-    ReferenceKind, RemoteOperationKind, RemoteRequest, RemoteTagSummary, RepositorySidebar,
+    AppErrorDto, BranchRequest, CloneRequest, CommitRequest, GitReference, GitRemote,
+    PatchSelection, ReferenceKind, RemoteOperationKind, RemoteRequest, RemoteTagSummary,
+    RepositorySidebar,
 };
 use git_domain::{
     CommitSummary, DiffDocument, DiffLineKind, FileChange, HeadState, HistoryPage,
@@ -17,6 +18,29 @@ pub struct RemoteRequestDto {
     pub kind: String,
     #[serde(default)]
     pub force_with_lease: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteMutationRequestDto {
+    pub name: String,
+    pub url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRemoteDto {
+    pub name: String,
+    pub url: String,
+}
+
+impl From<GitRemote> for GitRemoteDto {
+    fn from(remote: GitRemote) -> Self {
+        Self {
+            name: remote.name,
+            url: remote.url,
+        }
+    }
 }
 
 impl TryFrom<RemoteRequestDto> for RemoteRequest {

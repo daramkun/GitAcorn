@@ -127,6 +127,11 @@ export type RemoteTagDto = {
   oid: string;
 };
 
+export type GitRemoteDto = {
+  name: string;
+  url: string;
+};
+
 export type RepositorySidebarDto = {
   schemaVersion: 1;
   worktrees: Array<{
@@ -293,6 +298,40 @@ export function getRemoteTags(
   remote?: string,
 ): Promise<RemoteTagDto[]> {
   return invoke<RemoteTagDto[]>("remote_tags_list", { repoId, remote });
+}
+
+export function getRemotes(repoId: string): Promise<GitRemoteDto[]> {
+  return invoke<GitRemoteDto[]>("remotes_list", { repoId });
+}
+
+export function addRemote(
+  repoId: string,
+  revision: number,
+  request: GitRemoteDto,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("remote_add", { repoId, revision, request });
+}
+
+export function updateRemote(
+  repoId: string,
+  revision: number,
+  existingName: string,
+  request: GitRemoteDto,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("remote_update", {
+    repoId,
+    revision,
+    existingName,
+    request,
+  });
+}
+
+export function removeRemote(
+  repoId: string,
+  revision: number,
+  name: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("remote_remove", { repoId, revision, name });
 }
 
 export function createBranch(

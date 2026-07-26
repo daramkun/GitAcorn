@@ -5,8 +5,8 @@ use std::sync::Mutex;
 
 use app_core::{
     AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
-    GitReference, HistoryFilter, PatchSelection, RemoteProgress, RemoteRequest, RemoteTagSummary,
-    RepositoryScheduler, RepositoryService, RepositorySidebar, StashRequest,
+    GitReference, GitRemote, HistoryFilter, PatchSelection, RemoteProgress, RemoteRequest,
+    RemoteTagSummary, RepositoryScheduler, RepositoryService, RepositorySidebar, StashRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -207,6 +207,49 @@ impl ApplicationState {
         let descriptor = self.descriptor(repo_id)?;
         self.scheduler
             .read(repo_id, || self.service.remote_tags(&descriptor, remote))
+    }
+
+    pub fn repository_remotes(&self, repo_id: &str) -> Result<Vec<GitRemote>, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.remotes(&descriptor))
+    }
+
+    pub fn add_remote(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        name: &str,
+        url: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.add_remote(repository, name, url)
+        })
+    }
+
+    pub fn update_remote(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        existing_name: &str,
+        name: &str,
+        url: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.update_remote(repository, existing_name, name, url)
+        })
+    }
+
+    pub fn remove_remote(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        name: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.remove_remote(repository, name)
+        })
     }
 
     pub fn repository_diff(

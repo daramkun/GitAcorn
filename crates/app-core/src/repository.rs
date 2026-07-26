@@ -50,6 +50,12 @@ pub struct RemoteTagSummary {
     pub oid: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRemote {
+    pub name: String,
+    pub url: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceKind {
     LocalBranch,
@@ -259,7 +265,7 @@ impl RepositoryService {
         parse_references(&output)
     }
 
-    pub fn remotes(&self, repository: &RepositoryDescriptor) -> Result<Vec<String>, AppError> {
+    pub fn remote_names(&self, repository: &RepositoryDescriptor) -> Result<Vec<String>, AppError> {
         let output = self.git_text(repository, ["remote"])?;
         Ok(output
             .lines()
@@ -269,12 +275,97 @@ impl RepositoryService {
             .collect())
     }
 
+    pub fn remotes(&self, repository: &RepositoryDescriptor) -> Result<Vec<GitRemote>, AppError> {
+        self.remote_names(repository)?
+            .into_iter()
+            .map(|name| {
+                let url = self.git_text(
+                    repository,
+                    [
+                        OsString::from("remote"),
+                        OsString::from("get-url"),
+                        OsString::from(&name),
+                    ],
+                )?;
+                Ok(GitRemote {
+                    name,
+                    url: url.trim().to_owned(),
+                })
+            })
+            .collect()
+    }
+
+    pub fn add_remote(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+        url: &str,
+    ) -> Result<(), AppError> {
+        let (name, url) = validate_remote(name, url)?;
+        self.git_unit(
+            repository,
+            [
+                OsString::from("remote"),
+                OsString::from("add"),
+                OsString::from(name),
+                OsString::from(url),
+            ],
+        )
+    }
+
+    pub fn update_remote(
+        &self,
+        repository: &RepositoryDescriptor,
+        existing_name: &str,
+        name: &str,
+        url: &str,
+    ) -> Result<(), AppError> {
+        let existing_name = validate_remote_name(existing_name)?;
+        let (name, url) = validate_remote(name, url)?;
+        if existing_name != name {
+            self.git_unit(
+                repository,
+                [
+                    OsString::from("remote"),
+                    OsString::from("rename"),
+                    OsString::from(existing_name),
+                    OsString::from(name),
+                ],
+            )?;
+        }
+        self.git_unit(
+            repository,
+            [
+                OsString::from("remote"),
+                OsString::from("set-url"),
+                OsString::from(name),
+                OsString::from(url),
+            ],
+        )
+    }
+
+    pub fn remove_remote(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+    ) -> Result<(), AppError> {
+        let name = validate_remote_name(name)?;
+        self.git_unit(
+            repository,
+            [
+                OsString::from("remote"),
+                OsString::from("remove"),
+                OsString::from(name),
+            ],
+        )
+    }
+
     pub fn remote_tags(
         &self,
         repository: &RepositoryDescriptor,
         remote: Option<&str>,
     ) -> Result<Vec<RemoteTagSummary>, AppError> {
-        let remotes = self.remotes(repository)?;
+        let remotes = self.remote_names(repository)?;
         let mut results = Vec::new();
         let target_remotes: Vec<&str> = match remote {
             Some(r) => vec![r],
@@ -708,6 +799,31 @@ impl RepositoryService {
         run(true)?;
         run(false)
     }
+}
+
+fn validate_remote<'a>(name: &'a str, url: &'a str) -> Result<(&'a str, &'a str), AppError> {
+    let name = validate_remote_name(name)?;
+    let url = url.trim();
+    if url.is_empty() || url.contains(['\r', '\n']) {
+        return Err(AppError::InvalidRequest(
+            "Remote URL must not be empty or contain line breaks".to_owned(),
+        ));
+    }
+    Ok((name, url))
+}
+
+fn validate_remote_name(name: &str) -> Result<&str, AppError> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.contains(['\r', '\n'])
+        || name.starts_with('-')
+        || name.chars().any(char::is_whitespace)
+    {
+        return Err(AppError::InvalidRequest(
+            "Remote name must not be empty, start with '-', or contain whitespace".to_owned(),
+        ));
+    }
+    Ok(name)
 }
 
 fn build_selected_patch(

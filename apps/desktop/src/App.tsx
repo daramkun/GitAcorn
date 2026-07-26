@@ -23,6 +23,7 @@ import {
 } from "./windowControls";
 import {
   applyPatchSelection,
+  addRemote,
   abortMerge,
   activateSessionTab,
   activateWorktree,
@@ -42,6 +43,7 @@ import {
   getHistoryPage,
   getDiagnostics,
   getOperationHistory,
+  getRemotes,
   getRemoteTags,
   getReferences,
   getRepositorySidebar,
@@ -51,6 +53,7 @@ import {
   normalizeAppError,
   openRepository,
   reorderSessionTabs,
+  removeRemote,
   resolveConflict,
   restoreSession,
   startClone,
@@ -58,11 +61,13 @@ import {
   stagePaths,
   unstagePaths,
   updateSessionTab,
+  updateRemote,
   type AppErrorDto,
   type CommitDto,
   type DiffDto,
   type DiffTarget,
   type FileChangeDto,
+  type GitRemoteDto,
   type OperationEventDto,
   type OperationRecordDto,
   type RemoteTagDto,
@@ -293,6 +298,16 @@ export function App() {
   const [referencesMap, setReferencesMap] = useState<Record<string, ReferenceDto[]>>({});
   const [remoteTagsMap, setRemoteTagsMap] = useState<Record<string, RemoteTagDto[]>>({});
   const [loadingRemoteTags, setLoadingRemoteTags] = useState(false);
+  const [remotes, setRemotes] = useState<GitRemoteDto[]>([]);
+  const [remoteEditor, setRemoteEditor] = useState<{
+    mode: "add" | "edit";
+    remote?: GitRemoteDto;
+  }>();
+  const [remoteContextMenu, setRemoteContextMenu] = useState<{
+    x: number;
+    y: number;
+    remote?: GitRemoteDto;
+  }>();
   const [error, setError] = useState<AppErrorDto>();
   const [remoteOperations, setRemoteOperations] = useState<
     Record<string, OperationEventDto>
@@ -351,13 +366,15 @@ export function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && showSettings) {
-        setShowSettings(false);
+      if (e.key === "Escape") {
+        if (remoteEditor) setRemoteEditor(undefined);
+        else if (remoteContextMenu) setRemoteContextMenu(undefined);
+        else if (showSettings) setShowSettings(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showSettings]);
+  }, [remoteContextMenu, remoteEditor, showSettings]);
 
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const activeTab = tabs.find((tab) => tab.active) ?? tabs[0];
@@ -377,10 +394,17 @@ export function App() {
     return [];
   }, [activeSidebar, activeTab?.repoId, referencesMap]);
 
-  const remoteBranchTree = useMemo(
-    () => buildBranchTree(remoteBranchItems, true),
-    [remoteBranchItems],
-  );
+  const remoteNames = useMemo(() => {
+    const names = new Set(remotes.map((remote) => remote.name));
+    for (const branch of remoteBranchItems) {
+      const remote = branch.split("/", 1)[0];
+      if (remote) names.add(remote);
+    }
+    for (const tag of remoteTagsMap[activeTab?.repoId ?? ""] ?? []) {
+      names.add(tag.remote);
+    }
+    return [...names].sort((left, right) => left.localeCompare(right));
+  }, [activeTab?.repoId, remoteBranchItems, remoteTagsMap, remotes]);
 
   const localBranchTree = useMemo(
     () => buildBranchTree(activeSidebar?.branches.items ?? [], false),
@@ -412,14 +436,23 @@ export function App() {
     );
   };
 
-  const handleFetchRemoteTags = () => {
+  const handleFetchRemoteTags = (remote?: string) => {
     if (!activeTab) return;
+    const repoId = activeTab.repoId;
     setLoadingRemoteTags(true);
-    getRemoteTags(activeTab.repoId)
+    getRemoteTags(repoId, remote)
       .then((tags) =>
-        setRemoteTagsMap((prev) => ({ ...prev, [activeTab.repoId]: tags })),
+        setRemoteTagsMap((prev) => ({
+          ...prev,
+          [repoId]: remote
+            ? [
+                ...(prev[repoId] ?? []).filter((tag) => tag.remote !== remote),
+                ...tags,
+              ]
+            : tags,
+        })),
       )
-      .catch(() => {})
+      .catch((reason: unknown) => setError(normalizeAppError(reason)))
       .finally(() => setLoadingRemoteTags(false));
   };
 
@@ -529,6 +562,36 @@ export function App() {
         .catch(() => {});
     }
   }, [activeTab, sidebars, referencesMap]);
+
+  useEffect(() => {
+    if (!activeTab?.snapshot) {
+      setRemotes([]);
+      return;
+    }
+    let active = true;
+    const repoId = activeTab.repoId;
+    getRemotes(repoId)
+      .then((items) => {
+        if (active) setRemotes(items);
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(normalizeAppError(reason));
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeTab?.repoId, activeTab?.snapshot]);
+
+  useEffect(() => {
+    if (!remoteContextMenu) return;
+    const close = () => setRemoteContextMenu(undefined);
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [remoteContextMenu]);
 
   useEffect(() => {
     let disposed = false;
@@ -857,6 +920,41 @@ export function App() {
     });
   };
 
+  async function handleRemoteMutation(
+    action: () => Promise<RepositorySnapshotDto>,
+  ) {
+    if (!activeTab) return;
+    const repoId = activeTab.repoId;
+    try {
+      setError(undefined);
+      const snapshot = await action();
+      setTabs((current) =>
+        current.map((tab) =>
+          tab.repoId === repoId ? { ...tab, snapshot } : tab,
+        ),
+      );
+      setSidebars((current) => {
+        const next = { ...current };
+        delete next[repoId];
+        return next;
+      });
+      setReferencesMap((current) => {
+        const next = { ...current };
+        delete next[repoId];
+        return next;
+      });
+      setRemoteTagsMap((current) => {
+        const next = { ...current };
+        delete next[repoId];
+        return next;
+      });
+      setRemotes(await getRemotes(repoId));
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+      throw reason;
+    }
+  }
+
   const handleActivateTagSelection = (selectionKey: string) => {
     if (selectionKey.startsWith("local:")) {
       void handleSelectReference(selectionKey.slice("local:".length), "tag");
@@ -1087,31 +1185,62 @@ export function App() {
               ))}
             </SidebarGroup>
             <SidebarGroup
-              label={t("Remote Branches")}
-              count={activeSidebar?.remoteBranches?.total ?? remoteBranchItems.length}
+              label={t("Remote")}
+              count={remoteNames.length}
               initialLimit={999}
-              onClearSelection={branchSelection.clear}
+              onClearSelection={() => {
+                branchSelection.clear();
+                tagSelection.clear();
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setRemoteContextMenu({
+                  x: event.clientX,
+                  y: event.clientY,
+                });
+              }}
             >
-              {remoteBranchTree.map((node) => (
-                <BranchTreeNodeView
-                  key={node.id}
-                  node={node}
-                  isRemote={true}
-                  selection={branchSelection}
-                  selectionPrefix="remote:"
-                  onSelectSelectionKey={handleActivateBranchSelection}
-                  onSelect={(refName) => handleSelectReference(refName, "remoteBranch")}
+              {remoteNames.map((remoteName) => (
+                <RemoteReferenceNode
+                  key={remoteName}
+                  name={remoteName}
+                  branches={remoteBranchItems
+                    .filter((branch) => branch.startsWith(`${remoteName}/`))
+                    .map((branch) => branch.slice(remoteName.length + 1))}
+                  tags={(remoteTagsMap[activeTab?.repoId ?? ""] ?? []).filter(
+                    (tag) => tag.remote === remoteName,
+                  )}
+                  branchSelection={branchSelection}
+                  tagSelection={tagSelection}
+                  tagSelectionItems={tagSelectionItems}
+                  onBranchSelection={handleActivateBranchSelection}
+                  onTagSelection={handleActivateTagSelection}
+                  onSelectBranch={(refName) =>
+                    handleSelectReference(refName, "remoteBranch")
+                  }
+                  onSelectTag={(tag) =>
+                    handleSelectReference(tag.name, "tag", tag.oid)
+                  }
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setRemoteContextMenu({
+                      x: event.clientX,
+                      y: event.clientY,
+                      remote: remotes.find((remote) => remote.name === remoteName) ?? {
+                        name: remoteName,
+                        url: "",
+                      },
+                    });
+                  }}
                 />
               ))}
             </SidebarGroup>
             <SidebarGroup
               label={t("Tags")}
-              count={(activeSidebar?.tags.total ?? 0) + (remoteTagsMap[activeTab?.repoId ?? ""]?.length ?? 0)}
+              count={activeSidebar?.tags.total ?? 0}
               onClearSelection={tagSelection.clear}
             >
-              <div className="sub-group-header">
-                <span>{t("Local Tags")} ({activeSidebar?.tags.total ?? 0})</span>
-              </div>
               {activeSidebar?.tags.items.map((tag) => (
                 <div
                   key={tag}
@@ -1146,60 +1275,6 @@ export function App() {
                 >
                   <span className="branch-icon" aria-hidden="true">🏷️ </span>
                   <span className="branch-name" title={tag}>{tag}</span>
-                </div>
-              ))}
-              <div className="sub-group-header">
-                <span>{t("Remote Tags")} ({remoteTagsMap[activeTab?.repoId ?? ""]?.length ?? 0})</span>
-                <button
-                  type="button"
-                  className="fetch-remote-tags-btn"
-                  disabled={loadingRemoteTags}
-                  onClick={handleFetchRemoteTags}
-                  title={t("Fetch remote tags")}
-                >
-                  {loadingRemoteTags ? "…" : "🔄"}
-                </button>
-              </div>
-              {remoteTagsMap[activeTab?.repoId ?? ""]?.map((tag) => (
-                <div
-                  key={`${tag.remote}/${tag.name}`}
-                  className={`tag-item-row tree-leaf-row ${tagSelection.selected.has(`remote:${tag.remote}/${tag.name}`) ? "selected" : ""}`}
-                  role="button"
-                  tabIndex={
-                    tagSelection.focused === `remote:${tag.remote}/${tag.name}` ||
-                    (!tagSelection.focused &&
-                      tagSelectionItems.indexOf(
-                        `remote:${tag.remote}/${tag.name}`,
-                      ) === 0)
-                      ? 0
-                      : -1
-                  }
-                  aria-pressed={tagSelection.selected.has(`remote:${tag.remote}/${tag.name}`)}
-                  data-selection-scope="tags"
-                  data-selection-index={tagSelectionItems.indexOf(`remote:${tag.remote}/${tag.name}`)}
-                  onMouseDown={(event) => tagSelection.onMouseDown(`remote:${tag.remote}/${tag.name}`, event)}
-                  onMouseEnter={(event) => tagSelection.onMouseEnter(`remote:${tag.remote}/${tag.name}`, event)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    tagSelection.onClick(
-                      `remote:${tag.remote}/${tag.name}`,
-                      e,
-                    );
-                    handleSelectReference(tag.name, "tag", tag.oid);
-                  }}
-                  onKeyDown={(event) => {
-                    event.stopPropagation();
-                    tagSelection.onKeyDown(
-                      `remote:${tag.remote}/${tag.name}`,
-                      event,
-                      handleActivateTagSelection,
-                      (index) => focusSelectionIndex(event.currentTarget, index),
-                    );
-                  }}
-                >
-                  <span className="branch-icon" aria-hidden="true">🏷️ </span>
-                  <span className="branch-name" title={tag.name}>{tag.name}</span>
-                  <small className="remote-tag-badge">{tag.remote}</small>
                 </div>
               ))}
             </SidebarGroup>
@@ -1433,6 +1508,204 @@ export function App() {
           </div>
         </div>
       )}
+      {remoteContextMenu && activeSnapshot && (
+        <div
+          className="remote-context-menu"
+          role="menu"
+          style={{ left: remoteContextMenu.x, top: remoteContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {remoteContextMenu.remote ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setRemoteEditor({
+                    mode: "edit",
+                    remote: remoteContextMenu.remote,
+                  });
+                  setRemoteContextMenu(undefined);
+                }}
+              >
+                {t("Edit remote")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={loadingRemoteTags}
+                onClick={() => {
+                  handleFetchRemoteTags(remoteContextMenu.remote?.name);
+                  setRemoteContextMenu(undefined);
+                }}
+              >
+                {t("Refresh remote tags")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="danger-button"
+                onClick={() => {
+                  const name = remoteContextMenu.remote?.name;
+                  setRemoteContextMenu(undefined);
+                  if (
+                    name &&
+                    window.confirm(
+                      t("Remove remote {name}? Remote-tracking branches will be deleted.", {
+                        name,
+                      }),
+                    )
+                  ) {
+                    void handleRemoteMutation(() =>
+                      removeRemote(
+                        activeSnapshot.repository.id,
+                        activeSnapshot.revision,
+                        name,
+                      ),
+                    ).catch(() => undefined);
+                  }
+                }}
+              >
+                {t("Remove remote")}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setRemoteEditor({ mode: "add" });
+                setRemoteContextMenu(undefined);
+              }}
+            >
+              {t("Add remote")}
+            </button>
+          )}
+        </div>
+      )}
+      {remoteEditor && activeSnapshot && (
+        <RemoteEditor
+          mode={remoteEditor.mode}
+          remote={remoteEditor.remote}
+          onClose={() => setRemoteEditor(undefined)}
+          onSave={(name, url) =>
+            remoteEditor.mode === "edit" && remoteEditor.remote
+              ? handleRemoteMutation(() =>
+                  updateRemote(
+                    activeSnapshot.repository.id,
+                    activeSnapshot.revision,
+                    remoteEditor.remote!.name,
+                    { name, url },
+                  ),
+                )
+              : handleRemoteMutation(() =>
+                  addRemote(
+                    activeSnapshot.repository.id,
+                    activeSnapshot.revision,
+                    { name, url },
+                  ),
+                )
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+function RemoteEditor({
+  mode,
+  remote,
+  onClose,
+  onSave,
+}: {
+  mode: "add" | "edit";
+  remote?: GitRemoteDto;
+  onClose: () => void;
+  onSave: (name: string, url: string) => Promise<void>;
+}) {
+  const [name, setName] = useState(remote?.name ?? "");
+  const [url, setUrl] = useState(remote?.url ?? "");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await onSave(name.trim(), url.trim());
+      onClose();
+    } catch {
+      // The parent displays normalized command errors in the app error banner.
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose} role="presentation">
+      <div
+        className="settings-modal remote-manager-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="remote-manager-title"
+      >
+        <div className="settings-modal-header">
+          <h2 id="remote-manager-title">
+            {mode === "edit" ? t("Edit remote") : t("Add remote")}
+          </h2>
+          <button
+            className="settings-close-btn"
+            type="button"
+            aria-label={t("Close remote manager")}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="remote-manager-body">
+          <form
+            className="remote-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const nextName = name.trim();
+              const nextUrl = url.trim();
+              if (!nextName || !nextUrl) return;
+              void save();
+            }}
+          >
+            <label>
+              <span>{t("Remote name")}</span>
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                disabled={busy}
+                placeholder="origin"
+                autoFocus
+              />
+            </label>
+            <label>
+              <span>{t("Remote URL")}</span>
+              <input
+                value={url}
+                onChange={(event) => setUrl(event.target.value)}
+                disabled={busy}
+                placeholder="https://example.com/owner/repository.git"
+              />
+            </label>
+            <div className="remote-form-actions">
+              <button type="button" disabled={busy} onClick={onClose}>
+                {t("Cancel")}
+              </button>
+              <button type="submit" disabled={busy || !name.trim() || !url.trim()}>
+                {busy
+                  ? t("Saving…")
+                  : mode === "edit"
+                    ? t("Save remote")
+                    : t("Add remote")}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1549,6 +1822,7 @@ function BranchTreeNodeView({
   isRemote = false,
   selection,
   selectionPrefix = "",
+  pathPrefix = "",
   onSelectSelectionKey,
   onCheckout,
   onSelect,
@@ -1560,6 +1834,7 @@ function BranchTreeNodeView({
   isRemote?: boolean;
   selection?: MultiSelection;
   selectionPrefix?: string;
+  pathPrefix?: string;
   onSelectSelectionKey?: (selectionKey: string) => void;
   onCheckout?: (branchName: string) => void;
   onSelect?: (fullPath: string) => void;
@@ -1567,12 +1842,15 @@ function BranchTreeNodeView({
   const [isExpanded, setIsExpanded] = useState(true);
 
   if (node.isLeaf) {
-    const selectionKey = `${selectionPrefix}${node.fullPath}`;
+    const referencePath = pathPrefix
+      ? `${pathPrefix}/${node.fullPath}`
+      : node.fullPath;
+    const selectionKey = `${selectionPrefix}${referencePath}`;
     const selectionIndex = selection?.items.indexOf(selectionKey);
-    const isCurrent = !isRemote && node.fullPath === currentBranchLabel;
+    const isCurrent = !isRemote && referencePath === currentBranchLabel;
     const refInfo = !isRemote
       ? referencesList.find(
-          (r) => r.kind === "localBranch" && r.shortName === node.fullPath,
+          (r) => r.kind === "localBranch" && r.shortName === referencePath,
         )
       : undefined;
     const isLocalOnly = !isRemote && refInfo ? !refInfo.upstream : false;
@@ -1589,7 +1867,7 @@ function BranchTreeNodeView({
               : -1
             : 0
         }
-        aria-label={t("Branch {name}", { name: node.fullPath })}
+        aria-label={t("Branch {name}", { name: referencePath })}
         aria-pressed={selection?.selected.has(selectionKey)}
         data-selection-scope="branches"
         data-selection-index={selectionIndex}
@@ -1600,15 +1878,15 @@ function BranchTreeNodeView({
           e.stopPropagation();
           selection?.onClick(selectionKey, e);
           if (onSelect) {
-            onSelect(node.fullPath);
+            onSelect(referencePath);
           } else if (!isRemote && onCheckout && !isCurrent) {
-            onCheckout(node.fullPath);
+            onCheckout(referencePath);
           }
         }}
         onDoubleClick={(e) => {
           e.stopPropagation();
           if (!isRemote && onCheckout && !isCurrent) {
-            onCheckout(node.fullPath);
+            onCheckout(referencePath);
           }
         }}
         onKeyDown={(event) => {
@@ -1620,7 +1898,7 @@ function BranchTreeNodeView({
             }
             const fullPath = item.startsWith(selectionPrefix)
               ? item.slice(selectionPrefix.length)
-              : node.fullPath;
+              : referencePath;
             if (onSelect) {
               onSelect(fullPath);
             } else if (!isRemote && onCheckout && !isCurrent) {
@@ -1643,7 +1921,7 @@ function BranchTreeNodeView({
         <span className="branch-icon" aria-hidden="true">
           {isCurrent ? "● " : "⎇ "}
         </span>
-        <span className="branch-name" title={node.fullPath}>
+        <span className="branch-name" title={referencePath}>
           {node.name}
         </span>
         {isLocalOnly && <span className="badge-local">{t("Local")}</span>}
@@ -1704,11 +1982,127 @@ function BranchTreeNodeView({
               isRemote={isRemote}
               selection={selection}
               selectionPrefix={selectionPrefix}
+              pathPrefix={pathPrefix}
               onSelectSelectionKey={onSelectSelectionKey}
               onCheckout={onCheckout}
               onSelect={onSelect}
             />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RemoteReferenceNode({
+  name,
+  branches,
+  tags,
+  branchSelection,
+  tagSelection,
+  tagSelectionItems,
+  onBranchSelection,
+  onTagSelection,
+  onSelectBranch,
+  onSelectTag,
+  onContextMenu,
+}: {
+  name: string;
+  branches: string[];
+  tags: RemoteTagDto[];
+  branchSelection: MultiSelection;
+  tagSelection: MultiSelection;
+  tagSelectionItems: string[];
+  onBranchSelection: (selectionKey: string) => void;
+  onTagSelection: (selectionKey: string) => void;
+  onSelectBranch: (refName: string) => void;
+  onSelectTag: (tag: RemoteTagDto) => void;
+  onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(true);
+  const branchTree = useMemo(() => buildBranchTree(branches), [branches]);
+
+  return (
+    <div className="tree-node-group remote-reference-node">
+      <div
+        className="tree-node-header remote-name-row"
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        aria-label={t("Remote {name}", { name })}
+        onClick={(event) => {
+          event.stopPropagation();
+          setIsExpanded((expanded) => !expanded);
+        }}
+        onContextMenu={onContextMenu}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setIsExpanded((expanded) => !expanded);
+          }
+        }}
+      >
+        <span className={`group-chevron ${isExpanded ? "open" : ""}`} aria-hidden="true">
+          ›
+        </span>
+        <span className="tree-node-icon" aria-hidden="true">☁️ </span>
+        <span className="tree-node-label">{name}</span>
+        <small className="tree-node-count">({branches.length + tags.length})</small>
+      </div>
+      {isExpanded && (
+        <div className="tree-node-children remote-reference-children">
+          {branchTree.map((node) => (
+            <BranchTreeNodeView
+              key={node.id}
+              node={node}
+              isRemote={true}
+              selection={branchSelection}
+              selectionPrefix="remote:"
+              pathPrefix={name}
+              onSelectSelectionKey={onBranchSelection}
+              onSelect={onSelectBranch}
+            />
+          ))}
+          {tags.map((tag) => {
+            const selectionKey = `remote:${tag.remote}/${tag.name}`;
+            const selectionIndex = tagSelectionItems.indexOf(selectionKey);
+            return (
+              <div
+                key={selectionKey}
+                className={`tag-item-row tree-leaf-row ${tagSelection.selected.has(selectionKey) ? "selected" : ""}`}
+                role="button"
+                tabIndex={
+                  tagSelection.focused === selectionKey ||
+                  (!tagSelection.focused && selectionIndex === 0)
+                    ? 0
+                    : -1
+                }
+                aria-label={t("Tag {name}", { name: tag.name })}
+                aria-pressed={tagSelection.selected.has(selectionKey)}
+                data-selection-scope="tags"
+                data-selection-index={selectionIndex}
+                onMouseDown={(event) => tagSelection.onMouseDown(selectionKey, event)}
+                onMouseEnter={(event) => tagSelection.onMouseEnter(selectionKey, event)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  tagSelection.onClick(selectionKey, event);
+                  onSelectTag(tag);
+                }}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  tagSelection.onKeyDown(
+                    selectionKey,
+                    event,
+                    onTagSelection,
+                    (index) => focusSelectionIndex(event.currentTarget, index),
+                  );
+                }}
+              >
+                <span className="branch-icon" aria-hidden="true">🏷️ </span>
+                <span className="branch-name" title={tag.name}>{tag.name}</span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1722,6 +2116,7 @@ function SidebarGroup({
   initialLimit = 5,
   defaultExpanded = true,
   onClearSelection,
+  onContextMenu,
 }: {
   label: string;
   count?: number;
@@ -1729,6 +2124,7 @@ function SidebarGroup({
   initialLimit?: number;
   defaultExpanded?: boolean;
   onClearSelection?: () => void;
+  onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [showAll, setShowAll] = useState(false);
@@ -1758,6 +2154,7 @@ function SidebarGroup({
         role="button"
         tabIndex={0}
         aria-expanded={isExpanded}
+        onContextMenu={onContextMenu}
         onClick={() => setIsExpanded((prev) => !prev)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
