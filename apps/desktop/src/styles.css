@@ -323,6 +323,7 @@ button:focus-visible {
 }
 
 .repository-tab {
+  position: relative;
   display: flex;
   align-items: center;
   align-self: stretch;
@@ -331,6 +332,36 @@ button:focus-visible {
   border-bottom: 2px solid transparent;
   background: var(--surface);
   font-size: 12px;
+  cursor: grab;
+}
+
+.repository-tab.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.repository-tab.dragging .tab-main {
+  cursor: grabbing;
+}
+
+.repository-tab.drop-before::before,
+.repository-tab.drop-after::after {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  content: "";
+}
+
+.repository-tab.drop-before::before {
+  left: 0;
+}
+
+.repository-tab.drop-after::after {
+  right: -1px;
 }
 
 .repository-tab.active {
@@ -352,7 +383,8 @@ button:focus-visible {
   padding: 0 8px 0 13px;
   border: 0;
   background: transparent;
-  cursor: pointer;
+  cursor: grab;
+  user-select: none;
 }
 
 .tab-main strong {

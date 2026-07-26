@@ -372,6 +372,68 @@ describe("App", () => {
     expect(mockedOpenRepository).toHaveBeenCalledWith("C:\\Code\\acorn-demo");
   });
 
+  it("reorders repository tabs by dragging without move buttons", async () => {
+    const secondSnapshot: RepositorySnapshotDto = {
+      ...snapshot,
+      repository: {
+        ...snapshot.repository,
+        id: "second-repository",
+        name: "second-demo",
+        worktreePath: "C:\\Code\\second-demo",
+      },
+    };
+    mockedRestoreSession.mockResolvedValue({
+      schemaVersion: 1,
+      tabs: [
+        { ...sessionWithSnapshot.tabs[0], active: false },
+        {
+          ...sessionWithSnapshot.tabs[0],
+          repoId: secondSnapshot.repository.id,
+          worktreeId: "worktree-two",
+          worktreePath: secondSnapshot.repository.worktreePath,
+          snapshot: secondSnapshot,
+        },
+      ],
+    });
+    const { container } = render(<App />);
+
+    await screen.findByText("second-demo");
+    expect(screen.queryByRole("button", { name: /Move .* left/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Move .* right/ })).not.toBeInTheDocument();
+
+    const [firstTab, secondTab] = Array.from(
+      container.querySelectorAll<HTMLElement>(".repository-tab"),
+    );
+    const firstTabMain = firstTab.querySelector<HTMLElement>(".tab-main");
+    expect(firstTab).not.toHaveAttribute("draggable");
+    expect(firstTabMain).not.toHaveAttribute("draggable");
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => secondTab),
+    });
+    vi.spyOn(secondTab, "getBoundingClientRect").mockReturnValue({
+      ...secondTab.getBoundingClientRect(),
+      left: 50,
+      width: 100,
+    });
+    fireEvent.mouseDown(firstTabMain!, { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.mouseMove(window, { buttons: 1, clientX: 125, clientY: 10 });
+    fireEvent.mouseUp(window, { button: 0, clientX: 125, clientY: 10 });
+
+    await waitFor(() =>
+      expect(mockedReorderTabs).toHaveBeenCalledWith([
+        secondSnapshot.repository.id,
+        snapshot.repository.id,
+      ]),
+    );
+    expect(
+      Array.from(container.querySelectorAll(".repository-tab strong")).map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(["second-demo", "acorn-demo"]);
+    Reflect.deleteProperty(document, "elementFromPoint");
+  });
+
   it("keeps reference selection separate from explicit checkout", async () => {
     mockedRestoreSession.mockResolvedValue({
       ...sessionWithSnapshot,

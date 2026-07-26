@@ -279,6 +279,13 @@ export type ThemeSetting = "system" | "light" | "dark";
 export function App() {
   const [appInfo, setAppInfo] = useState<AppInfoState>({ status: "loading" });
   const [tabs, setTabs] = useState<SessionTabDto[]>([]);
+  const [draggedTabId, setDraggedTabId] = useState<string>();
+  const draggedTabIdRef = useRef<string | undefined>(undefined);
+  const suppressTabClickRef = useRef<string | undefined>(undefined);
+  const [tabDropTarget, setTabDropTarget] = useState<{
+    repoId: string;
+    edge: "before" | "after";
+  }>();
   const [sessionLoading, setSessionLoading] = useState(true);
   const [opening, setOpening] = useState(false);
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
@@ -652,16 +659,100 @@ export function App() {
     }
   }
 
-  function moveTab(repoId: string, offset: number) {
-    const from = tabs.findIndex((tab) => tab.repoId === repoId);
-    const to = from + offset;
-    if (from < 0 || to < 0 || to >= tabs.length) return;
-    const next = [...tabs];
-    [next[from], next[to]] = [next[to], next[from]];
+  function reorderTab(
+    repoId: string,
+    targetRepoId: string,
+    edge: "before" | "after",
+  ) {
+    if (repoId === targetRepoId) return;
+    const next = tabs.filter((tab) => tab.repoId !== repoId);
+    const tab = tabs.find((item) => item.repoId === repoId);
+    const targetIndex = next.findIndex((item) => item.repoId === targetRepoId);
+    if (!tab || targetIndex < 0) return;
+    next.splice(targetIndex + (edge === "after" ? 1 : 0), 0, tab);
     setTabs(next);
     reorderSessionTabs(next.map((tab) => tab.repoId)).catch((reason: unknown) =>
       setError(normalizeAppError(reason)),
     );
+  }
+
+  function tabDropEdge(
+    clientX: number,
+    element: HTMLElement,
+  ): "before" | "after" {
+    const bounds = element.getBoundingClientRect();
+    return clientX < bounds.left + bounds.width / 2 ? "before" : "after";
+  }
+
+  function finishTabDrag() {
+    draggedTabIdRef.current = undefined;
+    setDraggedTabId(undefined);
+    setTabDropTarget(undefined);
+  }
+
+  function beginTabDrag(
+    repoId: string,
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) {
+    if (event.button !== 0) return;
+    const pointerId = { x: event.clientX, y: event.clientY };
+    let dragging = false;
+    let dropTarget:
+      | { repoId: string; edge: "before" | "after" }
+      | undefined;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (
+        !dragging &&
+        Math.abs(moveEvent.clientX - pointerId.x) +
+          Math.abs(moveEvent.clientY - pointerId.y) <
+          5
+      ) {
+        return;
+      }
+
+      if (!dragging) {
+        dragging = true;
+        draggedTabIdRef.current = repoId;
+        setDraggedTabId(repoId);
+      }
+
+      const target = document
+        .elementFromPoint(moveEvent.clientX, moveEvent.clientY)
+        ?.closest<HTMLElement>(".repository-tab");
+      const targetRepoId = target?.dataset.repoId;
+      if (!target || !targetRepoId || targetRepoId === repoId) {
+        dropTarget = undefined;
+        setTabDropTarget(undefined);
+      } else {
+        dropTarget = {
+          repoId: targetRepoId,
+          edge: tabDropEdge(moveEvent.clientX, target),
+        };
+        setTabDropTarget(dropTarget);
+      }
+      moveEvent.preventDefault();
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      if (dragging && dropTarget) {
+        reorderTab(repoId, dropTarget.repoId, dropTarget.edge);
+      }
+      if (dragging) {
+        suppressTabClickRef.current = repoId;
+        window.setTimeout(() => {
+          if (suppressTabClickRef.current === repoId) {
+            suppressTabClickRef.current = undefined;
+          }
+        }, 0);
+      }
+      finishTabDrag();
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
   }
 
   function updateActiveTab(
@@ -898,24 +989,33 @@ export function App() {
               {sessionLoading ? t("Restoring session…") : t("No repositories open")}
             </div>
           )}
-          {tabs.map((tab, index) => (
+          {tabs.map((tab) => (
             <div
-              className={`repository-tab ${tab.active ? "active" : ""} ${tab.unavailable ? "unavailable" : ""}`}
+              className={`repository-tab ${tab.active ? "active" : ""} ${tab.unavailable ? "unavailable" : ""} ${draggedTabId === tab.repoId ? "dragging" : ""} ${tabDropTarget?.repoId === tab.repoId && draggedTabId !== tab.repoId ? `drop-${tabDropTarget.edge}` : ""}`}
+              data-repo-id={tab.repoId}
               key={tab.repoId}
+              title={t("Drag {name} to reorder", {
+                name: repositoryName(tab.worktreePath),
+              })}
             >
               <button
                 className="tab-main"
                 type="button"
                 aria-current={tab.active ? "page" : undefined}
-                onClick={() => activateTab(tab.repoId)}
+                onClick={() => {
+                  if (suppressTabClickRef.current === tab.repoId) {
+                    suppressTabClickRef.current = undefined;
+                    return;
+                  }
+                  activateTab(tab.repoId);
+                }}
+                onMouseDown={(event) => beginTabDrag(tab.repoId, event)}
               >
                 <span className="repository-dot" aria-hidden="true" />
                 <strong>{tab.snapshot?.repository.name ?? repositoryName(tab.worktreePath)}</strong>
                 <span>{tab.unavailable ? "!" : (tab.snapshot?.changes.length ?? 0)}</span>
               </button>
               <div className="tab-controls">
-                <button type="button" aria-label={t("Move {name} left", { name: repositoryName(tab.worktreePath) })} disabled={index === 0} onClick={() => moveTab(tab.repoId, -1)}>‹</button>
-                <button type="button" aria-label={t("Move {name} right", { name: repositoryName(tab.worktreePath) })} disabled={index === tabs.length - 1} onClick={() => moveTab(tab.repoId, 1)}>›</button>
                 <button type="button" aria-label={t("Close {name}", { name: repositoryName(tab.worktreePath) })} onClick={() => closeTab(tab.repoId)}>×</button>
               </div>
             </div>

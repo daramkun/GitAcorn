@@ -25,6 +25,7 @@ const korean = {
   "No repositories open": "열린 저장소 없음",
   "Move {name} left": "{name} 왼쪽으로 이동",
   "Move {name} right": "{name} 오른쪽으로 이동",
+  "Drag {name} to reorder": "{name}을(를) 드래그하여 순서 변경",
   "Close {name}": "{name} 닫기",
   "Opening…": "여는 중…",
   "Open a repository": "저장소 열기",
