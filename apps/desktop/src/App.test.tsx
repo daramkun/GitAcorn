@@ -700,6 +700,56 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not reload the selected diff when unrelated app state changes", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], selectedPath: "tracked.txt" }],
+    });
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: /modified/ }),
+    ).toBeInTheDocument();
+    mockedGetDiff.mockClear();
+
+    const resizer = screen.getByRole("separator", { name: "Sidebar width" });
+    fireEvent.mouseDown(resizer, { button: 0, clientX: 200 });
+    fireEvent.mouseMove(window, { buttons: 1, clientX: 240 });
+    fireEvent.mouseUp(window, { button: 0, clientX: 240 });
+
+    await act(async () => undefined);
+    expect(mockedGetDiff).not.toHaveBeenCalled();
+  });
+
+  it("persists the file panel width once after dragging", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    const resizer = await screen.findByRole("separator", {
+      name: "File panel width",
+    });
+    mockedUpdateTab.mockClear();
+
+    fireEvent.mouseDown(resizer, { button: 0, clientX: 280 });
+    fireEvent.mouseMove(window, { buttons: 1, clientX: 300 });
+    fireEvent.mouseMove(window, { buttons: 1, clientX: 320 });
+    expect(mockedUpdateTab).not.toHaveBeenCalled();
+
+    fireEvent.mouseUp(window, { button: 0, clientX: 320 });
+
+    expect(mockedUpdateTab).toHaveBeenCalledTimes(1);
+    expect(mockedUpdateTab).toHaveBeenCalledWith(
+      snapshot.repository.id,
+      "changes",
+      undefined,
+      "unstaged",
+      320,
+      undefined,
+      undefined,
+      undefined,
+    );
+  });
+
   it("opens the staged side and unstages the whole file", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     render(<App />);
@@ -745,10 +795,17 @@ describe("App", () => {
 
   it("blocks mutations as soon as a repository refresh is scheduled", async () => {
     let notifyRepositoryChange: ((repoId: string) => void) | undefined;
+    let completeRefresh: ((snapshot: RepositorySnapshotDto) => void) | undefined;
     mockedListenForChanges.mockImplementation(async (callback) => {
       notifyRepositoryChange = callback;
       return () => undefined;
     });
+    mockedGetSnapshot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          completeRefresh = resolve;
+        }),
+    );
     mockedRestoreSession.mockResolvedValue({
       ...sessionWithSnapshot,
       tabs: [{ ...sessionWithSnapshot.tabs[0], selectedPath: "tracked.txt" }],
@@ -763,6 +820,31 @@ describe("App", () => {
 
     expect(stageFile).toBeDisabled();
     expect(screen.getByText("Refreshing…")).toBeInTheDocument();
+
+    await act(async () => completeRefresh?.(snapshot));
+  });
+
+  it("does not reload remotes after an ordinary repository refresh", async () => {
+    let notifyRepositoryChange: ((repoId: string) => void) | undefined;
+    mockedListenForChanges.mockImplementation(async (callback) => {
+      notifyRepositoryChange = callback;
+      return () => undefined;
+    });
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    await waitFor(() => expect(mockedGetRemotes).toHaveBeenCalled());
+    await waitFor(() => expect(notifyRepositoryChange).toBeDefined());
+    mockedGetRemotes.mockClear();
+    mockedGetSnapshot.mockClear();
+
+    act(() => notifyRepositoryChange?.(snapshot.repository.id));
+    await waitFor(() =>
+      expect(screen.queryByText("Refreshing…")).not.toBeInTheDocument(),
+    );
+
+    expect(mockedGetSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockedGetRemotes).not.toHaveBeenCalled();
   });
 
   it("recovers a stale line mutation with the latest snapshot", async () => {

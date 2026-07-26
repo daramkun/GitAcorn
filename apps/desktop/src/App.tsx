@@ -1,5 +1,6 @@
 import {
   Children,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -331,6 +332,10 @@ export function App() {
   const [referenceEditor, setReferenceEditor] = useState<ReferenceEditor>();
   const [checkoutTarget, setCheckoutTarget] = useState<CheckoutTarget>();
   const [error, setError] = useState<AppErrorDto>();
+  const reportError = useCallback(
+    (reason: unknown) => setError(normalizeAppError(reason)),
+    [],
+  );
   const [remoteOperations, setRemoteOperations] = useState<
     Record<string, OperationEventDto>
   >({});
@@ -408,9 +413,11 @@ export function App() {
     showSettings,
   ]);
 
-  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const refreshRequests = useRef(new Map<string, boolean>());
   const activeTab = tabs.find((tab) => tab.active) ?? tabs[0];
   const activeSnapshot = activeTab?.snapshot;
+  const activeRepoId = activeTab?.repoId;
+  const activeRepositoryReady = Boolean(activeSnapshot);
   const page = activeTab?.page ?? "changes";
   const activeSidebar = activeTab ? sidebars[activeTab.repoId] : undefined;
 
@@ -596,23 +603,22 @@ export function App() {
   }, [activeTab, sidebars, referencesMap]);
 
   useEffect(() => {
-    if (!activeTab?.snapshot) {
+    if (!activeRepositoryReady || !activeRepoId) {
       setRemotes([]);
       return;
     }
     let active = true;
-    const repoId = activeTab.repoId;
-    getRemotes(repoId)
+    getRemotes(activeRepoId)
       .then((items) => {
         if (active) setRemotes(items);
       })
       .catch((reason: unknown) => {
-        if (active) setError(normalizeAppError(reason));
+        if (active) reportError(reason);
       });
     return () => {
       active = false;
     };
-  }, [activeTab?.repoId, activeTab?.snapshot]);
+  }, [activeRepoId, activeRepositoryReady, reportError]);
 
   useEffect(() => {
     if (!remoteContextMenu && !referenceContextMenu) return;
@@ -631,47 +637,56 @@ export function App() {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    const refreshRepository = async (repoId: string) => {
+      if (refreshRequests.current.has(repoId)) {
+        refreshRequests.current.set(repoId, true);
+        return;
+      }
+      refreshRequests.current.set(repoId, false);
+      setRefreshing((current) => {
+        if (current.has(repoId)) return current;
+        return new Set(current).add(repoId);
+      });
+
+      try {
+        do {
+          refreshRequests.current.set(repoId, false);
+          const snapshot = await getRepositorySnapshot(repoId);
+          if (disposed) return;
+          setTabs((current) =>
+            current.map((tab) =>
+              tab.repoId === repoId &&
+              (!tab.snapshot || snapshot.revision >= tab.snapshot.revision)
+                ? { ...tab, snapshot, unavailable: false }
+                : tab,
+            ),
+          );
+        } while (refreshRequests.current.get(repoId));
+      } catch (reason: unknown) {
+        if (!disposed) reportError(reason);
+      } finally {
+        refreshRequests.current.delete(repoId);
+        if (!disposed) {
+          setRefreshing((current) => {
+            const next = new Set(current);
+            next.delete(repoId);
+            return next;
+          });
+        }
+      }
+    };
     listenForRepositoryChanges((repoId) => {
-      clearTimeout(timers.current.get(repoId));
-      setRefreshing((current) => new Set(current).add(repoId));
-      timers.current.set(
-        repoId,
-        setTimeout(() => {
-          getRepositorySnapshot(repoId)
-            .then((snapshot) => {
-              if (!disposed) {
-                setTabs((current) =>
-                  current.map((tab) =>
-                    tab.repoId === repoId &&
-                    (!tab.snapshot || snapshot.revision >= tab.snapshot.revision)
-                      ? { ...tab, snapshot, unavailable: false }
-                      : tab,
-                  ),
-                );
-              }
-            })
-            .catch((reason: unknown) => !disposed && setError(normalizeAppError(reason)))
-            .finally(() => {
-              if (!disposed) {
-                setRefreshing((current) => {
-                  const next = new Set(current);
-                  next.delete(repoId);
-                  return next;
-                });
-              }
-            });
-        }, 250),
-      );
+      void refreshRepository(repoId);
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
     });
     return () => {
       disposed = true;
-      for (const timer of timers.current.values()) clearTimeout(timer);
+      refreshRequests.current.clear();
       unlisten?.();
     };
-  }, []);
+  }, [reportError]);
 
   async function handleOpenRepository() {
     try {
@@ -1485,7 +1500,7 @@ export function App() {
                     ),
                   )
                 }
-                onError={(reason) => setError(normalizeAppError(reason))}
+                onError={reportError}
               />
             ) : (
               <ChangesEmpty onOpen={handleOpenRepository} opening={opening || sessionLoading} />
@@ -1511,13 +1526,13 @@ export function App() {
                     return next;
                   })
                 }
-                onError={(reason) => setError(normalizeAppError(reason))}
+                onError={reportError}
               />
             ) : (
               <HistoryEmpty />
             )
           ) : (
-            <OperationsView onError={(reason) => setError(normalizeAppError(reason))} />
+            <OperationsView onError={reportError} />
           )}
         </section>
       </main>
@@ -2896,6 +2911,8 @@ function ChangesView({
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [amend, setAmend] = useState(false);
+  const [livePanelWidth, setLivePanelWidth] = useState(panelWidth);
+  const livePanelWidthRef = useRef(panelWidth);
   const draggedUnstagedPaths = useRef<string[]>([]);
   const pointerDrag = useRef<
     {
@@ -2908,6 +2925,11 @@ function ChangesView({
   >(undefined);
   const nativeDropHandled = useRef(false);
   const [activeDropTarget, setActiveDropTarget] = useState<DiffTarget>();
+
+  useEffect(() => {
+    setLivePanelWidth(panelWidth);
+    livePanelWidthRef.current = panelWidth;
+  }, [panelWidth]);
 
   useEffect(() => {
     if (!selectedPath) return;
@@ -3220,12 +3242,13 @@ function ChangesView({
   const handleFilePanelResizerMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = panelWidth;
+    const startWidth = livePanelWidthRef.current;
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       const deltaX = moveEvent.clientX - startX;
       const nextWidth = Math.max(160, Math.min(600, startWidth + deltaX));
-      onPanelWidth(nextWidth);
+      livePanelWidthRef.current = nextWidth;
+      setLivePanelWidth(nextWidth);
     };
 
     const onMouseUp = () => {
@@ -3233,6 +3256,7 @@ function ChangesView({
       window.removeEventListener("mouseup", onMouseUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      onPanelWidth(livePanelWidthRef.current);
     };
 
     document.body.style.cursor = "col-resize";
@@ -3244,17 +3268,17 @@ function ChangesView({
   const handleFilePanelResizerKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowLeft") {
       e.preventDefault();
-      onPanelWidth(Math.max(160, panelWidth - 10));
+      onPanelWidth(Math.max(160, livePanelWidthRef.current - 10));
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
-      onPanelWidth(Math.min(600, panelWidth + 10));
+      onPanelWidth(Math.min(600, livePanelWidthRef.current + 10));
     }
   };
 
   return (
     <div
       className="changes-layout"
-      style={{ "--file-panel-width": `${panelWidth}px` } as CSSProperties}
+      style={{ "--file-panel-width": `${livePanelWidth}px` } as CSSProperties}
     >
       <section className="file-panel" aria-label={t("Changed files")}>
         <div style={{ flex: `${stageSplitRatio} 1 0%`, display: "flex", flexDirection: "column", minHeight: 0 }}>

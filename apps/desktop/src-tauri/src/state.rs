@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::{Mutex, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use app_core::{
     AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
@@ -578,6 +580,12 @@ impl ApplicationState {
             .upsert_tab(&tab)
             .await
             .map_err(persistence_error)?;
+        if current.worktree_id != descriptor.worktree_id {
+            self.watchers
+                .lock()
+                .expect("watcher registry lock poisoned")
+                .remove(&current.worktree_id);
+        }
         self.session_tabs(Some((repo_id, snapshot))).await
     }
 
@@ -593,6 +601,18 @@ impl ApplicationState {
             .close(repo_id)
             .await
             .map_err(persistence_error)?;
+        if let Ok(repo_id) = parse_repo_id(repo_id)
+            && let Some(repository) = self
+                .repositories
+                .lock()
+                .expect("repository registry lock poisoned")
+                .remove(&repo_id)
+        {
+            self.watchers
+                .lock()
+                .expect("watcher registry lock poisoned")
+                .remove(&repository.descriptor.worktree_id);
+        }
         let tabs = self.load_stored_tabs().await?;
         if !tabs.is_empty() && !tabs.iter().any(|tab| tab.active) {
             let next = tabs.last().expect("non-empty tabs");
@@ -819,10 +839,32 @@ impl ApplicationState {
         }
         let payload = repo_id.to_string();
         let app = app.clone();
+        let (change_sender, change_receiver) = mpsc::channel();
+        thread::spawn(move || {
+            while change_receiver.recv().is_ok() {
+                let burst_started = Instant::now();
+                loop {
+                    let remaining = Duration::from_secs(1).saturating_sub(burst_started.elapsed());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    let quiet_period = remaining.min(Duration::from_millis(250));
+                    match change_receiver.recv_timeout(quiet_period) {
+                        Ok(()) => {}
+                        Err(mpsc::RecvTimeoutError::Timeout) => break,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                }
+                let _ = app.emit("repository-changed", &payload);
+            }
+        });
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if event.is_ok() {
-                    let _ = app.emit("repository-changed", &payload);
+                if matches!(
+                    event,
+                    Ok(ref event) if !matches!(event.kind, notify::EventKind::Access(_))
+                ) {
+                    let _ = change_sender.send(());
                 }
             })
             .map_err(watcher_error)?;
