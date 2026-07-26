@@ -5,6 +5,9 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { getAppInfo, type AppInfoDto } from "./app-info";
@@ -82,6 +85,194 @@ const navigation: ReadonlyArray<{ id: Page; label: string; shortcut: string }> =
   { id: "history", label: t("History"), shortcut: "⌘2" },
   { id: "operations", label: t("Operations"), shortcut: "⌘3" },
 ];
+
+type MultiSelection = ReturnType<typeof useMultiSelection>;
+
+function useMultiSelection(items: string[], scope: string) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [focused, setFocused] = useState<string | undefined>(undefined);
+  const anchor = useRef<string | undefined>(undefined);
+  const dragging = useRef(false);
+  const dragBase = useRef<Set<string>>(new Set());
+  const pointerStart = useRef<{ x: number; y: number } | undefined>(undefined);
+  const pointerMoved = useRef(false);
+
+  useEffect(() => {
+    const valid = new Set(items);
+    setSelected((current) => {
+      const next = new Set([...current].filter((item) => valid.has(item)));
+      return next.size === current.size ? current : next;
+    });
+    if (anchor.current && !valid.has(anchor.current)) anchor.current = undefined;
+    setFocused((current) => (current && valid.has(current) ? current : items[0]));
+  }, [items]);
+
+  useEffect(() => {
+    const continueDragging = (event: MouseEvent) => {
+      if (!dragging.current || (event.buttons & 1) === 0) return;
+      const start = pointerStart.current;
+      if (
+        start &&
+        Math.abs(event.clientX - start.x) + Math.abs(event.clientY - start.y) > 4
+      ) {
+        pointerMoved.current = true;
+      }
+      const itemElement = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest<HTMLElement>("[data-selection-scope][data-selection-index]");
+      if (itemElement?.dataset.selectionScope !== scope) return;
+      const itemIndex = Number(itemElement.dataset.selectionIndex);
+      const item = items[itemIndex];
+      if (!item) return;
+      const anchorIndex = Math.max(0, items.indexOf(anchor.current ?? item));
+      const range = items.slice(
+        Math.min(anchorIndex, itemIndex),
+        Math.max(anchorIndex, itemIndex) + 1,
+      );
+      setSelected(new Set([...dragBase.current, ...range]));
+    };
+    const stopDragging = () => {
+      dragging.current = false;
+    };
+    window.addEventListener("mousemove", continueDragging);
+    window.addEventListener("mouseup", stopDragging);
+    return () => {
+      window.removeEventListener("mousemove", continueDragging);
+      window.removeEventListener("mouseup", stopDragging);
+    };
+  }, [items, scope]);
+
+  const rangeTo = (item: string) => {
+    const from = Math.max(0, items.indexOf(anchor.current ?? item));
+    const to = Math.max(0, items.indexOf(item));
+    return items.slice(Math.min(from, to), Math.max(from, to) + 1);
+  };
+
+  const onMouseDown = (item: string, event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    event.currentTarget.focus();
+    setFocused(item);
+    pointerStart.current = { x: event.clientX, y: event.clientY };
+    pointerMoved.current = false;
+    const additive = event.ctrlKey || event.metaKey;
+    if (event.shiftKey) {
+      const range = rangeTo(item);
+      setSelected((current) =>
+        new Set(additive ? [...current, ...range] : range),
+      );
+    } else if (additive) {
+      setSelected((current) => {
+        const next = new Set(current);
+        if (next.has(item)) next.delete(item);
+        else next.add(item);
+        return next;
+      });
+      anchor.current = item;
+    } else {
+      if (!selected.has(item)) {
+        setSelected(new Set([item]));
+      }
+      anchor.current = item;
+    }
+    dragBase.current = new Set(additive ? selected : []);
+    dragging.current = true;
+  };
+
+  const onClick = (item: string, event: ReactMouseEvent<HTMLElement>) => {
+    const additive = event.ctrlKey || event.metaKey;
+    if (!pointerMoved.current && !event.shiftKey && !additive) {
+      setSelected(new Set([item]));
+      anchor.current = item;
+    }
+    setFocused(item);
+    pointerStart.current = undefined;
+  };
+
+  const onMouseEnter = (item: string, event: ReactMouseEvent<HTMLElement>) => {
+    if (!dragging.current || (event.buttons & 1) === 0) return;
+    const range = rangeTo(item);
+    setSelected(new Set([...dragBase.current, ...range]));
+  };
+
+  const onKeyDown = (
+    item: string,
+    event: ReactKeyboardEvent<HTMLElement>,
+    onActivate?: (item: string) => void,
+    onFocusIndex?: (index: number) => void,
+  ) => {
+    const additive = event.ctrlKey || event.metaKey;
+    if (additive && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      setSelected(new Set(items));
+      return;
+    }
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      const current = Math.max(0, items.indexOf(item));
+      const nextIndex = Math.max(
+        0,
+        Math.min(items.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)),
+      );
+      const nextItem = items[nextIndex];
+      if (!nextItem) return;
+      setFocused(nextItem);
+      if (event.shiftKey) {
+        const range = rangeTo(nextItem);
+        setSelected((currentSelection) =>
+          new Set(additive ? [...currentSelection, ...range] : range),
+        );
+      } else if (!additive) {
+        setSelected(new Set([nextItem]));
+        anchor.current = nextItem;
+      }
+      onFocusIndex?.(nextIndex);
+      if (!additive || event.shiftKey) onActivate?.(nextItem);
+      return;
+    }
+    if (event.key === " ") {
+      event.preventDefault();
+      if (additive) {
+        setSelected((current) => {
+          const next = new Set(current);
+          if (next.has(item)) next.delete(item);
+          else next.add(item);
+          return next;
+        });
+      } else {
+        setSelected(new Set([item]));
+      }
+      anchor.current = item;
+      setFocused(item);
+      onActivate?.(item);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (!selected.has(item)) setSelected(new Set([item]));
+      anchor.current = item;
+      setFocused(item);
+      onActivate?.(item);
+    }
+  };
+
+  const clear = () => {
+    setSelected(new Set());
+    anchor.current = undefined;
+  };
+
+  return {
+    items,
+    selected,
+    focused,
+    setFocused,
+    setSelected,
+    clear,
+    onMouseDown,
+    onMouseEnter,
+    onClick,
+    onKeyDown,
+  };
+}
 
 export type ThemeSetting = "system" | "light" | "dark";
 
@@ -188,6 +379,24 @@ export function App() {
     () => buildBranchTree(activeSidebar?.branches.items ?? [], false),
     [activeSidebar?.branches.items],
   );
+  const branchSelectionItems = useMemo(
+    () => [
+      ...(activeSidebar?.branches.items ?? []).map((branch) => `local:${branch}`),
+      ...remoteBranchItems.map((branch) => `remote:${branch}`),
+    ],
+    [activeSidebar?.branches.items, remoteBranchItems],
+  );
+  const branchSelection = useMultiSelection(branchSelectionItems, "branches");
+  const tagSelectionItems = useMemo(
+    () => [
+      ...(activeSidebar?.tags.items ?? []).map((tag) => `local:${tag}`),
+      ...(remoteTagsMap[activeTab?.repoId ?? ""] ?? []).map(
+        (tag) => `remote:${tag.remote}/${tag.name}`,
+      ),
+    ],
+    [activeSidebar?.tags.items, activeTab?.repoId, remoteTagsMap],
+  );
+  const tagSelection = useMultiSelection(tagSelectionItems, "tags");
 
   const handleBranchCheckout = (branchName: string) => {
     if (!activeSnapshot) return;
@@ -554,6 +763,34 @@ export function App() {
     });
   };
 
+  const handleActivateTagSelection = (selectionKey: string) => {
+    if (selectionKey.startsWith("local:")) {
+      void handleSelectReference(selectionKey.slice("local:".length), "tag");
+      return;
+    }
+    const remoteKey = selectionKey.slice("remote:".length);
+    const remoteTag = (remoteTagsMap[activeTab?.repoId ?? ""] ?? []).find(
+      (tag) => `${tag.remote}/${tag.name}` === remoteKey,
+    );
+    if (remoteTag) {
+      void handleSelectReference(remoteTag.name, "tag", remoteTag.oid);
+    }
+  };
+
+  const handleActivateBranchSelection = (selectionKey: string) => {
+    if (selectionKey.startsWith("local:")) {
+      void handleSelectReference(
+        selectionKey.slice("local:".length),
+        "localBranch",
+      );
+    } else if (selectionKey.startsWith("remote:")) {
+      void handleSelectReference(
+        selectionKey.slice("remote:".length),
+        "remoteBranch",
+      );
+    }
+  };
+
   async function handleWorktreeActivate(worktreeId: string) {
     if (!activeTab || activeTab.worktreeId === worktreeId) return;
     try {
@@ -729,6 +966,7 @@ export function App() {
               label={t("Local Branches")}
               count={activeSidebar?.branches.total}
               initialLimit={999}
+              onClearSelection={branchSelection.clear}
             >
               {localBranchTree.map((node) => (
                 <BranchTreeNodeView
@@ -737,6 +975,9 @@ export function App() {
                   currentBranchLabel={branchLabel}
                   referencesList={activeTab ? referencesMap[activeTab.repoId] ?? [] : []}
                   isRemote={false}
+                  selection={branchSelection}
+                  selectionPrefix="local:"
+                  onSelectSelectionKey={handleActivateBranchSelection}
                   onCheckout={handleBranchCheckout}
                   onSelect={(refName) => handleSelectReference(refName, "localBranch")}
                 />
@@ -746,12 +987,16 @@ export function App() {
               label={t("Remote Branches")}
               count={activeSidebar?.remoteBranches?.total ?? remoteBranchItems.length}
               initialLimit={999}
+              onClearSelection={branchSelection.clear}
             >
               {remoteBranchTree.map((node) => (
                 <BranchTreeNodeView
                   key={node.id}
                   node={node}
                   isRemote={true}
+                  selection={branchSelection}
+                  selectionPrefix="remote:"
+                  onSelectSelectionKey={handleActivateBranchSelection}
                   onSelect={(refName) => handleSelectReference(refName, "remoteBranch")}
                 />
               ))}
@@ -759,6 +1004,7 @@ export function App() {
             <SidebarGroup
               label={t("Tags")}
               count={(activeSidebar?.tags.total ?? 0) + (remoteTagsMap[activeTab?.repoId ?? ""]?.length ?? 0)}
+              onClearSelection={tagSelection.clear}
             >
               <div className="sub-group-header">
                 <span>{t("Local Tags")} ({activeSidebar?.tags.total ?? 0})</span>
@@ -766,19 +1012,33 @@ export function App() {
               {activeSidebar?.tags.items.map((tag) => (
                 <div
                   key={tag}
-                  className="tag-item-row tree-leaf-row"
+                  className={`tag-item-row tree-leaf-row ${tagSelection.selected.has(`local:${tag}`) ? "selected" : ""}`}
                   role="button"
-                  tabIndex={0}
+                  tabIndex={
+                    tagSelection.focused === `local:${tag}` ||
+                    (!tagSelection.focused &&
+                      tagSelectionItems.indexOf(`local:${tag}`) === 0)
+                      ? 0
+                      : -1
+                  }
+                  aria-pressed={tagSelection.selected.has(`local:${tag}`)}
+                  data-selection-scope="tags"
+                  data-selection-index={tagSelectionItems.indexOf(`local:${tag}`)}
+                  onMouseDown={(event) => tagSelection.onMouseDown(`local:${tag}`, event)}
+                  onMouseEnter={(event) => tagSelection.onMouseEnter(`local:${tag}`, event)}
                   onClick={(e) => {
                     e.stopPropagation();
+                    tagSelection.onClick(`local:${tag}`, e);
                     handleSelectReference(tag, "tag");
                   }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      handleSelectReference(tag, "tag");
-                    }
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    tagSelection.onKeyDown(
+                      `local:${tag}`,
+                      event,
+                      handleActivateTagSelection,
+                      (index) => focusSelectionIndex(event.currentTarget, index),
+                    );
                   }}
                 >
                   <span className="branch-icon" aria-hidden="true">🏷️ </span>
@@ -800,19 +1060,38 @@ export function App() {
               {remoteTagsMap[activeTab?.repoId ?? ""]?.map((tag) => (
                 <div
                   key={`${tag.remote}/${tag.name}`}
-                  className="tag-item-row tree-leaf-row"
+                  className={`tag-item-row tree-leaf-row ${tagSelection.selected.has(`remote:${tag.remote}/${tag.name}`) ? "selected" : ""}`}
                   role="button"
-                  tabIndex={0}
+                  tabIndex={
+                    tagSelection.focused === `remote:${tag.remote}/${tag.name}` ||
+                    (!tagSelection.focused &&
+                      tagSelectionItems.indexOf(
+                        `remote:${tag.remote}/${tag.name}`,
+                      ) === 0)
+                      ? 0
+                      : -1
+                  }
+                  aria-pressed={tagSelection.selected.has(`remote:${tag.remote}/${tag.name}`)}
+                  data-selection-scope="tags"
+                  data-selection-index={tagSelectionItems.indexOf(`remote:${tag.remote}/${tag.name}`)}
+                  onMouseDown={(event) => tagSelection.onMouseDown(`remote:${tag.remote}/${tag.name}`, event)}
+                  onMouseEnter={(event) => tagSelection.onMouseEnter(`remote:${tag.remote}/${tag.name}`, event)}
                   onClick={(e) => {
                     e.stopPropagation();
+                    tagSelection.onClick(
+                      `remote:${tag.remote}/${tag.name}`,
+                      e,
+                    );
                     handleSelectReference(tag.name, "tag", tag.oid);
                   }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      handleSelectReference(tag.name, "tag", tag.oid);
-                    }
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    tagSelection.onKeyDown(
+                      `remote:${tag.remote}/${tag.name}`,
+                      event,
+                      handleActivateTagSelection,
+                      (index) => focusSelectionIndex(event.currentTarget, index),
+                    );
                   }}
                 >
                   <span className="branch-icon" aria-hidden="true">🏷️ </span>
@@ -1063,6 +1342,18 @@ function cloneRepositoryName(remoteUrl: string) {
   return name.replace(/\.git$/i, "") || "repository";
 }
 
+function focusSelectionIndex(element: HTMLElement, index: number) {
+  const scope = element.dataset.selectionScope;
+  if (!scope) return;
+  requestAnimationFrame(() => {
+    document
+      .querySelector<HTMLElement>(
+        `[data-selection-scope="${scope}"][data-selection-index="${index}"]`,
+      )
+      ?.focus();
+  });
+}
+
 export type BranchTreeNode = {
   id: string;
   name: string;
@@ -1151,6 +1442,9 @@ function BranchTreeNodeView({
   currentBranchLabel,
   referencesList = [],
   isRemote = false,
+  selection,
+  selectionPrefix = "",
+  onSelectSelectionKey,
   onCheckout,
   onSelect,
 }: {
@@ -1159,12 +1453,17 @@ function BranchTreeNodeView({
   currentBranchLabel?: string;
   referencesList?: ReferenceDto[];
   isRemote?: boolean;
+  selection?: MultiSelection;
+  selectionPrefix?: string;
+  onSelectSelectionKey?: (selectionKey: string) => void;
   onCheckout?: (branchName: string) => void;
   onSelect?: (fullPath: string) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
 
   if (node.isLeaf) {
+    const selectionKey = `${selectionPrefix}${node.fullPath}`;
+    const selectionIndex = selection?.items.indexOf(selectionKey);
     const isCurrent = !isRemote && node.fullPath === currentBranchLabel;
     const refInfo = !isRemote
       ? referencesList.find(
@@ -1175,10 +1474,26 @@ function BranchTreeNodeView({
 
     return (
       <div
-        className={`tree-leaf-row branch-item-row ${isCurrent ? "active-branch" : ""}`}
+        className={`tree-leaf-row branch-item-row ${isCurrent ? "active-branch" : ""} ${selection?.selected.has(selectionKey) ? "selected" : ""}`}
+        role="button"
+        tabIndex={
+          selection
+            ? selection.focused === selectionKey ||
+              (!selection.focused && selectionIndex === 0)
+              ? 0
+              : -1
+            : 0
+        }
+        aria-label={t("Branch {name}", { name: node.fullPath })}
+        aria-pressed={selection?.selected.has(selectionKey)}
+        data-selection-scope="branches"
+        data-selection-index={selectionIndex}
         style={{ paddingLeft: `${depth * 14 + 6}px` }}
+        onMouseDown={(event) => selection?.onMouseDown(selectionKey, event)}
+        onMouseEnter={(event) => selection?.onMouseEnter(selectionKey, event)}
         onClick={(e) => {
           e.stopPropagation();
+          selection?.onClick(selectionKey, e);
           if (onSelect) {
             onSelect(node.fullPath);
           } else if (!isRemote && onCheckout && !isCurrent) {
@@ -1191,15 +1506,32 @@ function BranchTreeNodeView({
             onCheckout(node.fullPath);
           }
         }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.stopPropagation();
-            e.preventDefault();
-            if (onSelect) {
-              onSelect(node.fullPath);
-            } else if (!isRemote && onCheckout && !isCurrent) {
-              onCheckout(node.fullPath);
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          const activate = (item = selectionKey) => {
+            if (onSelectSelectionKey) {
+              onSelectSelectionKey(item);
+              return;
             }
+            const fullPath = item.startsWith(selectionPrefix)
+              ? item.slice(selectionPrefix.length)
+              : node.fullPath;
+            if (onSelect) {
+              onSelect(fullPath);
+            } else if (!isRemote && onCheckout && !isCurrent) {
+              onCheckout(fullPath);
+            }
+          };
+          if (selection) {
+            selection.onKeyDown(
+              selectionKey,
+              event,
+              activate,
+              (index) => focusSelectionIndex(event.currentTarget, index),
+            );
+          } else if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            activate(selectionKey);
           }
         }}
       >
@@ -1265,6 +1597,9 @@ function BranchTreeNodeView({
               currentBranchLabel={currentBranchLabel}
               referencesList={referencesList}
               isRemote={isRemote}
+              selection={selection}
+              selectionPrefix={selectionPrefix}
+              onSelectSelectionKey={onSelectSelectionKey}
               onCheckout={onCheckout}
               onSelect={onSelect}
             />
@@ -1281,12 +1616,14 @@ function SidebarGroup({
   children,
   initialLimit = 5,
   defaultExpanded = true,
+  onClearSelection,
 }: {
   label: string;
   count?: number;
   children?: ReactNode;
   initialLimit?: number;
   defaultExpanded?: boolean;
+  onClearSelection?: () => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [showAll, setShowAll] = useState(false);
@@ -1296,7 +1633,21 @@ function SidebarGroup({
   const visibleChildren = showAll ? childArray : childArray.slice(0, initialLimit);
 
   return (
-    <div className={`sidebar-read-group ${isExpanded ? "expanded" : "collapsed"}`}>
+    <div
+      className={`sidebar-read-group ${isExpanded ? "expanded" : "collapsed"}`}
+      onMouseDown={(event) => {
+        if (!onClearSelection) return;
+        const target = event.target as HTMLElement;
+        if (
+          target.closest(
+            ".tree-leaf-row, .tree-node-header, .sidebar-group, button, input, label",
+          )
+        ) {
+          return;
+        }
+        onClearSelection();
+      }}
+    >
       <div
         className="sidebar-group"
         role="button"
@@ -1558,6 +1909,10 @@ function ChangesView({
       ),
     [snapshot],
   );
+  const unstagedPaths = useMemo(() => unstaged.map((change) => change.path), [unstaged]);
+  const stagedPathsList = useMemo(() => staged.map((change) => change.path), [staged]);
+  const unstagedSelection = useMultiSelection(unstagedPaths, "changes-unstaged");
+  const stagedSelection = useMultiSelection(stagedPathsList, "changes-staged");
   const selected = snapshot.changes.find((change) => change.path === selectedPath);
   const [diff, setDiff] = useState<DiffDto>();
   const [diffLoading, setDiffLoading] = useState(false);
@@ -1566,6 +1921,92 @@ function ChangesView({
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [amend, setAmend] = useState(false);
+  const draggedUnstagedPaths = useRef<string[]>([]);
+  const pointerDrag = useRef<
+    {
+      path: string;
+      source: DiffTarget;
+      startX: number;
+      startY: number;
+      originalSelection: Set<string>;
+    } | undefined
+  >(undefined);
+  const nativeDropHandled = useRef(false);
+  const [activeDropTarget, setActiveDropTarget] = useState<DiffTarget>();
+
+  useEffect(() => {
+    if (!selectedPath) return;
+    const selection =
+      selectedTarget === "staged" ? stagedSelection : unstagedSelection;
+    if (selection.items.includes(selectedPath)) {
+      selection.setSelected((current) =>
+        current.size === 0 ? new Set([selectedPath]) : current,
+      );
+    }
+  }, [selectedPath, selectedTarget, stagedSelection.items, unstagedSelection.items]);
+
+  useEffect(() => {
+    const dropTargetAt = (clientX: number, clientY: number) => {
+      if (typeof document.elementFromPoint !== "function") return undefined;
+      const target = document
+        .elementFromPoint(clientX, clientY)
+        ?.closest<HTMLElement>("[data-change-drop-target]")
+        ?.dataset.changeDropTarget;
+      return target === "staged" || target === "unstaged" ? target : undefined;
+    };
+
+    const handlePointerMove = (event: MouseEvent) => {
+      const pending = pointerDrag.current;
+      if (!pending) return;
+      const moved =
+        Math.abs(event.clientX - pending.startX) +
+          Math.abs(event.clientY - pending.startY) >
+        6;
+      const target = moved ? dropTargetAt(event.clientX, event.clientY) : undefined;
+      const oppositeTarget =
+        target && target !== pending.source ? target : undefined;
+      if (oppositeTarget) {
+        const sourceSelection =
+          pending.source === "staged" ? stagedSelection : unstagedSelection;
+        sourceSelection.setSelected(new Set(pending.originalSelection));
+      }
+      setActiveDropTarget(oppositeTarget);
+    };
+
+    const handlePointerUp = (event: MouseEvent) => {
+      const pending = pointerDrag.current;
+      pointerDrag.current = undefined;
+      setActiveDropTarget(undefined);
+      if (!pending || nativeDropHandled.current) {
+        nativeDropHandled.current = false;
+        return;
+      }
+      const moved =
+        Math.abs(event.clientX - pending.startX) +
+          Math.abs(event.clientY - pending.startY) >
+        6;
+      const target = moved ? dropTargetAt(event.clientX, event.clientY) : undefined;
+      if (!target || target === pending.source) return;
+      const paths = pending.originalSelection.has(pending.path)
+        ? [...pending.originalSelection]
+        : [pending.path];
+      moveSelectedPaths(pending.source, paths);
+    };
+
+    window.addEventListener("mousemove", handlePointerMove);
+    window.addEventListener("mouseup", handlePointerUp);
+    return () => {
+      window.removeEventListener("mousemove", handlePointerMove);
+      window.removeEventListener("mouseup", handlePointerUp);
+    };
+  }, [
+    stagedSelection.selected,
+    unstagedSelection.selected,
+    staged,
+    unstaged,
+    operation,
+    snapshot.revision,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -1661,6 +2102,62 @@ function ChangesView({
         amend,
       }),
     );
+  }
+
+  function beginUnstagedDrag(path: string, event: ReactDragEvent<HTMLElement>) {
+    const paths = unstagedSelection.selected.has(path)
+      ? [...unstagedSelection.selected]
+      : [path];
+    draggedUnstagedPaths.current = paths;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-gitacorn-unstaged", paths.join("\n"));
+    event.dataTransfer.setData("text/plain", paths.join("\n"));
+  }
+
+  function beginPointerDrag(
+    path: string,
+    source: DiffTarget,
+    event: ReactMouseEvent<HTMLElement>,
+  ) {
+    if (event.button !== 0) return;
+    nativeDropHandled.current = false;
+    pointerDrag.current = {
+      path,
+      source,
+      startX: event.clientX,
+      startY: event.clientY,
+      originalSelection: new Set(
+        source === "staged"
+          ? stagedSelection.selected
+          : unstagedSelection.selected,
+      ),
+    };
+  }
+
+  function moveSelectedPaths(source: DiffTarget, paths: string[]) {
+    if (operation) return;
+    const pathSet = new Set(paths);
+    const changes = source === "staged" ? staged : unstaged;
+    const pathBytes = changes
+      .filter((change) => pathSet.has(change.path))
+      .map((change) => change.pathBytes);
+    if (pathBytes.length === 0) return;
+    void mutate(
+      source === "staged" ? t("Unstaging files…") : t("Staging files…"),
+      () =>
+        source === "staged"
+          ? unstagePaths(snapshot.repository.id, snapshot.revision, pathBytes)
+          : stagePaths(snapshot.repository.id, snapshot.revision, pathBytes),
+    );
+  }
+
+  function dropOnStaged(event: ReactDragEvent<HTMLElement>) {
+    event.preventDefault();
+    nativeDropHandled.current = true;
+    setActiveDropTarget(undefined);
+    const paths = draggedUnstagedPaths.current;
+    draggedUnstagedPaths.current = [];
+    moveSelectedPaths("unstaged", paths);
   }
 
   const [stageSplitRatio, setStageSplitRatio] = useState(() => {
@@ -1780,7 +2277,19 @@ function ChangesView({
             changes={unstaged}
             selectedPath={selectedPath}
             selectedTarget={selectedTarget}
+            selection={unstagedSelection}
             onSelect={onSelect}
+            onDragStart={beginUnstagedDrag}
+            onPointerDragStart={(path, event) =>
+              beginPointerDrag(path, "unstaged", event)
+            }
+            onDragEnd={() => {
+              draggedUnstagedPaths.current = [];
+              pointerDrag.current = undefined;
+              setActiveDropTarget(undefined);
+            }}
+            dropActive={activeDropTarget === "unstaged"}
+            isChangeDropTarget="unstaged"
           />
         </div>
         <div
@@ -1799,7 +2308,30 @@ function ChangesView({
             changes={staged}
             selectedPath={selectedPath}
             selectedTarget={selectedTarget}
+            selection={stagedSelection}
             onSelect={onSelect}
+            onPointerDragStart={(path, event) =>
+              beginPointerDrag(path, "staged", event)
+            }
+            dropActive={activeDropTarget === "staged"}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              if (draggedUnstagedPaths.current.length > 0) {
+                setActiveDropTarget("staged");
+              }
+            }}
+            onDragOver={(event) => {
+              if (draggedUnstagedPaths.current.length === 0) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+            }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setActiveDropTarget(undefined);
+              }
+            }}
+            onDrop={dropOnStaged}
+            isChangeDropTarget="staged"
           />
         </div>
         <div
@@ -1895,14 +2427,19 @@ function ChangesView({
                   onClick={() =>
                     void mutate(
                       selectedTarget === "staged" ? t("Unstaging file…") : t("Staging file…"),
-                      () =>
-                        selectedTarget === "staged"
-                          ? unstagePaths(snapshot.repository.id, snapshot.revision, [
-                              selected.pathBytes,
-                            ])
-                          : stagePaths(snapshot.repository.id, snapshot.revision, [
-                              selected.pathBytes,
-                            ]),
+                      () => {
+                        const activeSelection =
+                          selectedTarget === "staged" ? stagedSelection : unstagedSelection;
+                        const selectedPaths = activeSelection.selected.has(selected.path)
+                          ? activeSelection.selected
+                          : new Set([selected.path]);
+                        const paths = (selectedTarget === "staged" ? staged : unstaged)
+                          .filter((change) => selectedPaths.has(change.path))
+                          .map((change) => change.pathBytes);
+                        return selectedTarget === "staged"
+                          ? unstagePaths(snapshot.repository.id, snapshot.revision, paths)
+                          : stagePaths(snapshot.repository.id, snapshot.revision, paths);
+                      },
                     )
                   }
                 >
@@ -2031,17 +2568,44 @@ function ChangeSection({
   changes,
   selectedPath,
   selectedTarget,
+  selection,
   onSelect,
+  onDragStart,
+  onPointerDragStart,
+  onDragEnd,
+  dropActive = false,
+  onDragEnter,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  isChangeDropTarget,
 }: {
   title: string;
   target: DiffTarget;
   changes: FileChangeDto[];
   selectedPath?: string;
   selectedTarget?: DiffTarget;
+  selection?: MultiSelection;
   onSelect: (path: string, target: DiffTarget) => void;
+  onDragStart?: (path: string, event: ReactDragEvent<HTMLElement>) => void;
+  onPointerDragStart?: (path: string, event: ReactMouseEvent<HTMLElement>) => void;
+  onDragEnd?: () => void;
+  dropActive?: boolean;
+  onDragEnter?: (event: ReactDragEvent<HTMLElement>) => void;
+  onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
+  onDragLeave?: (event: ReactDragEvent<HTMLElement>) => void;
+  onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
+  isChangeDropTarget?: DiffTarget;
 }) {
   return (
-    <div className="change-section">
+    <div
+      className={`change-section ${dropActive ? "drop-target" : ""}`}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      data-change-drop-target={isChangeDropTarget}
+    >
       <div className="panel-heading"><h2>{title}</h2><span>{changes.length}</span></div>
       {changes.length === 0 ? (
         <div className="panel-empty">
@@ -2053,7 +2617,11 @@ function ChangeSection({
           target={target}
           selectedPath={selectedPath}
           selectedTarget={selectedTarget}
+          selection={selection}
           onSelect={onSelect}
+          onDragStart={onDragStart}
+          onPointerDragStart={onPointerDragStart}
+          onDragEnd={onDragEnd}
         />
       )}
     </div>
@@ -2065,23 +2633,124 @@ function VirtualChangeList({
   target,
   selectedPath,
   selectedTarget,
+  selection,
   onSelect,
+  onDragStart,
+  onPointerDragStart,
+  onDragEnd,
 }: {
   changes: FileChangeDto[];
   target: DiffTarget;
   selectedPath?: string;
   selectedTarget?: DiffTarget;
+  selection?: MultiSelection;
   onSelect: (path: string, target: DiffTarget) => void;
+  onDragStart?: (path: string, event: ReactDragEvent<HTMLElement>) => void;
+  onPointerDragStart?: (path: string, event: ReactMouseEvent<HTMLElement>) => void;
+  onDragEnd?: () => void;
 }) {
   const rowHeight = 34;
   const [scrollTop, setScrollTop] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const blankDrag = useRef<
+    | {
+        startY: number;
+        baseSelection: Set<string>;
+        moved: boolean;
+      }
+    | undefined
+  >(undefined);
+  const [selectionBand, setSelectionBand] = useState<
+    { top: number; height: number } | undefined
+  >(undefined);
   const visibleCount = 20;
   const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 4);
   const end = Math.min(changes.length, start + visibleCount + 8);
+
+  useEffect(() => {
+    const continueBlankDrag = (event: MouseEvent) => {
+      const pending = blankDrag.current;
+      const list = listRef.current;
+      const space = list?.querySelector<HTMLElement>(".virtual-list-space");
+      if (!pending || !space || (event.buttons & 1) === 0) return;
+
+      const currentY = event.clientY - space.getBoundingClientRect().top;
+      if (Math.abs(currentY - pending.startY) > 4) pending.moved = true;
+
+      const totalHeight = changes.length * rowHeight;
+      const top = Math.min(pending.startY, currentY);
+      const bottom = Math.max(pending.startY, currentY);
+      const clippedTop = Math.max(0, Math.min(totalHeight, top));
+      const clippedBottom = Math.max(0, Math.min(totalHeight, bottom));
+      setSelectionBand({
+        top: clippedTop,
+        height: Math.max(1, clippedBottom - clippedTop),
+      });
+
+      if (!pending.moved || bottom < 0 || top >= totalHeight) {
+        selection?.setSelected(new Set(pending.baseSelection));
+        return;
+      }
+
+      const firstIndex = Math.max(0, Math.floor(Math.max(0, top) / rowHeight));
+      const lastIndex = Math.min(
+        changes.length - 1,
+        Math.floor(Math.max(0, Math.min(totalHeight - 1, bottom)) / rowHeight),
+      );
+      const range = changes
+        .slice(firstIndex, lastIndex + 1)
+        .map((change) => change.path);
+      selection?.setSelected(new Set([...pending.baseSelection, ...range]));
+    };
+
+    const stopBlankDrag = () => {
+      blankDrag.current = undefined;
+      setSelectionBand(undefined);
+    };
+
+    window.addEventListener("mousemove", continueBlankDrag);
+    window.addEventListener("mouseup", stopBlankDrag);
+    return () => {
+      window.removeEventListener("mousemove", continueBlankDrag);
+      window.removeEventListener("mouseup", stopBlankDrag);
+    };
+  }, [changes, selection]);
+
   return (
-    <div className="change-list" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
+    <div
+      ref={listRef}
+      className="change-list"
+      onMouseDown={(event) => {
+        if (
+          event.button !== 0 ||
+          (event.target as HTMLElement).closest(".change-row")
+        ) {
+          return;
+        }
+        event.preventDefault();
+        const space = event.currentTarget.querySelector<HTMLElement>(
+          ".virtual-list-space",
+        );
+        if (!space) return;
+        const additive = event.ctrlKey || event.metaKey;
+        const baseSelection = new Set(
+          additive ? selection?.selected ?? [] : [],
+        );
+        if (!additive) selection?.clear();
+        blankDrag.current = {
+          startY: event.clientY - space.getBoundingClientRect().top,
+          baseSelection,
+          moved: false,
+        };
+        setSelectionBand(undefined);
+      }}
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+    >
       <div className="virtual-list-space" style={{ height: changes.length * rowHeight }}>
-        <div style={{ transform: `translateY(${start * rowHeight}px)` }}>
+        <div
+          className="virtual-list-items"
+          style={{ transform: `translateY(${start * rowHeight}px)` }}
+        >
           {changes.slice(start, end).map((change) => {
             const partial =
               change.indexStatus !== "." &&
@@ -2090,13 +2759,48 @@ function VirtualChangeList({
             return (
               <button
                 className={
-                  selectedPath === change.path && selectedTarget === target
+                  (selection
+                    ? selection.selected.has(change.path)
+                    : selectedPath === change.path && selectedTarget === target)
                     ? "change-row selected"
                     : "change-row"
                 }
                 type="button"
+                aria-pressed={selection?.selected.has(change.path) ?? false}
+                tabIndex={
+                  selection?.focused === change.path ||
+                  (!selection?.focused && changes.indexOf(change) === 0)
+                    ? 0
+                    : -1
+                }
                 key={`${target}-${change.path}-${change.indexStatus}-${change.worktreeStatus}`}
-                onClick={() => onSelect(change.path, target)}
+                data-selection-scope={`changes-${target}`}
+                data-selection-index={changes.indexOf(change)}
+                onMouseDown={(event) => {
+                  selection?.onMouseDown(change.path, event);
+                  onPointerDragStart?.(change.path, event);
+                }}
+                onMouseEnter={(event) => selection?.onMouseEnter(change.path, event)}
+                onClick={(event) => {
+                  selection?.onClick(change.path, event);
+                  onSelect(change.path, target);
+                }}
+                onKeyDown={(event) =>
+                  selection?.onKeyDown(
+                    change.path,
+                    event,
+                    (item) => onSelect(item, target),
+                    (index) => {
+                      const list = event.currentTarget.closest<HTMLElement>(".change-list");
+                      if (list) {
+                        list.scrollTop = Math.max(0, index * rowHeight - rowHeight);
+                      }
+                      focusSelectionIndex(event.currentTarget, index);
+                    },
+                  )
+                }
+                onDragStart={(event) => onDragStart?.(change.path, event)}
+                onDragEnd={onDragEnd}
                 title={change.path}
               >
                 <span className={`status-badge ${change.conflict ? "conflict" : ""}`}>
@@ -2113,6 +2817,15 @@ function VirtualChangeList({
             );
           })}
         </div>
+        {selectionBand ? (
+          <div
+            className="selection-band"
+            style={{
+              top: selectionBand.top,
+              height: selectionBand.height,
+            }}
+          />
+        ) : null}
       </div>
     </div>
   );

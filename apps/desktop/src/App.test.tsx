@@ -626,6 +626,250 @@ describe("App", () => {
     );
   });
 
+  it("selects multiple changed files with mouse ranges and keyboard ranges", async () => {
+    const multiSnapshot: RepositorySnapshotDto = {
+      ...snapshot,
+      changes: ["one.txt", "two.txt", "three.txt"].map((path, index) => ({
+        ...snapshot.changes[0],
+        path,
+        pathBytes: [index + 1],
+      })),
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], snapshot: multiSnapshot }],
+    });
+    render(<App />);
+
+    const first = await screen.findByRole("button", { name: /one\.txt/ });
+    const second = screen.getByRole("button", { name: /two\.txt/ });
+    const third = screen.getByRole("button", { name: /three\.txt/ });
+
+    fireEvent.mouseDown(first, { button: 0, buttons: 1 });
+    fireEvent.mouseEnter(third, { buttons: 1 });
+    fireEvent.mouseUp(window);
+
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    expect(second).toHaveAttribute("aria-pressed", "true");
+    expect(third).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.mouseDown(second, { button: 0, buttons: 1 });
+    fireEvent.mouseEnter(third, { buttons: 1 });
+    fireEvent.mouseUp(window);
+    expect(first).toHaveAttribute("aria-pressed", "false");
+    expect(second).toHaveAttribute("aria-pressed", "true");
+    expect(third).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.keyDown(second, { key: "ArrowUp", shiftKey: true });
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    expect(second).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.mouseDown(second, { button: 0 });
+    fireEvent.click(second);
+    expect(first).toHaveAttribute("aria-pressed", "false");
+    expect(second).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.mouseDown(second, { button: 0, ctrlKey: true });
+    fireEvent.click(second, { ctrlKey: true });
+    expect(second).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.mouseDown(first, { button: 0, ctrlKey: true });
+    fireEvent.click(first, { ctrlKey: true });
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    fireEvent.mouseDown(first.closest(".change-list")!);
+    expect(first).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("selects the rows crossed by a drag that starts in blank list space", async () => {
+    const multiSnapshot: RepositorySnapshotDto = {
+      ...snapshot,
+      changes: ["one.txt", "two.txt", "three.txt"].map((path, index) => ({
+        ...snapshot.changes[0],
+        path,
+        pathBytes: [index + 1],
+      })),
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], snapshot: multiSnapshot }],
+    });
+    render(<App />);
+
+    const first = await screen.findByRole("button", { name: /one\.txt/ });
+    const second = screen.getByRole("button", { name: /two\.txt/ });
+    const third = screen.getByRole("button", { name: /three\.txt/ });
+    const list = first.closest(".change-list")!;
+    const space = first.closest(".virtual-list-space")!;
+    vi.spyOn(space, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      right: 300,
+      bottom: 102,
+      left: 0,
+      width: 300,
+      height: 102,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.mouseDown(list, {
+      button: 0,
+      buttons: 1,
+      clientX: 250,
+      clientY: 130,
+    });
+    fireEvent.mouseMove(window, {
+      buttons: 1,
+      clientX: 250,
+      clientY: 40,
+    });
+
+    expect(list.querySelector(".selection-band")).toBeInTheDocument();
+    expect(first).toHaveAttribute("aria-pressed", "false");
+    expect(second).toHaveAttribute("aria-pressed", "true");
+    expect(third).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.mouseUp(window);
+    expect(list.querySelector(".selection-band")).not.toBeInTheDocument();
+  });
+
+  it("stages all selected unstaged files when they are dropped on Staged", async () => {
+    const multiSnapshot: RepositorySnapshotDto = {
+      ...snapshot,
+      changes: ["one.txt", "two.txt"].map((path, index) => ({
+        ...snapshot.changes[0],
+        path,
+        pathBytes: [index + 1],
+      })),
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], snapshot: multiSnapshot }],
+    });
+    render(<App />);
+
+    const first = await screen.findByRole("button", { name: /one\.txt/ });
+    const second = screen.getByRole("button", { name: /two\.txt/ });
+    fireEvent.mouseDown(first, { button: 0, ctrlKey: true });
+    fireEvent.mouseDown(second, { button: 0, ctrlKey: true });
+
+    const data = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: "all",
+      dropEffect: "none",
+      setData: (type: string, value: string) => data.set(type, value),
+      getData: (type: string) => data.get(type) ?? "",
+    };
+    fireEvent.dragStart(first, { dataTransfer });
+    const stagedSection = screen.getByRole("heading", { name: "Staged" }).closest(".change-section");
+    expect(stagedSection).not.toBeNull();
+    fireEvent.dragEnter(stagedSection!, { dataTransfer });
+    fireEvent.dragOver(stagedSection!, { dataTransfer });
+    fireEvent.drop(stagedSection!, { dataTransfer });
+
+    await waitFor(() =>
+      expect(mockedStagePaths).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        [[1], [2]],
+      ),
+    );
+  });
+
+  it("unstages all selected staged files when they are dropped on Unstaged", async () => {
+    const stagedSnapshot: RepositorySnapshotDto = {
+      ...snapshot,
+      changes: ["one.txt", "two.txt"].map((path, index) => ({
+        ...snapshot.changes[1],
+        path,
+        pathBytes: [index + 1],
+        indexStatus: "M",
+      })),
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], snapshot: stagedSnapshot }],
+    });
+    render(<App />);
+
+    const first = await screen.findByRole("button", { name: /one\.txt/ });
+    const second = screen.getByRole("button", { name: /two\.txt/ });
+    fireEvent.mouseDown(first, { button: 0, ctrlKey: true });
+    fireEvent.click(first, { ctrlKey: true });
+    fireEvent.mouseDown(second, { button: 0, ctrlKey: true });
+    fireEvent.click(second, { ctrlKey: true });
+
+    const unstagedSection = screen
+      .getByRole("heading", { name: "Unstaged" })
+      .closest(".change-section")!;
+    const originalElementFromPoint = document.elementFromPoint;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: () => unstagedSection,
+    });
+    try {
+      fireEvent.mouseDown(first, {
+        button: 0,
+        buttons: 1,
+        clientX: 10,
+        clientY: 100,
+      });
+      fireEvent.mouseMove(window, {
+        buttons: 1,
+        clientX: 10,
+        clientY: 20,
+      });
+      fireEvent.mouseUp(window, { clientX: 10, clientY: 20 });
+    } finally {
+      if (originalElementFromPoint) {
+        Object.defineProperty(document, "elementFromPoint", {
+          configurable: true,
+          value: originalElementFromPoint,
+        });
+      } else {
+        Reflect.deleteProperty(document, "elementFromPoint");
+      }
+    }
+
+    await waitFor(() =>
+      expect(mockedUnstagePaths).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        [[1], [2]],
+      ),
+    );
+  });
+
+  it("multi-selects branches and tags without checking out branches", async () => {
+    mockedCheckoutBranch.mockClear();
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 3, items: ["main", "topic", "release"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 2, items: ["v1.0.0", "v2.0.0"] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const main = await screen.findByRole("button", { name: "Branch main" });
+    const release = await screen.findByRole("button", { name: "Branch release" });
+    fireEvent.mouseDown(main, { button: 0, buttons: 1 });
+    fireEvent.mouseEnter(release, { buttons: 1 });
+    fireEvent.mouseUp(window);
+    expect(main).toHaveAttribute("aria-pressed", "true");
+    expect(release).toHaveAttribute("aria-pressed", "true");
+
+    const v1 = screen.getByRole("button", { name: /v1\.0\.0/ });
+    const v2 = screen.getByRole("button", { name: /v2\.0\.0/ });
+    fireEvent.mouseDown(v1, { button: 0 });
+    fireEvent.keyDown(v1, { key: "ArrowDown", shiftKey: true });
+    expect(v1).toHaveAttribute("aria-pressed", "true");
+    expect(v2).toHaveAttribute("aria-pressed", "true");
+    expect(mockedCheckoutBranch).not.toHaveBeenCalled();
+  });
+
   it("validates and submits the commit form", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     render(<App />);

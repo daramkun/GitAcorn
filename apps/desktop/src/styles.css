@@ -692,11 +692,24 @@ button:disabled {
   border-radius: 3px;
   padding-top: 2px;
   padding-bottom: 2px;
+  user-select: none;
 }
 
 .tree-leaf-row:hover {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
+}
+
+.tree-leaf-row.selected {
+  background: var(--surface-soft);
+  box-shadow: inset 2px 0 var(--accent);
+  color: var(--text);
+}
+
+.tree-leaf-row:focus-visible,
+.change-row:focus-visible {
+  outline: 1px dotted var(--accent-strong);
+  outline-offset: -2px;
 }
 
 .tree-leaf-row.active-branch {
@@ -1093,15 +1106,37 @@ button:disabled {
   padding: 5px;
   flex: 1;
   min-height: 0;
+  user-select: none;
+}
+
+.change-section.drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.change-section.drop-target .panel-heading {
+  color: var(--accent-strong);
 }
 
 .virtual-list-space {
   position: relative;
 }
 
-.virtual-list-space > div {
+.virtual-list-items {
   position: absolute;
   inset: 0 0 auto;
+}
+
+.selection-band {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  border: 1px solid color-mix(in srgb, var(--accent) 75%, white);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  pointer-events: none;
 }
 
 .change-row {
