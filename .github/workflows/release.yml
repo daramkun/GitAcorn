@@ -31,6 +31,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - if: startsWith(github.ref, 'refs/tags/v')
+        run: pnpm version:check -- --tag "${{ github.ref_name }}"
 
       - name: Prepare updater verification config
         shell: pwsh
@@ -101,6 +104,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - if: startsWith(github.ref, 'refs/tags/v')
+        run: pnpm version:check -- --tag "${{ github.ref_name }}"
 
       - name: Import Developer ID certificate
         shell: bash

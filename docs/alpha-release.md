@@ -2,7 +2,7 @@
 
 ## Release flow
 
-1. Run every command in the quality gate documented in `architecture-and-roadmap.md`.
+1. Run `pnpm release:check` from the repository root. This uses the same quality gate as CI and creates an unsigned local bundle for the current OS.
 2. Generate one Tauri updater key pair and set `TAURI_SIGNING_PUBLIC_KEY`, `TAURI_SIGNING_PRIVATE_KEY`, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as GitHub Actions secrets.
 3. Export a Developer ID Application certificate and configure `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, and a temporary `KEYCHAIN_PASSWORD` secret.
 4. Configure the notarization secrets `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID`.

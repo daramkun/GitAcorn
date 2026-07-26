@@ -709,20 +709,16 @@ Codex는 다음 규칙으로 이 문서를 실행한다.
 
 ### 15.1 공통 품질 게이트
 
-스크립트 이름은 M0에서 다음 인터페이스로 고정한다.
+개발자, 에이전트, CI는 저장소 루트의 다음 인터페이스를 사용한다. 세부 명령은 루트 `package.json`이 소유하며 `README.md`를 기준 문서로 삼는다.
 
 ```text
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-pnpm lint
-pnpm test --run
-pnpm build
+pnpm check
 ```
 
 - 변경된 Rust parser에는 golden 또는 integration test가 있어야 한다.
 - 사용자 상호작용 변경에는 component test 또는 명시적인 manual smoke 결과가 있어야 한다.
-- `pnpm tauri build`는 각 마일스톤 종료와 release 변경에서 실행한다.
+- `pnpm build`는 각 마일스톤 종료와 release 변경에서 실행한다.
+- `pnpm release:check`는 배포 태그를 만들기 전에 실행한다.
 - Windows에서 먼저 검증하고 macOS/Linux 전용 코드는 해당 플랫폼 CI가 없으면 완료로 표시하지 않는다.
 - 실패한 품질 게이트를 “기존 문제”로 넘기지 않는다. 이번 변경과 무관한 기존 실패라면 증거와 함께 별도 blocker로 기록한다.
 

@@ -4,13 +4,25 @@
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "engines": {
-    "node": ">=24.14.0"
+    "node": ">=24.14.0 <25"
   },
   "scripts": {
-    "dev": "pnpm --filter @git-acorn/desktop dev",
+    "dev": "pnpm --filter @git-acorn/desktop tauri dev",
+    "dev:web": "pnpm --filter @git-acorn/desktop dev",
     "tauri": "pnpm --filter @git-acorn/desktop tauri",
-    "lint": "pnpm --filter @git-acorn/desktop lint",
-    "test": "pnpm --filter @git-acorn/desktop test",
-    "build": "pnpm --filter @git-acorn/desktop build"
+    "format:check": "cargo fmt --all -- --check",
+    "lint": "pnpm format:check && pnpm lint:rust && pnpm lint:web",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+    "lint:web": "pnpm --filter @git-acorn/desktop lint",
+    "test": "pnpm test:rust && pnpm test:web",
+    "test:rust": "cargo test --workspace",
+    "test:web": "pnpm --filter @git-acorn/desktop test --run",
+    "test:web:watch": "pnpm --filter @git-acorn/desktop test",
+    "build": "pnpm --filter @git-acorn/desktop tauri build",
+    "build:app": "pnpm --filter @git-acorn/desktop tauri build --no-bundle",
+    "build:web": "pnpm --filter @git-acorn/desktop build",
+    "check": "pnpm lint && pnpm test && pnpm build:web && pnpm version:check",
+    "release:check": "pnpm check && pnpm build",
+    "version:check": "node scripts/check-versions.mjs"
   }
 }
