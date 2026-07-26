@@ -30,6 +30,10 @@ impl RemoteOperationKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteRequest {
     pub kind: RemoteOperationKind,
+    pub remote: Option<String>,
+    pub fetch_tags: bool,
+    pub auto_stash: bool,
+    pub fast_forward_only: bool,
     pub force_with_lease: bool,
 }
 
@@ -53,18 +57,7 @@ impl super::RepositoryService {
         cancellation: &CancellationToken,
         progress: impl FnMut(RemoteProgress),
     ) -> Result<(), AppError> {
-        if request.force_with_lease && request.kind != RemoteOperationKind::Push {
-            return Err(AppError::InvalidRequest(
-                "Force with lease is only valid for push".to_owned(),
-            ));
-        }
-        let mut args = vec![OsString::from(request.kind.label())];
-        if request.kind == RemoteOperationKind::Pull {
-            args.push(OsString::from("--ff-only"));
-        }
-        if request.force_with_lease {
-            args.push(OsString::from("--force-with-lease"));
-        }
+        let args = build_remote_args(request)?;
         let mut git_request = GitRequest::new(args);
         git_request.working_directory = Some(repository.worktree_path.clone());
         git_request.timeout = Duration::from_secs(15 * 60);
@@ -88,6 +81,50 @@ impl super::RepositoryService {
         git_request.timeout = Duration::from_secs(30 * 60);
         run_remote(&self.executor, git_request, cancellation, progress)
     }
+}
+
+fn build_remote_args(request: &RemoteRequest) -> Result<Vec<OsString>, AppError> {
+    if request.fetch_tags && request.kind != RemoteOperationKind::Fetch {
+        return Err(AppError::InvalidRequest(
+            "Fetch tags is only valid for fetch".to_owned(),
+        ));
+    }
+    if (request.auto_stash || request.fast_forward_only)
+        && request.kind != RemoteOperationKind::Pull
+    {
+        return Err(AppError::InvalidRequest(
+            "Auto stash and fast-forward options are only valid for pull".to_owned(),
+        ));
+    }
+    if request.force_with_lease && request.kind != RemoteOperationKind::Push {
+        return Err(AppError::InvalidRequest(
+            "Force with lease is only valid for push".to_owned(),
+        ));
+    }
+
+    let mut args = vec![OsString::from(request.kind.label())];
+    if request.fetch_tags {
+        args.push(OsString::from("--tags"));
+    }
+    if request.auto_stash {
+        args.push(OsString::from("--autostash"));
+    }
+    if request.fast_forward_only {
+        args.push(OsString::from("--ff-only"));
+    }
+    if request.force_with_lease {
+        args.push(OsString::from("--force-with-lease"));
+    }
+    if let Some(remote) = request.remote.as_deref() {
+        let remote = remote.trim();
+        if remote.is_empty() || remote.starts_with('-') || remote.contains(['\r', '\n', '\0']) {
+            return Err(AppError::InvalidRequest(
+                "Enter a valid remote name".to_owned(),
+            ));
+        }
+        args.push(OsString::from(remote));
+    }
+    Ok(args)
 }
 
 fn validate_clone_request(request: &CloneRequest) -> Result<(), AppError> {
@@ -207,7 +244,57 @@ fn map_execution_error(error: GitExecutionError) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_query_secret, sanitize_progress};
+    use super::{
+        RemoteOperationKind, RemoteRequest, build_remote_args, redact_query_secret,
+        sanitize_progress,
+    };
+
+    fn request(kind: RemoteOperationKind) -> RemoteRequest {
+        RemoteRequest {
+            kind,
+            remote: Some("upstream".to_owned()),
+            fetch_tags: false,
+            auto_stash: false,
+            fast_forward_only: false,
+            force_with_lease: false,
+        }
+    }
+
+    fn string_args(request: &RemoteRequest) -> Vec<String> {
+        build_remote_args(request)
+            .expect("valid remote arguments")
+            .into_iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn builds_fetch_options_before_the_selected_remote() {
+        let mut request = request(RemoteOperationKind::Fetch);
+        request.fetch_tags = true;
+        assert_eq!(string_args(&request), ["fetch", "--tags", "upstream"]);
+    }
+
+    #[test]
+    fn builds_pull_options_before_the_selected_remote() {
+        let mut request = request(RemoteOperationKind::Pull);
+        request.auto_stash = true;
+        request.fast_forward_only = true;
+        assert_eq!(
+            string_args(&request),
+            ["pull", "--autostash", "--ff-only", "upstream"]
+        );
+    }
+
+    #[test]
+    fn builds_safe_force_push_for_the_selected_remote() {
+        let mut request = request(RemoteOperationKind::Push);
+        request.force_with_lease = true;
+        assert_eq!(
+            string_args(&request),
+            ["push", "--force-with-lease", "upstream"]
+        );
+    }
 
     #[test]
     fn progress_removes_inline_credentials_and_tokens() {

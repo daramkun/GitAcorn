@@ -178,6 +178,14 @@ export type OperationRecordDto = {
   finishedAt?: string;
 };
 
+export type RemoteOperationOptions = {
+  remote?: string;
+  fetchTags?: boolean;
+  autoStash?: boolean;
+  fastForwardOnly?: boolean;
+  forceWithLease?: boolean;
+};
+
 export async function chooseRepositoryDirectory(): Promise<string | null> {
   const path = await open({
     title: "Open Git repository",
@@ -203,13 +211,13 @@ export function startRemoteOperation(
   repoId: string,
   kind: "fetch" | "pull" | "push",
   onEvent: (event: OperationEventDto) => void,
-  forceWithLease = false,
+  options: RemoteOperationOptions = {},
 ): Promise<OperationStartedDto> {
   const channel = new Channel<OperationEventDto>();
   channel.onmessage = onEvent;
   return invoke<OperationStartedDto>("remote_sync", {
     repoId,
-    request: { kind, forceWithLease },
+    request: { kind, ...options },
     channel,
   });
 }

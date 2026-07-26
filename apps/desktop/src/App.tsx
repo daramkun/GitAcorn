@@ -75,6 +75,7 @@ import {
   type GitRemoteDto,
   type OperationEventDto,
   type OperationRecordDto,
+  type RemoteOperationOptions,
   type RemoteTagDto,
   type RepositorySnapshotDto,
   type RepositorySidebarDto,
@@ -322,6 +323,7 @@ export function App() {
     mode: "add" | "edit";
     remote?: GitRemoteDto;
   }>();
+  const [remoteDialog, setRemoteDialog] = useState<"fetch" | "pull" | "push">();
   const [remoteContextMenu, setRemoteContextMenu] = useState<{
     x: number;
     y: number;
@@ -395,6 +397,7 @@ export function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (remoteEditor) setRemoteEditor(undefined);
+        else if (remoteDialog) setRemoteDialog(undefined);
         else if (checkoutTarget) setCheckoutTarget(undefined);
         else if (referenceEditor) setReferenceEditor(undefined);
         else if (referenceContextMenu) setReferenceContextMenu(undefined);
@@ -409,6 +412,7 @@ export function App() {
     referenceEditor,
     checkoutTarget,
     remoteContextMenu,
+    remoteDialog,
     remoteEditor,
     showSettings,
   ]);
@@ -704,7 +708,10 @@ export function App() {
     }
   }
 
-  function handleRemote(kind: "fetch" | "pull" | "push", forceWithLease = false) {
+  function handleRemote(
+    kind: "fetch" | "pull" | "push",
+    options: RemoteOperationOptions,
+  ) {
     if (!activeTab) return;
     const repoId = activeTab.repoId;
     setError(undefined);
@@ -725,7 +732,7 @@ export function App() {
         }
         if (event.error) setError(event.error);
       },
-      forceWithLease,
+      options,
     ).catch((reason: unknown) => setError(normalizeAppError(reason)));
   }
 
@@ -1199,20 +1206,6 @@ export function App() {
             ))}
           </nav>
           <div className="sidebar-groups">
-            <SidebarGroup label={t("Worktrees")} count={activeSidebar?.worktrees.length}>
-              {activeSidebar?.worktrees.map((worktree) => (
-                <button
-                  type="button"
-                  key={worktree.id}
-                  title={worktree.path}
-                  aria-current={worktree.id === activeTab?.worktreeId ? "true" : undefined}
-                  onClick={() => handleWorktreeActivate(worktree.id)}
-                >
-                  {worktree.isCurrent ? "● " : ""}{worktree.branch ?? t("Detached")}
-                  {worktree.isLocked ? ` · ${t("locked")}` : ""}
-                </button>
-              ))}
-            </SidebarGroup>
             <SidebarGroup
               label={t("Local Branches")}
               count={activeSidebar?.branches.total}
@@ -1401,6 +1394,20 @@ export function App() {
                 )
               }
             />
+            <SidebarGroup label={t("Worktrees")} count={activeSidebar?.worktrees.length}>
+              {activeSidebar?.worktrees.map((worktree) => (
+                <button
+                  type="button"
+                  key={worktree.id}
+                  title={worktree.path}
+                  aria-current={worktree.id === activeTab?.worktreeId ? "true" : undefined}
+                  onClick={() => handleWorktreeActivate(worktree.id)}
+                >
+                  {worktree.isCurrent ? "● " : ""}{worktree.branch ?? t("Detached")}
+                  {worktree.isLocked ? ` · ${t("locked")}` : ""}
+                </button>
+              ))}
+            </SidebarGroup>
           </div>
           <div className="runtime-status" role="status">
             <span className={appInfo.status === "error" ? "status-dot error" : "status-dot"} />
@@ -1437,10 +1444,9 @@ export function App() {
                   </>
                 ) : (
                   <>
-                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("fetch")}>{t("Fetch")}</button>
-                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("pull")}>{t("Pull")}{activeSnapshot?.behind ? ` ${activeSnapshot.behind}` : ""}</button>
-                    <button type="button" disabled={!activeTab} onClick={() => handleRemote("push")}>{t("Push")}{activeSnapshot?.ahead ? ` ${activeSnapshot.ahead}` : ""}</button>
-                    <button type="button" disabled={!activeTab} title={t("Reject if the remote changed since the last fetch")} onClick={() => handleRemote("push", true)}>{t("Push with lease")}</button>
+                    <button type="button" disabled={!activeTab} onClick={() => setRemoteDialog("fetch")}>{t("Fetch")}</button>
+                    <button type="button" disabled={!activeTab} onClick={() => setRemoteDialog("pull")}>{t("Pull")}{activeSnapshot?.behind ? ` ${activeSnapshot.behind}` : ""}</button>
+                    <button type="button" disabled={!activeTab} onClick={() => setRemoteDialog("push")}>{t("Push")}{activeSnapshot?.ahead ? ` ${activeSnapshot.ahead}` : ""}</button>
                   </>
                 )}
             </div>
@@ -1832,6 +1838,17 @@ export function App() {
           }
         />
       )}
+      {remoteDialog && activeSnapshot && (
+        <RemoteOperationDialog
+          kind={remoteDialog}
+          remotes={remotes}
+          onClose={() => setRemoteDialog(undefined)}
+          onRun={(options) => {
+            handleRemote(remoteDialog, options);
+            setRemoteDialog(undefined);
+          }}
+        />
+      )}
       {referenceEditor && activeSnapshot && (
         <ReferenceEditorDialog
           editor={referenceEditor}
@@ -1980,6 +1997,148 @@ function RemoteEditor({
                   : mode === "edit"
                     ? t("Save remote")
                     : t("Add remote")}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RemoteOperationDialog({
+  kind,
+  remotes,
+  onClose,
+  onRun,
+}: {
+  kind: "fetch" | "pull" | "push";
+  remotes: GitRemoteDto[];
+  onClose: () => void;
+  onRun: (options: RemoteOperationOptions) => void;
+}) {
+  const [remote, setRemote] = useState(
+    remotes.find((item) => item.name === "origin")?.name ?? remotes[0]?.name ?? "",
+  );
+  const [fetchTags, setFetchTags] = useState(false);
+  const [autoStash, setAutoStash] = useState(false);
+  const [fastForwardOnly, setFastForwardOnly] = useState(true);
+  const [forceWithLease, setForceWithLease] = useState(false);
+  const title = t(kind === "fetch" ? "Fetch" : kind === "pull" ? "Pull" : "Push");
+
+  useEffect(() => {
+    setRemote((current) =>
+      remotes.some((item) => item.name === current)
+        ? current
+        : (remotes.find((item) => item.name === "origin")?.name ?? remotes[0]?.name ?? ""),
+    );
+  }, [remotes]);
+
+  return (
+    <div className="modal-overlay" onClick={onClose} role="presentation">
+      <div
+        className="settings-modal remote-operation-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="remote-operation-title"
+      >
+        <div className="settings-modal-header">
+          <h2 id="remote-operation-title">{title}</h2>
+          <button
+            className="settings-close-btn"
+            type="button"
+            aria-label={t("Close remote operation")}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="remote-manager-body">
+          <form
+            className="remote-form remote-operation-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!remote) return;
+              onRun({
+                remote,
+                fetchTags: kind === "fetch" && fetchTags,
+                autoStash: kind === "pull" && autoStash,
+                fastForwardOnly: kind === "pull" && fastForwardOnly,
+                forceWithLease: kind === "push" && forceWithLease,
+              });
+            }}
+          >
+            <label>
+              <span>{t("Remote")}</span>
+              <select
+                value={remote}
+                onChange={(event) => setRemote(event.target.value)}
+                autoFocus
+              >
+                {remotes.map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {remotes.length === 0 && (
+              <small>{t("No remotes configured.")}</small>
+            )}
+            {kind === "fetch" && (
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={fetchTags}
+                  onChange={(event) => setFetchTags(event.target.checked)}
+                />
+                <span>{t("Fetch tags")}</span>
+              </label>
+            )}
+            {kind === "pull" && (
+              <>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={autoStash}
+                    onChange={(event) => setAutoStash(event.target.checked)}
+                  />
+                  <span>{t("Automatically stash and reapply local changes")}</span>
+                </label>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={fastForwardOnly}
+                    onChange={(event) => setFastForwardOnly(event.target.checked)}
+                  />
+                  <span>{t("Use fast-forward only")}</span>
+                </label>
+              </>
+            )}
+            {kind === "push" && (
+              <>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={forceWithLease}
+                    onChange={(event) => setForceWithLease(event.target.checked)}
+                  />
+                  <span>{t("Force Push")}</span>
+                </label>
+                {forceWithLease && (
+                  <small>
+                    {t("Reject if the remote changed since the last fetch")}
+                  </small>
+                )}
+              </>
+            )}
+            <div className="remote-form-actions">
+              <button type="button" onClick={onClose}>
+                {t("Cancel")}
+              </button>
+              <button type="submit" disabled={!remote}>
+                {title}
               </button>
             </div>
           </form>

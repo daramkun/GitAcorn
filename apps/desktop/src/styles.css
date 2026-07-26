@@ -945,12 +945,48 @@ button:disabled {
 }
 
 .remote-actions button {
-  padding: 5px 9px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--faint);
+  padding: 6px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: linear-gradient(
+    180deg,
+    var(--surface-raised),
+    var(--surface-soft)
+  );
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.16);
+  color: var(--muted);
   font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.remote-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.08),
+    0 2px 5px rgba(0, 0, 0, 0.2);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.remote-actions button:active:not(:disabled) {
+  background: var(--surface-soft);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+  transform: translateY(0);
+}
+
+.remote-actions button:disabled {
+  box-shadow: none;
+  opacity: 0.45;
 }
 
 .error-banner {
@@ -2179,6 +2215,10 @@ button:disabled {
   width: 560px;
 }
 
+.remote-operation-modal {
+  width: 420px;
+}
+
 .remote-manager-body {
   display: grid;
   gap: 18px;
@@ -2265,7 +2305,8 @@ button:disabled {
   font-size: 10px;
 }
 
-.remote-form input {
+.remote-form input,
+.remote-form select {
   width: 100%;
   min-width: 0;
   padding: 7px 8px;

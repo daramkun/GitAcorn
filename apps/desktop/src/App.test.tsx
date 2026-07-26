@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App, buildRemoteBranchTree } from "./App";
 import { getAppInfo } from "./app-info";
@@ -39,6 +39,7 @@ import {
   resolveConflict,
   restoreSession,
   stagePaths,
+  startRemoteOperation,
   unstagePaths,
   updateSessionTab,
   updateRemote,
@@ -91,6 +92,7 @@ vi.mock("./repository", () => ({
   updateRemote: vi.fn(),
   getRepositorySnapshot: vi.fn(),
   stagePaths: vi.fn(),
+  startRemoteOperation: vi.fn(),
   unstagePaths: vi.fn(),
   listenForRepositoryChanges: vi.fn(),
   mergeBranch: vi.fn(),
@@ -133,6 +135,7 @@ const mockedAddRemote = vi.mocked(addRemote);
 const mockedUpdateRemote = vi.mocked(updateRemote);
 const mockedRemoveRemote = vi.mocked(removeRemote);
 const mockedStagePaths = vi.mocked(stagePaths);
+const mockedStartRemoteOperation = vi.mocked(startRemoteOperation);
 const mockedUnstagePaths = vi.mocked(unstagePaths);
 const mockedApplyPatch = vi.mocked(applyPatchSelection);
 const mockedDiscardPath = vi.mocked(discardPath);
@@ -290,6 +293,10 @@ describe("App", () => {
     mockedUpdateRemote.mockResolvedValue({ ...snapshot, revision: 2 });
     mockedRemoveRemote.mockResolvedValue({ ...snapshot, revision: 2 });
     mockedStagePaths.mockResolvedValue(snapshot);
+    mockedStartRemoteOperation.mockResolvedValue({
+      schemaVersion: 1,
+      operationId: "remote-operation",
+    });
     mockedUnstagePaths.mockResolvedValue(snapshot);
     mockedApplyPatch.mockResolvedValue(snapshot);
     mockedDiscardPath.mockResolvedValue(snapshot);
@@ -845,6 +852,85 @@ describe("App", () => {
 
     expect(mockedGetSnapshot).toHaveBeenCalledTimes(1);
     expect(mockedGetRemotes).not.toHaveBeenCalled();
+  });
+
+  it("configures fetch, pull, and push from remote operation dialogs", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetRemotes.mockResolvedValue([
+      { name: "origin", url: "https://example.com/origin.git" },
+      { name: "upstream", url: "https://example.com/upstream.git" },
+    ]);
+    render(<App />);
+
+    await screen.findByRole("button", { name: "Fetch" });
+    await waitFor(() => expect(mockedGetRemotes).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
+    let dialog = screen.getByRole("dialog", { name: "Fetch" });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Remote" }), {
+      target: { value: "upstream" },
+    });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Fetch tags" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fetch" }));
+
+    expect(mockedStartRemoteOperation).toHaveBeenLastCalledWith(
+      snapshot.repository.id,
+      "fetch",
+      expect.any(Function),
+      {
+        remote: "upstream",
+        fetchTags: true,
+        autoStash: false,
+        fastForwardOnly: false,
+        forceWithLease: false,
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Pull" }));
+    dialog = screen.getByRole("dialog", { name: "Pull" });
+    fireEvent.click(
+      within(dialog).getByRole("checkbox", {
+        name: "Automatically stash and reapply local changes",
+      }),
+    );
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Use fast-forward only" }),
+    ).toBeChecked();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull" }));
+
+    expect(mockedStartRemoteOperation).toHaveBeenLastCalledWith(
+      snapshot.repository.id,
+      "pull",
+      expect.any(Function),
+      {
+        remote: "origin",
+        fetchTags: false,
+        autoStash: true,
+        fastForwardOnly: true,
+        forceWithLease: false,
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Push" }));
+    dialog = screen.getByRole("dialog", { name: "Push" });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Force Push" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Push" }));
+
+    expect(mockedStartRemoteOperation).toHaveBeenLastCalledWith(
+      snapshot.repository.id,
+      "push",
+      expect.any(Function),
+      {
+        remote: "origin",
+        fetchTags: false,
+        autoStash: false,
+        fastForwardOnly: false,
+        forceWithLease: true,
+      },
+    );
+    expect(
+      screen.queryByRole("button", { name: "Push with lease" }),
+    ).not.toBeInTheDocument();
   });
 
   it("recovers a stale line mutation with the latest snapshot", async () => {

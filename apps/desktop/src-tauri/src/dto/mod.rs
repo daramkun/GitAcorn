@@ -16,6 +16,12 @@ use crate::state::SessionTabState;
 #[serde(rename_all = "camelCase")]
 pub struct RemoteRequestDto {
     pub kind: String,
+    pub remote: Option<String>,
+    #[serde(default)]
+    pub fetch_tags: bool,
+    #[serde(default)]
+    pub auto_stash: bool,
+    pub fast_forward_only: Option<bool>,
     #[serde(default)]
     pub force_with_lease: bool,
 }
@@ -59,6 +65,12 @@ impl TryFrom<RemoteRequestDto> for RemoteRequest {
         };
         Ok(Self {
             kind,
+            remote: request.remote,
+            fetch_tags: request.fetch_tags,
+            auto_stash: request.auto_stash,
+            fast_forward_only: request
+                .fast_forward_only
+                .unwrap_or(kind == RemoteOperationKind::Pull),
             force_with_lease: request.force_with_lease,
         })
     }
