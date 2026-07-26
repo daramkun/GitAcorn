@@ -371,6 +371,116 @@ fn stages_selected_lines_and_unstages_them_without_touching_other_changes() {
 }
 
 #[test]
+fn stages_selected_lines_in_a_crlf_file() {
+    let fixture = TestRepository::init();
+    fixture.git(["config", "core.autocrlf", "false"]);
+    fixture.write("crlf.h", "first\r\nsecond\r\n");
+    fixture.git(["add", "crlf.h"]);
+    fixture.git(["commit", "-m", "add CRLF file"]);
+    fixture.write("crlf.h", "FIRST\r\nsecond\r\nthird\r\n");
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let diff = service
+        .diff(&repository, b"crlf.h", DiffTarget::Unstaged)
+        .expect("unstaged CRLF diff");
+    let selected = diff.files[0].hunks[0]
+        .lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            (matches!(line.kind, DiffLineKind::Addition | DiffLineKind::Deletion)
+                && line.content != "third")
+                .then_some(index)
+        })
+        .collect();
+
+    service
+        .apply_selection(
+            &repository,
+            b"crlf.h",
+            DiffTarget::Unstaged,
+            &[PatchSelection {
+                hunk_index: 0,
+                line_indices: selected,
+            }],
+        )
+        .expect("stage selected CRLF replacement");
+
+    assert_eq!(
+        fixture.git_output(["show", ":crlf.h"]),
+        b"FIRST\r\nsecond\r\n"
+    );
+    assert!(
+        fixture
+            .git_output(["diff", "--", "crlf.h"])
+            .windows(b"+third\r".len())
+            .any(|window| window == b"+third\r")
+    );
+}
+
+#[test]
+fn unstages_each_side_of_a_staged_crlf_replacement_independently() {
+    let fixture = TestRepository::init();
+    fixture.git(["config", "core.autocrlf", "false"]);
+    fixture.write("crlf.h", "first\r\nsecond\r\n");
+    fixture.git(["add", "crlf.h"]);
+    fixture.git(["commit", "-m", "add CRLF file"]);
+    fixture.write("crlf.h", "FIRST\r\nsecond\r\n");
+    fixture.git(["add", "crlf.h"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let staged_diff = service
+        .diff(&repository, b"crlf.h", DiffTarget::Staged)
+        .expect("staged CRLF diff");
+    let addition = staged_diff.files[0].hunks[0]
+        .lines
+        .iter()
+        .position(|line| line.kind == DiffLineKind::Addition)
+        .expect("staged addition");
+
+    service
+        .apply_selection(
+            &repository,
+            b"crlf.h",
+            DiffTarget::Staged,
+            &[PatchSelection {
+                hunk_index: 0,
+                line_indices: vec![addition],
+            }],
+        )
+        .expect("unstage only the added replacement line");
+    assert_eq!(fixture.git_output(["show", ":crlf.h"]), b"second\r\n");
+
+    let staged_diff = service
+        .diff(&repository, b"crlf.h", DiffTarget::Staged)
+        .expect("remaining staged CRLF diff");
+    let deletion = staged_diff.files[0].hunks[0]
+        .lines
+        .iter()
+        .position(|line| line.kind == DiffLineKind::Deletion)
+        .expect("staged deletion");
+
+    service
+        .apply_selection(
+            &repository,
+            b"crlf.h",
+            DiffTarget::Staged,
+            &[PatchSelection {
+                hunk_index: 0,
+                line_indices: vec![deletion],
+            }],
+        )
+        .expect("unstage only the deleted replacement line");
+    assert_eq!(
+        fixture.git_output(["show", ":crlf.h"]),
+        b"first\r\nsecond\r\n"
+    );
+    assert!(fixture.git_output(["diff", "--cached"]).is_empty());
+}
+
+#[test]
 fn rejects_an_invalid_patch_before_changing_the_index() {
     let fixture = TestRepository::init();
     fixture.write("tracked.txt", "changed\n");

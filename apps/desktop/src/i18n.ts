@@ -151,6 +151,7 @@ const korean = {
   "No unstaged changes.": "스테이지되지 않은 변경 사항이 없습니다.",
   "No staged changes.": "스테이지된 변경 사항이 없습니다.",
   "File diff": "파일 차이",
+  "Click or drag across changed lines to select them.": "변경 줄을 클릭하거나 드래그해 선택하세요.",
   "A calmer Git workflow": "더 편안한 Git 작업 흐름",
   "Your repositories, clearly in view.": "저장소를 한눈에 명확하게.",
   "Open a local repository to inspect its real staged, unstaged, and untracked changes.": "로컬 저장소를 열어 스테이지된 변경, 스테이지되지 않은 변경, 추적하지 않은 변경을 확인하세요.",

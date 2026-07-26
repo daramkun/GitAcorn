@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App, buildRemoteBranchTree } from "./App";
 import { getAppInfo } from "./app-info";
@@ -624,6 +624,83 @@ describe("App", () => {
       snapshot.revision,
       [snapshot.changes[1].pathBytes],
     );
+  });
+
+  it("selects a continuous range of changed lines by dragging", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], selectedPath: "tracked.txt" }],
+    });
+    render(<App />);
+
+    const firstLine = await screen.findByRole("button", { name: /initial/ });
+    const lastLine = screen.getByRole("button", { name: /modified/ });
+    fireEvent.mouseDown(firstLine, { button: 0, buttons: 1 });
+    fireEvent.mouseEnter(lastLine, { buttons: 1 });
+    fireEvent.mouseUp(window, { button: 0 });
+
+    expect(firstLine).toHaveAttribute("aria-pressed", "true");
+    expect(lastLine).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stage selected lines" }));
+
+    await waitFor(() =>
+      expect(mockedApplyPatch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        snapshot.changes[0].pathBytes,
+        "unstaged",
+        [{ hunkIndex: 0, lineIndices: [0, 1] }],
+      ),
+    );
+  });
+
+  it("blocks mutations as soon as a repository refresh is scheduled", async () => {
+    let notifyRepositoryChange: ((repoId: string) => void) | undefined;
+    mockedListenForChanges.mockImplementation(async (callback) => {
+      notifyRepositoryChange = callback;
+      return () => undefined;
+    });
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], selectedPath: "tracked.txt" }],
+    });
+    render(<App />);
+
+    const stageFile = await screen.findByRole("button", { name: "Stage file" });
+    expect(stageFile).toBeEnabled();
+    await waitFor(() => expect(notifyRepositoryChange).toBeDefined());
+
+    act(() => notifyRepositoryChange?.(snapshot.repository.id));
+
+    expect(stageFile).toBeDisabled();
+    expect(screen.getByText("Refreshing…")).toBeInTheDocument();
+  });
+
+  it("recovers a stale line mutation with the latest snapshot", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], selectedPath: "tracked.txt" }],
+    });
+    mockedApplyPatch.mockRejectedValueOnce({
+      code: "staleRevision",
+      message: "The request used repository revision 2, but the current revision is 3",
+    });
+    mockedGetSnapshot.mockResolvedValueOnce({ ...snapshot, revision: 3 });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /modified/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Stage selected lines" }));
+
+    await waitFor(() =>
+      expect(mockedGetSnapshot).toHaveBeenCalledWith(snapshot.repository.id),
+    );
+    expect(
+      screen.queryByText(
+        "The request used repository revision 2, but the current revision is 3",
+      ),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stage selected lines" })).toBeDisabled();
   });
 
   it("selects multiple changed files with mouse ranges and keyboard ranges", async () => {

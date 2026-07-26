@@ -528,16 +528,19 @@ export function App() {
     let unlisten: (() => void) | undefined;
     listenForRepositoryChanges((repoId) => {
       clearTimeout(timers.current.get(repoId));
+      setRefreshing((current) => new Set(current).add(repoId));
       timers.current.set(
         repoId,
         setTimeout(() => {
-          setRefreshing((current) => new Set(current).add(repoId));
           getRepositorySnapshot(repoId)
             .then((snapshot) => {
               if (!disposed) {
                 setTabs((current) =>
                   current.map((tab) =>
-                    tab.repoId === repoId ? { ...tab, snapshot, unavailable: false } : tab,
+                    tab.repoId === repoId &&
+                    (!tab.snapshot || snapshot.revision >= tab.snapshot.revision)
+                      ? { ...tab, snapshot, unavailable: false }
+                      : tab,
                   ),
                 );
               }
@@ -1201,6 +1204,7 @@ export function App() {
             activeSnapshot ? (
               <ChangesView
                 snapshot={activeSnapshot}
+                refreshing={refreshing.has(activeTab.repoId)}
                 selectedPath={activeTab.selectedPath}
                 panelWidth={activeTab.panelWidth}
                 selectedTarget={activeTab.selectedDiff}
@@ -1226,7 +1230,8 @@ export function App() {
                 onSnapshot={(snapshot) =>
                   setTabs((current) =>
                     current.map((tab) =>
-                      tab.repoId === snapshot.repository.id
+                      tab.repoId === snapshot.repository.id &&
+                      (!tab.snapshot || snapshot.revision >= tab.snapshot.revision)
                         ? { ...tab, snapshot, unavailable: false }
                         : tab,
                     ),
@@ -1878,6 +1883,7 @@ function UnavailableRepository({ tab, onLocate }: { tab: SessionTabDto; onLocate
 
 function ChangesView({
   snapshot,
+  refreshing,
   selectedPath,
   selectedTarget,
   panelWidth,
@@ -1887,6 +1893,7 @@ function ChangesView({
   onError,
 }: {
   snapshot: RepositorySnapshotDto;
+  refreshing: boolean;
   selectedPath?: string;
   selectedTarget: DiffTarget;
   panelWidth: number;
@@ -1918,6 +1925,7 @@ function ChangesView({
   const [diffLoading, setDiffLoading] = useState(false);
   const [selectedLines, setSelectedLines] = useState<Set<string>>(new Set());
   const [operation, setOperation] = useState<string>();
+  const mutationBlocked = Boolean(operation) || refreshing;
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [amend, setAmend] = useState(false);
@@ -2004,7 +2012,7 @@ function ChangesView({
     unstagedSelection.selected,
     staged,
     unstaged,
-    operation,
+    mutationBlocked,
     snapshot.revision,
   ]);
 
@@ -2041,13 +2049,25 @@ function ChangesView({
     label: string,
     action: () => Promise<RepositorySnapshotDto>,
   ) {
+    if (refreshing) return;
     try {
       setOperation(label);
       const next = await action();
       setSelectedLines(new Set());
       onSnapshot(next);
     } catch (reason: unknown) {
-      onError(reason);
+      const error = normalizeAppError(reason);
+      if (error.code === "staleRevision") {
+        try {
+          const latest = await getRepositorySnapshot(snapshot.repository.id);
+          setSelectedLines(new Set());
+          onSnapshot(latest);
+        } catch (refreshReason: unknown) {
+          onError(refreshReason);
+        }
+      } else {
+        onError(reason);
+      }
     } finally {
       setOperation(undefined);
     }
@@ -2135,7 +2155,7 @@ function ChangesView({
   }
 
   function moveSelectedPaths(source: DiffTarget, paths: string[]) {
-    if (operation) return;
+    if (mutationBlocked) return;
     const pathSet = new Set(paths);
     const changes = source === "staged" ? staged : unstaged;
     const pathBytes = changes
@@ -2358,7 +2378,7 @@ function ChangesView({
                 <div className="conflict-actions" aria-label={t("Conflict resolution")}>
                   <button
                     type="button"
-                    disabled={Boolean(operation)}
+                    disabled={mutationBlocked}
                     onClick={() =>
                       void mutate(t("Using our version…"), () =>
                         resolveConflict(
@@ -2374,7 +2394,7 @@ function ChangesView({
                   </button>
                   <button
                     type="button"
-                    disabled={Boolean(operation)}
+                    disabled={mutationBlocked}
                     onClick={() =>
                       void mutate(t("Using their version…"), () =>
                         resolveConflict(
@@ -2390,7 +2410,7 @@ function ChangesView({
                   </button>
                   <button
                     type="button"
-                    disabled={Boolean(operation)}
+                    disabled={mutationBlocked}
                     onClick={() =>
                       void mutate(t("Marking resolved…"), () =>
                         resolveConflict(
@@ -2407,7 +2427,7 @@ function ChangesView({
                   <button
                     type="button"
                     className="danger-button"
-                    disabled={Boolean(operation)}
+                    disabled={mutationBlocked}
                     onClick={() => {
                       if (window.confirm(t("Abort this merge and restore the pre-merge working tree?"))) {
                         void mutate(t("Aborting merge…"), () =>
@@ -2423,7 +2443,7 @@ function ChangesView({
               <div>
                 <button
                   type="button"
-                  disabled={Boolean(operation)}
+                  disabled={mutationBlocked}
                   onClick={() =>
                     void mutate(
                       selectedTarget === "staged" ? t("Unstaging file…") : t("Staging file…"),
@@ -2447,7 +2467,7 @@ function ChangesView({
                 </button>
                 <button
                   type="button"
-                  disabled={selectedLines.size === 0 || Boolean(operation)}
+                  disabled={selectedLines.size === 0 || mutationBlocked}
                   onClick={applyLines}
                 >
                   {selectedTarget === "staged" ? t("Unstage selected lines") : t("Stage selected lines")}
@@ -2456,7 +2476,7 @@ function ChangesView({
                   <button
                     className="danger-button"
                     type="button"
-                    disabled={Boolean(operation)}
+                    disabled={mutationBlocked}
                     onClick={discardSelected}
                   >
                     {t("Discard…")}
@@ -2481,6 +2501,7 @@ function ChangesView({
               <DiffRenderer
                 diff={diff}
                 selectedLines={selectedLines}
+                onSelectionChange={setSelectedLines}
                 onToggleLine={(key) =>
                   setSelectedLines((current) => {
                     const next = new Set(current);
@@ -2503,6 +2524,7 @@ function ChangesView({
                   )
                 }
                 actionLabel={selectedTarget === "staged" ? t("Unstage hunk") : t("Stage hunk")}
+                actionDisabled={mutationBlocked}
               />
             ) : (
               <div className="diff-state">{t("No text diff is available for this side.")}</div>
@@ -2834,23 +2856,115 @@ function VirtualChangeList({
 function DiffRenderer({
   diff,
   selectedLines,
+  onSelectionChange,
   onToggleLine,
   onApplyHunk,
   actionLabel,
+  actionDisabled,
 }: {
   diff: DiffDto;
   selectedLines: Set<string>;
+  onSelectionChange: (selection: Set<string>) => void;
   onToggleLine: (key: string) => void;
   onApplyHunk: (hunkIndex: number) => void;
   actionLabel: string;
+  actionDisabled: boolean;
 }) {
+  const selectableKeys = useMemo(
+    () =>
+      diff.hunks.flatMap((hunk) =>
+        hunk.lines
+          .filter((line) => line.selectable)
+          .map((line) => `${hunk.index}:${line.index}`),
+      ),
+    [diff],
+  );
+  const selectableIndices = useMemo(
+    () => new Map(selectableKeys.map((key, index) => [key, index])),
+    [selectableKeys],
+  );
+  const dragSelection = useRef<
+    | {
+        anchorIndex: number;
+        baseline: Set<string>;
+        select: boolean;
+      }
+    | undefined
+  >(undefined);
+  const [dragSelecting, setDragSelecting] = useState(false);
+
+  useEffect(() => {
+    const finishDragSelection = () => {
+      dragSelection.current = undefined;
+      setDragSelecting(false);
+    };
+    window.addEventListener("mouseup", finishDragSelection);
+    window.addEventListener("blur", finishDragSelection);
+    return () => {
+      window.removeEventListener("mouseup", finishDragSelection);
+      window.removeEventListener("blur", finishDragSelection);
+    };
+  }, []);
+
+  function selectDragRange(key: string) {
+    const drag = dragSelection.current;
+    const currentIndex = selectableIndices.get(key);
+    if (!drag || currentIndex === undefined) return;
+    const next = new Set(drag.baseline);
+    const start = Math.min(drag.anchorIndex, currentIndex);
+    const end = Math.max(drag.anchorIndex, currentIndex);
+    for (const rangeKey of selectableKeys.slice(start, end + 1)) {
+      if (drag.select) next.add(rangeKey);
+      else next.delete(rangeKey);
+    }
+    onSelectionChange(next);
+  }
+
+  function beginDragSelection(
+    key: string,
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) {
+    if (event.button !== 0) return;
+    const anchorIndex = selectableIndices.get(key);
+    if (anchorIndex === undefined) return;
+    event.preventDefault();
+    dragSelection.current = {
+      anchorIndex,
+      baseline: new Set(selectedLines),
+      select: !selectedLines.has(key),
+    };
+    setDragSelecting(true);
+    selectDragRange(key);
+  }
+
+  function extendDragSelection(
+    key: string,
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) {
+    if (!dragSelection.current) return;
+    if ((event.buttons & 1) === 0) {
+      dragSelection.current = undefined;
+      setDragSelecting(false);
+      return;
+    }
+    selectDragRange(key);
+  }
+
   return (
-    <div className="diff-scroll" aria-label={t("File diff")}>
+    <div
+      className={`diff-scroll ${dragSelecting ? "drag-selecting" : ""}`}
+      aria-label={t("File diff")}
+      title={t("Click or drag across changed lines to select them.")}
+    >
       {diff.hunks.map((hunk) => (
         <div className="diff-hunk" key={hunk.index}>
           <div className="diff-hunk-header">
             <code>{hunk.header}</code>
-            <button type="button" onClick={() => onApplyHunk(hunk.index)}>
+            <button
+              type="button"
+              disabled={actionDisabled}
+              onClick={() => onApplyHunk(hunk.index)}
+            >
               {actionLabel}
             </button>
           </div>
@@ -2859,6 +2973,8 @@ function DiffRenderer({
             lines={hunk.lines}
             selectedLines={selectedLines}
             onToggleLine={onToggleLine}
+            onBeginSelection={beginDragSelection}
+            onExtendSelection={extendDragSelection}
           />
         </div>
       ))}
@@ -2937,11 +3053,21 @@ function VirtualDiffLines({
   lines,
   selectedLines,
   onToggleLine,
+  onBeginSelection,
+  onExtendSelection,
 }: {
   hunkIndex: number;
   lines: DiffDto["hunks"][number]["lines"];
   selectedLines: Set<string>;
   onToggleLine: (key: string) => void;
+  onBeginSelection: (
+    key: string,
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) => void;
+  onExtendSelection: (
+    key: string,
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) => void;
 }) {
   const rowHeight = 23;
   const [scrollTop, setScrollTop] = useState(0);
@@ -2957,7 +3083,15 @@ function VirtualDiffLines({
         className={`diff-line ${line.kind} ${selectedLines.has(key) ? "selected" : ""}`}
         disabled={!line.selectable}
         aria-pressed={line.selectable ? selectedLines.has(key) : undefined}
-        onClick={() => line.selectable && onToggleLine(key)}
+        onMouseDown={(event) =>
+          line.selectable && onBeginSelection(key, event)
+        }
+        onMouseEnter={(event) =>
+          line.selectable && onExtendSelection(key, event)
+        }
+        onClick={(event) => {
+          if (line.selectable && event.detail === 0) onToggleLine(key);
+        }}
       >
         <span>{line.oldLine ?? ""}</span>
         <span>{line.newLine ?? ""}</span>

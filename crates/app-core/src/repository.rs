@@ -490,8 +490,8 @@ impl RepositoryService {
         let output = self.diff_bytes(repository, path, target, 3)?;
         let document = parse_unified_diff(&output)
             .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
-        let patch = build_selected_patch(&document, selections)?;
         let reverse = target == DiffTarget::Staged;
+        let patch = build_selected_patch(&document, selections, reverse)?;
         self.apply_cached_patch(repository, patch, reverse)
     }
 
@@ -713,6 +713,7 @@ impl RepositoryService {
 fn build_selected_patch(
     document: &DiffDocument,
     selections: &[PatchSelection],
+    reverse: bool,
 ) -> Result<Vec<u8>, AppError> {
     let file = document
         .files
@@ -755,13 +756,16 @@ fn build_selected_patch(
                     selected_change_count += 1;
                     kept_previous_line = true;
                 }
-                DiffLineKind::Deletion => {
+                DiffLineKind::Deletion if !reverse => {
                     body.push(b' ');
                     body.extend_from_slice(&line.raw_content);
                     body.push(b'\n');
                     old_count += 1;
                     new_count += 1;
                     kept_previous_line = true;
+                }
+                DiffLineKind::Deletion => {
+                    kept_previous_line = false;
                 }
                 DiffLineKind::Addition if selected => {
                     body.push(b'+');
@@ -771,8 +775,16 @@ fn build_selected_patch(
                     selected_change_count += 1;
                     kept_previous_line = true;
                 }
-                DiffLineKind::Addition => {
+                DiffLineKind::Addition if !reverse => {
                     kept_previous_line = false;
+                }
+                DiffLineKind::Addition => {
+                    body.push(b' ');
+                    body.extend_from_slice(&line.raw_content);
+                    body.push(b'\n');
+                    old_count += 1;
+                    new_count += 1;
+                    kept_previous_line = true;
                 }
                 DiffLineKind::NoNewline if kept_previous_line => {
                     body.extend_from_slice(b"\\ No newline at end of file\n");

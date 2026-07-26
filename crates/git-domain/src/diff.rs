@@ -110,8 +110,9 @@ pub fn parse_unified_diff(output: &[u8]) -> Result<DiffDocument, DiffParseError>
                 && !lines[index].starts_with(b"diff --git ")
             {
                 let line = lines[index];
-                let raw_content = trim_line_ending(&line[1..]).to_vec();
-                let content = String::from_utf8_lossy(&raw_content).into_owned();
+                let raw_content = trim_line_feed(&line[1..]).to_vec();
+                let display_content = raw_content.strip_suffix(b"\r").unwrap_or(&raw_content);
+                let content = String::from_utf8_lossy(display_content).into_owned();
                 match line.first().copied() {
                     Some(b' ') => {
                         parsed_lines.push(DiffLine {
@@ -261,8 +262,12 @@ fn split_inclusive_lines(output: &[u8]) -> Vec<&[u8]> {
 }
 
 fn trim_line_ending(line: &[u8]) -> &[u8] {
-    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    let line = trim_line_feed(line);
     line.strip_suffix(b"\r").unwrap_or(line)
+}
+
+fn trim_line_feed(line: &[u8]) -> &[u8] {
+    line.strip_suffix(b"\n").unwrap_or(line)
 }
 
 #[cfg(test)]
@@ -291,5 +296,17 @@ mod tests {
                 .files
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn preserves_crlf_bytes_for_patch_generation() {
+        let diff = b"diff --git a/file.h b/file.h\nindex 111..222 100644\n--- a/file.h\n+++ b/file.h\n@@ -1 +1 @@\n-old\r\n+new\r\n";
+        let document = parse_unified_diff(diff).expect("valid CRLF diff");
+        let lines = &document.files[0].hunks[0].lines;
+
+        assert_eq!(lines[0].content, "old");
+        assert_eq!(lines[0].raw_content, b"old\r");
+        assert_eq!(lines[1].content, "new");
+        assert_eq!(lines[1].raw_content, b"new\r");
     }
 }
