@@ -1524,6 +1524,100 @@ describe("App", () => {
     });
   });
 
+  it("moves focus between commit fields without editing their contents", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    await screen.findByRole("button", { name: "Commit to main" });
+    const summary = screen.getByRole("textbox", {
+      name: "Commit summary",
+    }) as HTMLTextAreaElement;
+    const description = screen.getByRole("textbox", {
+      name: "Commit description",
+    }) as HTMLTextAreaElement;
+
+    fireEvent.change(summary, { target: { value: "Ship M3" } });
+    summary.focus();
+    fireEvent.keyDown(summary, { key: "Enter" });
+    expect(summary).toHaveValue("Ship M3");
+    expect(description).toHaveFocus();
+
+    fireEvent.change(description, { target: { value: "Details" } });
+    description.setSelectionRange(0, 0);
+    fireEvent.keyDown(description, { key: "Backspace" });
+    expect(description).toHaveValue("Details");
+    expect(summary).toHaveFocus();
+    expect(summary).toHaveProperty("selectionStart", "Ship M3".length);
+    expect(summary).toHaveProperty("selectionEnd", "Ship M3".length);
+  });
+
+  it("places the commit form below the diff and preserves it while collapsed", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    await screen.findByRole("button", { name: "Commit to main" });
+    const toggle = screen.getByRole("button", {
+      name: "Commit form",
+    });
+    const commitPanel = toggle.closest(".commit-panel");
+    expect(commitPanel?.parentElement).toHaveClass("diff-panel");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Commit summary" }), {
+      target: { value: "Keep this draft" },
+    });
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByRole("textbox", { name: "Commit summary" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("textbox", { name: "Commit summary" })).toHaveValue(
+      "Keep this draft",
+    );
+  });
+
+  it("resizes the vertical commit form within its height limits", async () => {
+    localStorage.removeItem("gitacorn:commit-panel-height");
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    await screen.findByRole("button", { name: "Commit to main" });
+    const resizer = screen.getByRole("separator", {
+      name: "Commit panel height",
+    });
+    const commitPanel = resizer.closest(".commit-panel");
+    expect(commitPanel).toHaveStyle({ height: "300px" });
+    expect(resizer).toHaveAttribute("aria-valuemin", "240");
+    expect(resizer).toHaveAttribute("aria-valuemax", "480");
+
+    fireEvent.keyDown(resizer, { key: "Home" });
+    expect(commitPanel).toHaveStyle({ height: "240px" });
+    fireEvent.keyDown(resizer, { key: "ArrowDown" });
+    expect(commitPanel).toHaveStyle({ height: "240px" });
+
+    fireEvent.keyDown(resizer, { key: "End" });
+    expect(commitPanel).toHaveStyle({ height: "480px" });
+    fireEvent.keyDown(resizer, { key: "ArrowUp" });
+    expect(commitPanel).toHaveStyle({ height: "480px" });
+
+    fireEvent.mouseDown(resizer, { clientY: 300 });
+    fireEvent.mouseMove(window, { clientY: 350 });
+    fireEvent.mouseUp(window);
+    expect(commitPanel).toHaveStyle({ height: "430px" });
+    expect(localStorage.getItem("gitacorn:commit-panel-height")).toBe("430");
+    expect(screen.getByRole("textbox", { name: "Commit summary" })).toHaveClass(
+      "commit-summary",
+    );
+    expect(
+      screen.getByRole("textbox", { name: "Commit description" }),
+    ).toHaveClass("commit-description");
+    localStorage.removeItem("gitacorn:commit-panel-height");
+  });
+
   it("windows a 10k file list instead of mounting every row", async () => {
     const changes = Array.from({ length: 10_000 }, (_, index) => ({
       ...snapshot.changes[0],

@@ -138,6 +138,7 @@ const korean = {
   "Changed files": "변경된 파일",
   "Sidebar width": "사이드바 너비",
   "Stage and Unstage split height": "Stage 및 Unstage 분할 높이",
+  "Commit panel height": "커밋 패널 높이",
   "File panel width": "파일 패널 너비",
   "Changed files panel width": "변경된 파일 패널 너비",
   "Unstaged": "스테이지되지 않음",

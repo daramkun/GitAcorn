@@ -3022,6 +3022,11 @@ function UnavailableRepository({ tab, onLocate }: { tab: SessionTabDto; onLocate
   return <div className="welcome-panel"><p className="eyebrow">{t("Repository unavailable")}</p><h1>{t("{name} moved or was deleted.", { name })}</h1><p>{tab.worktreePath}</p><button type="button" onClick={onLocate}>{t("Locate repository")}</button></div>;
 }
 
+const commitPanelMinHeight = 240;
+const commitPanelDefaultHeight = 300;
+const commitPanelMaxHeight = 480;
+const commitPanelMinDiffHeight = 120;
+
 function ChangesView({
   snapshot,
   refreshing,
@@ -3070,6 +3075,25 @@ function ChangesView({
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [amend, setAmend] = useState(false);
+  const [commitExpanded, setCommitExpanded] = useState(true);
+  const [commitPanelHeight, setCommitPanelHeight] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem("gitacorn:commit-panel-height"));
+      if (
+        Number.isFinite(saved) &&
+        saved >= commitPanelMinHeight &&
+        saved <= commitPanelMaxHeight
+      ) {
+        return saved;
+      }
+    } catch {
+      // ignore
+    }
+    return commitPanelDefaultHeight;
+  });
+  const commitPanelHeightRef = useRef(commitPanelHeight);
+  const summaryRef = useRef<HTMLTextAreaElement>(null);
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const [livePanelWidth, setLivePanelWidth] = useState(panelWidth);
   const livePanelWidthRef = useRef(panelWidth);
   const draggedUnstagedPaths = useRef<string[]>([]);
@@ -3434,6 +3458,79 @@ function ChangesView({
     }
   };
 
+  const commitPanelMaximumFor = (target: Element) => {
+    const diffPanel = target.closest(".diff-panel");
+    const availableHeight = diffPanel?.getBoundingClientRect().height ?? 0;
+    if (availableHeight <= 0) return commitPanelMaxHeight;
+    return Math.max(
+      commitPanelMinHeight,
+      Math.min(
+        commitPanelMaxHeight,
+        availableHeight - commitPanelMinDiffHeight,
+      ),
+    );
+  };
+
+  const updateCommitPanelHeight = (height: number, maximum: number) => {
+    const nextHeight = Math.max(
+      commitPanelMinHeight,
+      Math.min(maximum, height),
+    );
+    commitPanelHeightRef.current = nextHeight;
+    setCommitPanelHeight(nextHeight);
+    try {
+      localStorage.setItem(
+        "gitacorn:commit-panel-height",
+        String(nextHeight),
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCommitPanelResizerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = commitPanelHeightRef.current;
+    const maximum = commitPanelMaximumFor(e.currentTarget);
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      updateCommitPanelHeight(
+        startHeight + startY - moveEvent.clientY,
+        maximum,
+      );
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const handleCommitPanelResizerKeyDown = (e: React.KeyboardEvent) => {
+    const maximum = commitPanelMaximumFor(e.currentTarget);
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      updateCommitPanelHeight(commitPanelHeightRef.current + 10, maximum);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      updateCommitPanelHeight(commitPanelHeightRef.current - 10, maximum);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      updateCommitPanelHeight(commitPanelMinHeight, maximum);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      updateCommitPanelHeight(maximum, maximum);
+    }
+  };
+
   return (
     <div
       className="changes-layout"
@@ -3515,8 +3612,9 @@ function ChangesView({
         />
       </section>
       <section className="selected-file-panel diff-panel">
-        {selected ? (
-          <>
+        <div className="diff-content">
+          {selected ? (
+            <>
             <div className="diff-toolbar">
               <div>
                 <span className="eyebrow">
@@ -3679,57 +3777,123 @@ function ChangesView({
             ) : (
               <div className="diff-state">{t("No text diff is available for this side.")}</div>
             )}
-          </>
-        ) : (
-          <div className="empty-selection">
-            <span className="file-glyph" aria-hidden="true" />
-            <h1>
-              {snapshot.changes.length === 0
-                ? t("Working tree clean")
-                : t("Select a changed file")}
-            </h1>
-            <p>
-              {snapshot.changes.length === 0
-                ? t("There are no staged or unstaged changes.")
-                : t("Choose a file to inspect and stage its diff.")}
-            </p>
-          </div>
-        )}
-      </section>
-      <aside className="commit-panel" aria-label={t("Commit form")}>
-        <div className="panel-heading"><h2>{t("Commit")}</h2><span>{staged.length}</span></div>
-        <textarea
-          aria-label={t("Commit summary")}
-          placeholder={t("Summary")}
-          value={summary}
-          onChange={(event) => setSummary(event.currentTarget.value)}
-        />
-        <textarea
-          aria-label={t("Commit description")}
-          placeholder={t("Description (optional)")}
-          value={description}
-          onChange={(event) => setDescription(event.currentTarget.value)}
-        />
-        <label className="amend-control">
-          <input
-            type="checkbox"
-            checked={amend}
-            onChange={(event) => setAmend(event.currentTarget.checked)}
-          />
-          {t("Amend previous commit")}
-        </label>
-        <button
-          className="primary-action"
-          type="button"
-          disabled={!summary.trim() || (!amend && staged.length === 0) || Boolean(operation)}
-          onClick={submitCommit}
+            </>
+          ) : (
+            <div className="empty-selection">
+              <span className="file-glyph" aria-hidden="true" />
+              <h1>
+                {snapshot.changes.length === 0
+                  ? t("Working tree clean")
+                  : t("Select a changed file")}
+              </h1>
+              <p>
+                {snapshot.changes.length === 0
+                  ? t("There are no staged or unstaged changes.")
+                  : t("Choose a file to inspect and stage its diff.")}
+              </p>
+            </div>
+          )}
+        </div>
+        <aside
+          className="commit-panel"
+          aria-label={t("Commit form")}
+          style={commitExpanded ? { height: `${commitPanelHeight}px` } : undefined}
         >
-          {t("{action} to {branch}", {
-            action: amend ? t("Amend") : t("Commit"),
-            branch: snapshot.head.name ?? "HEAD",
-          })}
-        </button>
-      </aside>
+          {commitExpanded && (
+            <div
+              className="commit-panel-resizer"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label={t("Commit panel height")}
+              aria-valuemin={commitPanelMinHeight}
+              aria-valuemax={commitPanelMaxHeight}
+              aria-valuenow={commitPanelHeight}
+              tabIndex={0}
+              onMouseDown={handleCommitPanelResizerMouseDown}
+              onKeyDown={handleCommitPanelResizerKeyDown}
+            />
+          )}
+          <button
+            className="commit-panel-toggle"
+            type="button"
+            aria-label={t("Commit form")}
+            aria-expanded={commitExpanded}
+            onClick={() => setCommitExpanded((expanded) => !expanded)}
+          >
+            <span>
+              <span
+                className={`commit-panel-chevron ${commitExpanded ? "expanded" : ""}`}
+                aria-hidden="true"
+              >
+                ›
+              </span>
+              <strong>{t("Commit")}</strong>
+            </span>
+            <span className="commit-staged-count">
+              {staged.length} {t("Staged")}
+            </span>
+          </button>
+          {commitExpanded && (
+            <div className="commit-fields">
+              <textarea
+                className="commit-summary"
+                ref={summaryRef}
+                aria-label={t("Commit summary")}
+                placeholder={t("Summary")}
+                value={summary}
+                onChange={(event) => setSummary(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    descriptionRef.current?.focus();
+                  }
+                }}
+              />
+              <textarea
+                className="commit-description"
+                ref={descriptionRef}
+                aria-label={t("Commit description")}
+                placeholder={t("Description (optional)")}
+                value={description}
+                onChange={(event) => setDescription(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Backspace" &&
+                    event.currentTarget.selectionStart === 0 &&
+                    event.currentTarget.selectionEnd === 0
+                  ) {
+                    event.preventDefault();
+                    const summaryInput = summaryRef.current;
+                    if (!summaryInput) return;
+                    summaryInput.focus();
+                    const end = summaryInput.value.length;
+                    summaryInput.setSelectionRange(end, end);
+                  }
+                }}
+              />
+              <label className="amend-control">
+                <input
+                  type="checkbox"
+                  checked={amend}
+                  onChange={(event) => setAmend(event.currentTarget.checked)}
+                />
+                {t("Amend previous commit")}
+              </label>
+              <button
+                className="primary-action"
+                type="button"
+                disabled={!summary.trim() || (!amend && staged.length === 0) || Boolean(operation)}
+                onClick={submitCommit}
+              >
+                {t("{action} to {branch}", {
+                  action: amend ? t("Amend") : t("Commit"),
+                  branch: snapshot.head.name ?? "HEAD",
+                })}
+              </button>
+            </div>
+          )}
+        </aside>
+      </section>
     </div>
   );
 }
@@ -4270,7 +4434,43 @@ function VirtualDiffLines({
 }
 
 function ChangesEmpty({ onOpen, opening }: { onOpen: () => void; opening: boolean }) {
-  return <div className="changes-layout"><section className="file-panel" aria-label={t("Changed files")}><ChangeSection title={t("Unstaged")} target="unstaged" changes={[]} onSelect={() => undefined} /><ChangeSection title={t("Staged")} target="staged" changes={[]} onSelect={() => undefined} /></section><section className="welcome-panel"><div className="welcome-art" aria-hidden="true"><span className="branch-line" /><span className="branch-node node-one" /><span className="branch-node node-two" /><span className="branch-node node-three" /></div><p className="eyebrow">{t("A calmer Git workflow")}</p><h1>{t("Your repositories, clearly in view.")}</h1><p>{t("Open a local repository to inspect its real staged, unstaged, and untracked changes.")}</p><button type="button" onClick={onOpen} disabled={opening}>{opening ? t("Opening…") : t("Open a repository")}</button><small>{t("Git 2.40.0 or newer is required.")}</small></section><aside className="commit-panel" aria-label={t("Commit form preview")}><div className="panel-heading"><h2>{t("Commit")}</h2></div><textarea aria-label={t("Commit summary")} placeholder={t("Summary")} disabled /><textarea aria-label={t("Commit description")} placeholder={t("Description (optional)")} disabled /><button type="button" disabled>{t("Commit")}</button></aside></div>;
+  return (
+    <div className="changes-layout">
+      <section className="file-panel" aria-label={t("Changed files")}>
+        <ChangeSection
+          title={t("Unstaged")}
+          target="unstaged"
+          changes={[]}
+          onSelect={() => undefined}
+        />
+        <ChangeSection
+          title={t("Staged")}
+          target="staged"
+          changes={[]}
+          onSelect={() => undefined}
+        />
+      </section>
+      <section className="welcome-panel">
+        <div className="welcome-art" aria-hidden="true">
+          <span className="branch-line" />
+          <span className="branch-node node-one" />
+          <span className="branch-node node-two" />
+          <span className="branch-node node-three" />
+        </div>
+        <p className="eyebrow">{t("A calmer Git workflow")}</p>
+        <h1>{t("Your repositories, clearly in view.")}</h1>
+        <p>
+          {t(
+            "Open a local repository to inspect its real staged, unstaged, and untracked changes.",
+          )}
+        </p>
+        <button type="button" onClick={onOpen} disabled={opening}>
+          {opening ? t("Opening…") : t("Open a repository")}
+        </button>
+        <small>{t("Git 2.40.0 or newer is required.")}</small>
+      </section>
+    </div>
+  );
 }
 
 function HistoryView({
