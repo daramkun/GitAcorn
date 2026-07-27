@@ -548,6 +548,19 @@ pub fn branch_merge(
 }
 
 #[tauri::command]
+pub fn branch_fast_forward(
+    repo_id: String,
+    revision: u64,
+    branch: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .fast_forward_branch(&repo_id, revision, &branch)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
 pub fn diff_get(
     repo_id: String,
     path_bytes: Vec<u8>,

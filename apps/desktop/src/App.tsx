@@ -42,6 +42,7 @@ import {
   deleteTag,
   discardPath,
   dropStash,
+  fastForwardBranch,
   getDiff,
   getHistoryPage,
   getDiagnostics,
@@ -1699,6 +1700,26 @@ export function App() {
                 }}
               >
                 {t("Rebase current branch onto this branch")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={activeSnapshot.head.kind !== "branch"}
+                onClick={() => {
+                  const branch = referenceContextMenu.name;
+                  setReferenceContextMenu(undefined);
+                  void handleWorkspaceMutation(() =>
+                    fastForwardBranch(
+                      activeSnapshot.repository.id,
+                      activeSnapshot.revision,
+                      branch,
+                    ),
+                  );
+                }}
+              >
+                {t("Fast-forward to {branch}", {
+                  branch: referenceContextMenu.name,
+                })}
               </button>
               <button
                 type="button"

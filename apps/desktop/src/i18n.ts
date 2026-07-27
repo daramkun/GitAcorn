@@ -69,6 +69,7 @@ const korean = {
   "Rename branch": "브랜치 이름 변경",
   "Delete branch": "브랜치 삭제",
   "Rebase current branch onto this branch": "현재 브랜치를 이 브랜치 위로 리베이스",
+  "Fast-forward to {branch}": "{branch}(으)로 빨리 감기",
   "Rebase {branch} onto {target}?": "{branch}을(를) {target} 위로 리베이스할까요?",
   "Create tag here": "여기에 태그 만들기",
   "Create tag": "태그 만들기",

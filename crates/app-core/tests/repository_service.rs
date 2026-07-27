@@ -356,6 +356,28 @@ fn merge_enters_conflict_state_without_losing_the_repository_snapshot() {
 }
 
 #[test]
+fn fast_forward_branch_merges_the_matching_origin_tracking_reference() {
+    let fixture = TestRepository::init();
+    fixture.git(["switch", "-c", "remote-main"]);
+    fixture.write("tracked.txt", "remote main\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.git(["commit", "-m", "remote main change"]);
+    let remote_oid =
+        String::from_utf8(fixture.git_output(["rev-parse", "HEAD"])).expect("remote oid");
+    fixture.git(["switch", "main"]);
+    fixture.git(["update-ref", "refs/remotes/origin/main", remote_oid.trim()]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    service
+        .fast_forward_branch(&repository, "main")
+        .expect("fast-forward");
+
+    let head_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"])).expect("head oid");
+    assert_eq!(head_oid.trim(), remote_oid.trim());
+}
+
+#[test]
 #[ignore = "100k-commit performance fixture; run at milestone and release gates"]
 fn first_history_page_meets_the_large_repository_target() {
     let directory = tempfile::tempdir().expect("large fixture directory");

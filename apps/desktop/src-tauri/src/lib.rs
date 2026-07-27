@@ -58,6 +58,7 @@ pub fn run() {
             commands::branch_rename,
             commands::branch_rebase,
             commands::branch_merge,
+            commands::branch_fast_forward,
             commands::tag_create,
             commands::tag_delete,
             commands::stash_create,

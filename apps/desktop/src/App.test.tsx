@@ -22,6 +22,7 @@ import {
   deleteBranch,
   deleteTag,
   discardPath,
+  fastForwardBranch,
   getDiff,
   getHistoryPage,
   getOperationHistory,
@@ -77,6 +78,7 @@ vi.mock("./repository", () => ({
   deleteTag: vi.fn(),
   discardPath: vi.fn(),
   dropStash: vi.fn(),
+  fastForwardBranch: vi.fn(),
   getDiff: vi.fn(),
   getHistoryPage: vi.fn(),
   getDiagnostics: vi.fn(),
@@ -140,6 +142,7 @@ const mockedUnstagePaths = vi.mocked(unstagePaths);
 const mockedApplyPatch = vi.mocked(applyPatchSelection);
 const mockedDiscardPath = vi.mocked(discardPath);
 const mockedCreateStash = vi.mocked(createStash);
+const mockedFastForwardBranch = vi.mocked(fastForwardBranch);
 const mockedCreateCommit = vi.mocked(createCommit);
 const mockedDeleteBranch = vi.mocked(deleteBranch);
 const mockedRenameBranch = vi.mocked(renameBranch);
@@ -1345,6 +1348,7 @@ describe("App", () => {
       "Rename branch",
       "Delete branch",
       "Rebase current branch onto this branch",
+      "Fast-forward to topic",
       "Create tag here",
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename branch" }));
@@ -1362,6 +1366,33 @@ describe("App", () => {
         "topic",
         "topic-renamed",
         true,
+      ),
+    );
+  });
+
+  it("fast-forwards to the matching origin branch from the branch context menu", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 1, items: ["main"] },
+      remoteBranches: { total: 1, items: ["origin/main"] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const main = await screen.findByRole("button", { name: "Branch main" });
+    fireEvent.contextMenu(main, { clientX: 100, clientY: 140 });
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Fast-forward to main" }),
+    );
+
+    await waitFor(() =>
+      expect(mockedFastForwardBranch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "main",
       ),
     );
   });

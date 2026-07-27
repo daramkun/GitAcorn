@@ -434,6 +434,18 @@ export function mergeBranch(
   return invoke<RepositorySnapshotDto>("branch_merge", { repoId, revision, reference });
 }
 
+export function fastForwardBranch(
+  repoId: string,
+  revision: number,
+  branch: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("branch_fast_forward", {
+    repoId,
+    revision,
+    branch,
+  });
+}
+
 export function createStash(
   repoId: string,
   revision: number,

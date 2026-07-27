@@ -711,6 +711,22 @@ impl RepositoryService {
         }
     }
 
+    pub fn fast_forward_branch(
+        &self,
+        repository: &RepositoryDescriptor,
+        branch: &str,
+    ) -> Result<(), AppError> {
+        let branch = self.validate_branch_name(repository, branch)?;
+        self.git_unit(
+            repository,
+            [
+                OsString::from("merge"),
+                OsString::from("--ff-only"),
+                OsString::from(format!("refs/remotes/origin/{branch}")),
+            ],
+        )
+    }
+
     fn validate_branch_name(
         &self,
         repository: &RepositoryDescriptor,

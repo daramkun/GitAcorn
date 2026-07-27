@@ -430,6 +430,17 @@ impl ApplicationState {
         })
     }
 
+    pub fn fast_forward_branch(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        branch: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.fast_forward_branch(repository, branch)
+        })
+    }
+
     pub fn create_stash(
         &self,
         repo_id: &str,
