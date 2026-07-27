@@ -422,6 +422,8 @@ export function App() {
   const activeTab = tabs.find((tab) => tab.active) ?? tabs[0];
   const activeSnapshot = activeTab?.snapshot;
   const activeRepoId = activeTab?.repoId;
+  const activeRepoIdRef = useRef(activeRepoId);
+  activeRepoIdRef.current = activeRepoId;
   const activeRepositoryReady = Boolean(activeSnapshot);
   const page = activeTab?.page ?? "changes";
   const activeSidebar = activeTab ? sidebars[activeTab.repoId] : undefined;
@@ -686,10 +688,16 @@ export function App() {
       if (disposed) stop();
       else unlisten = stop;
     });
+    const refreshActiveRepository = () => {
+      const repoId = activeRepoIdRef.current;
+      if (repoId) void refreshRepository(repoId);
+    };
+    window.addEventListener("focus", refreshActiveRepository);
     return () => {
       disposed = true;
       refreshRequests.current.clear();
       unlisten?.();
+      window.removeEventListener("focus", refreshActiveRepository);
     };
   }, [reportError]);
 
@@ -4591,7 +4599,13 @@ function HistoryView({
     return () => {
       active = false;
     };
-  }, [snapshot.repository.id, reference, query, tab.selectedCommit]);
+  }, [
+    snapshot.repository.id,
+    snapshot.head.oid,
+    reference,
+    query,
+    tab.selectedCommit,
+  ]);
 
   async function loadMore() {
     if (!nextCursor) return;

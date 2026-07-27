@@ -857,6 +857,49 @@ describe("App", () => {
     expect(mockedGetRemotes).not.toHaveBeenCalled();
   });
 
+  it("reloads commit history when window focus detects an external commit", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], page: "history" }],
+    });
+    render(<App />);
+
+    await screen.findByRole("button", { name: /Initial commit/ });
+    mockedGetSnapshot.mockClear();
+    mockedGetHistory.mockClear();
+    mockedGetSnapshot.mockResolvedValue({
+      ...snapshot,
+      revision: 2,
+      head: { ...snapshot.head, oid: "fedcba654321" },
+    });
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: "fedcba654321",
+          parents: ["abcdef123456"],
+          authorName: "Grace",
+          authorEmail: "grace@example.com",
+          authoredAt: 1_700_000_100,
+          subject: "External commit",
+          body: "",
+          references: ["HEAD -> refs/heads/main"],
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+
+    fireEvent.focus(window);
+
+    await waitFor(() =>
+      expect(mockedGetSnapshot).toHaveBeenCalledWith(snapshot.repository.id),
+    );
+    expect(
+      await screen.findByRole("button", { name: /External commit/ }),
+    ).toBeInTheDocument();
+  });
+
   it("configures fetch, pull, and push from remote operation dialogs", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedGetRemotes.mockResolvedValue([
