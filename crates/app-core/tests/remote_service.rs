@@ -25,6 +25,7 @@ fn clones_fetches_pulls_and_pushes_against_a_local_remote() {
     let remote_dir = tempdir().expect("remote parent");
     let remote_path = remote_dir.path().join("remote.git");
     run_git(remote_dir.path(), &["init", "--bare", "remote.git"]);
+    run_git(&remote_path, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     source.git([
         "remote",
         "add",
