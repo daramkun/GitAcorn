@@ -20,6 +20,7 @@ import {
   createBranch,
   createCommit,
   createStash,
+  createTag,
   deleteBranch,
   deleteTag,
   discardPath,
@@ -130,6 +131,7 @@ const mockedActivateWorktree = vi.mocked(activateWorktree);
 const mockedCheckoutBranch = vi.mocked(checkoutBranch);
 const mockedCloseTab = vi.mocked(closeSessionTab);
 const mockedCreateBranch = vi.mocked(createBranch);
+const mockedCreateTag = vi.mocked(createTag);
 const mockedGetSidebar = vi.mocked(getRepositorySidebar);
 const mockedReorderTabs = vi.mocked(reorderSessionTabs);
 const mockedUpdateTab = vi.mocked(updateSessionTab);
@@ -353,6 +355,7 @@ describe("App", () => {
     mockedDiscardPath.mockResolvedValue(snapshot);
     mockedCreateCommit.mockResolvedValue({ ...snapshot, changes: [] });
     mockedCreateBranch.mockResolvedValue(snapshot);
+    mockedCreateTag.mockResolvedValue(snapshot);
     mockedCheckoutBranch.mockResolvedValue(snapshot);
     mockedDeleteBranch.mockResolvedValue(snapshot);
     mockedRenameBranch.mockResolvedValue(snapshot);
@@ -1558,6 +1561,58 @@ describe("App", () => {
     );
   });
 
+  it("waits for a repository refresh before creating a tag", async () => {
+    let notifyRepositoryChange: ((repoId: string) => void) | undefined;
+    let completeRefresh:
+      | ((snapshot: RepositorySnapshotDto) => void)
+      | undefined;
+    mockedListenForChanges.mockImplementation(async (callback) => {
+      notifyRepositoryChange = callback;
+      return () => undefined;
+    });
+    mockedGetSnapshot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          completeRefresh = resolve;
+        }),
+    );
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 2, items: ["main", "topic"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const topic = await screen.findByRole("button", { name: "Branch topic" });
+    fireEvent.contextMenu(topic, { clientX: 100, clientY: 140 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Create tag here" }));
+    fireEvent.change(screen.getByLabelText("Tag name"), {
+      target: { value: "v2.0.0" },
+    });
+
+    act(() => notifyRepositoryChange?.(snapshot.repository.id));
+    expect(screen.getByRole("button", { name: "Create tag" })).toBeDisabled();
+
+    const refreshedSnapshot = { ...snapshot, revision: 3 };
+    await act(async () => completeRefresh?.(refreshedSnapshot));
+    const createButton = screen.getByRole("button", { name: "Create tag" });
+    expect(createButton).toBeEnabled();
+    fireEvent.click(createButton);
+
+    await waitFor(() =>
+      expect(mockedCreateTag).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        3,
+        "v2.0.0",
+        "topic",
+      ),
+    );
+  });
+
   it("fast-forwards to the matching origin branch from the branch context menu", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedGetSidebar.mockResolvedValue({
@@ -1595,18 +1650,111 @@ describe("App", () => {
       tags: { total: 1, items: ["v1.0.0"] },
       stashes: [],
     });
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<App />);
 
     const tag = await screen.findByRole("button", { name: /v1\.0\.0/ });
     fireEvent.contextMenu(tag, { clientX: 100, clientY: 140 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete tag" }));
-    expect(mockedDeleteTag).toHaveBeenCalledWith(
-      snapshot.repository.id,
-      snapshot.revision,
-      "v1.0.0",
+    expect(mockedDeleteTag).not.toHaveBeenCalled();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Delete locally" }),
     );
-    confirm.mockRestore();
+    await waitFor(() =>
+      expect(mockedDeleteTag).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "v1.0.0",
+        [],
+      ),
+    );
+  });
+
+  it("can delete a matching remote tag together with its local tag", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 1, items: ["main"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 1, items: ["v1.0.0"] },
+      stashes: [],
+    });
+    mockedGetRemoteTags.mockResolvedValue([
+      { remote: "origin", name: "v1.0.0", oid: "abcdef123456" },
+    ]);
+    render(<App />);
+
+    const tag = await screen.findByRole("button", { name: /v1\.0\.0/ });
+    fireEvent.contextMenu(tag, { clientX: 100, clientY: 140 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete tag" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Delete locally and remotely",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedDeleteTag).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "v1.0.0",
+        [{ remote: "origin", name: "v1.0.0" }],
+      ),
+    );
+  });
+
+  it("can delete a matching remote branch together with its local branch", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 2, items: ["main", "topic"] },
+      remoteBranches: { total: 1, items: ["origin/topic"] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    mockedGetReferences.mockResolvedValue([
+      {
+        fullName: "refs/heads/main",
+        shortName: "main",
+        oid: "abcdef123456",
+        kind: "localBranch",
+        ahead: 0,
+        behind: 0,
+      },
+      {
+        fullName: "refs/heads/topic",
+        shortName: "topic",
+        oid: "123456abcdef",
+        kind: "localBranch",
+        upstream: "origin/topic",
+        ahead: 0,
+        behind: 0,
+      },
+    ]);
+    mockedGetRemotes.mockResolvedValue([
+      { name: "origin", url: "https://example.com/acorn.git" },
+    ]);
+    render(<App />);
+
+    const branch = await screen.findByRole("button", { name: "Branch topic" });
+    fireEvent.contextMenu(branch, { clientX: 100, clientY: 140 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete branch" }));
+    expect(
+      screen.getByText("This reference also exists on origin/topic."),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete locally and remotely" }),
+    );
+
+    await waitFor(() =>
+      expect(mockedDeleteBranch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "topic",
+        [{ remote: "origin", name: "topic" }],
+      ),
+    );
   });
 
   it("adds, edits, and removes remotes from right-click context menus", async () => {

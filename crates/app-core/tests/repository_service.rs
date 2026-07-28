@@ -290,6 +290,42 @@ fn optionally_renames_the_upstream_branch_with_the_local_branch() {
 }
 
 #[test]
+fn deletes_branches_and_tags_from_a_selected_remote() {
+    let fixture = TestRepository::init();
+    fixture.git(["branch", "topic"]);
+    fixture.git(["tag", "v1.0.0"]);
+    let bare = tempfile::tempdir().expect("bare remote directory");
+    let initialized = Command::new("git")
+        .args(["init", "--bare"])
+        .arg(bare.path())
+        .output()
+        .expect("initialize bare remote");
+    assert!(initialized.status.success());
+    fixture.git([
+        "remote",
+        "add",
+        "origin",
+        bare.path().to_str().expect("UTF-8 remote path"),
+    ]);
+    fixture.git(["push", "origin", "topic"]);
+    fixture.git(["push", "origin", "refs/tags/v1.0.0"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    service
+        .delete_remote_branch(&repository, "origin", "topic")
+        .expect("delete remote branch");
+    service
+        .delete_remote_tag(&repository, "origin", "v1.0.0")
+        .expect("delete remote tag");
+
+    let remote_refs =
+        String::from_utf8(fixture.git_output(["ls-remote", "origin"])).expect("UTF-8 remote refs");
+    assert!(!remote_refs.contains("refs/heads/topic"));
+    assert!(!remote_refs.contains("refs/tags/v1.0.0"));
+}
+
+#[test]
 fn checkout_can_stash_and_reapply_staged_and_untracked_changes() {
     let fixture = TestRepository::init();
     fixture.git(["branch", "topic"]);

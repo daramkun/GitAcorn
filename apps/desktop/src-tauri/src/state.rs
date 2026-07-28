@@ -390,8 +390,12 @@ impl ApplicationState {
         repo_id: &str,
         revision: u64,
         name: &str,
+        remote_references: &[(String, String)],
     ) -> Result<RepositorySnapshot, AppError> {
         self.mutate(repo_id, revision, |service, repository| {
+            for (remote, remote_name) in remote_references {
+                service.delete_remote_branch(repository, remote, remote_name)?;
+            }
             service.delete_branch(repository, name)
         })
     }
@@ -437,8 +441,12 @@ impl ApplicationState {
         repo_id: &str,
         revision: u64,
         name: &str,
+        remote_references: &[(String, String)],
     ) -> Result<RepositorySnapshot, AppError> {
         self.mutate(repo_id, revision, |service, repository| {
+            for (remote, remote_name) in remote_references {
+                service.delete_remote_tag(repository, remote, remote_name)?;
+            }
             service.delete_tag(repository, name)
         })
     }

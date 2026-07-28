@@ -79,6 +79,7 @@ import {
   type OperationEventDto,
   type OperationRecordDto,
   type RemoteOperationOptions,
+  type RemoteReferenceDeleteTarget,
   type RemoteTagDto,
   type RepositorySnapshotDto,
   type RepositorySidebarDto,
@@ -101,6 +102,19 @@ const navigation: ReadonlyArray<{ id: Page; label: string; shortcut: string }> =
 
 const alphaFeaturesEnabled = import.meta.env.DEV;
 
+let repositoryConfirmationActive = false;
+
+function confirmRepositoryMutation(message: string) {
+  repositoryConfirmationActive = true;
+  try {
+    return window.confirm(message);
+  } finally {
+    window.setTimeout(() => {
+      repositoryConfirmationActive = false;
+    }, 0);
+  }
+}
+
 type MultiSelection = ReturnType<typeof useMultiSelection>;
 
 type ReferenceContextMenu =
@@ -119,6 +133,14 @@ type ReferenceEditor =
   | { mode: "createBranch"; source: string }
   | { mode: "renameBranch"; name: string; upstream?: string }
   | { mode: "createTag"; target: string };
+
+type ReferenceDeleteDialogState = {
+  kind: "branch" | "tag";
+  repoId: string;
+  name: string;
+  remoteReferences: RemoteReferenceDeleteTarget[];
+  loading: boolean;
+};
 
 type CheckoutTarget = {
   name: string;
@@ -347,6 +369,8 @@ export function App() {
     useState<StashContextMenu>();
   const [stashDialog, setStashDialog] = useState<StashItem>();
   const [referenceEditor, setReferenceEditor] = useState<ReferenceEditor>();
+  const [referenceDeleteDialog, setReferenceDeleteDialog] =
+    useState<ReferenceDeleteDialogState>();
   const [checkoutTarget, setCheckoutTarget] = useState<CheckoutTarget>();
   const [error, setError] = useState<AppErrorDto>();
   const reportError = useCallback(
@@ -416,6 +440,7 @@ export function App() {
         else if (remoteDialog) setRemoteDialog(undefined);
         else if (checkoutTarget) setCheckoutTarget(undefined);
         else if (stashDialog) setStashDialog(undefined);
+        else if (referenceDeleteDialog) setReferenceDeleteDialog(undefined);
         else if (referenceEditor) setReferenceEditor(undefined);
         else if (stashContextMenu) setStashContextMenu(undefined);
         else if (referenceContextMenu) setReferenceContextMenu(undefined);
@@ -428,6 +453,7 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
     referenceContextMenu,
+    referenceDeleteDialog,
     referenceEditor,
     checkoutTarget,
     stashContextMenu,
@@ -711,6 +737,7 @@ export function App() {
       else unlisten = stop;
     });
     const refreshActiveRepository = () => {
+      if (repositoryConfirmationActive) return;
       const repoId = activeRepoIdRef.current;
       if (repoId) void refreshRepository(repoId);
     };
@@ -1116,6 +1143,107 @@ export function App() {
     } catch (reason: unknown) {
       setError(normalizeAppError(reason));
     }
+  }
+
+  function remoteBranchDeleteTargets(
+    name: string,
+    upstream?: string,
+  ): RemoteReferenceDeleteTarget[] {
+    const candidates = new Set(
+      [upstream, ...remoteBranchItems].filter(
+        (reference): reference is string => Boolean(reference),
+      ),
+    );
+    const targets = new Map<string, RemoteReferenceDeleteTarget>();
+    const remotesByLength = [...remoteNames].sort(
+      (left, right) => right.length - left.length,
+    );
+    for (const reference of candidates) {
+      const remote = remotesByLength.find((candidate) =>
+        reference.startsWith(`${candidate}/`),
+      );
+      if (!remote) continue;
+      const remoteName = reference.slice(remote.length + 1);
+      if (reference !== upstream && remoteName !== name) continue;
+      targets.set(`${remote}\0${remoteName}`, {
+        remote,
+        name: remoteName,
+      });
+    }
+    return [...targets.values()];
+  }
+
+  function openBranchDeleteDialog(
+    repoId: string,
+    name: string,
+    upstream?: string,
+  ) {
+    setReferenceDeleteDialog({
+      kind: "branch",
+      repoId,
+      name,
+      remoteReferences: remoteBranchDeleteTargets(name, upstream),
+      loading: false,
+    });
+  }
+
+  async function openTagDeleteDialog(
+    repoId: string,
+    name: string,
+  ) {
+    setReferenceDeleteDialog({
+      kind: "tag",
+      repoId,
+      name,
+      remoteReferences: [],
+      loading: true,
+    });
+    let remoteTags = remoteTagsMap[repoId] ?? [];
+    try {
+      remoteTags = await getRemoteTags(repoId);
+      setRemoteTagsMap((current) => ({ ...current, [repoId]: remoteTags }));
+    } catch {
+      // Keep the last successfully loaded remote tag list and allow local deletion.
+    }
+    const remoteReferences = remoteTags
+      .filter((tag) => tag.name === name)
+      .map(({ remote, name: remoteName }) => ({
+        remote,
+        name: remoteName,
+      }));
+    setReferenceDeleteDialog((current) =>
+      current?.kind === "tag" &&
+      current.repoId === repoId &&
+      current.name === name
+        ? { ...current, remoteReferences, loading: false }
+        : current,
+    );
+  }
+
+  async function handleReferenceDelete(
+    request: ReferenceDeleteDialogState,
+    deleteRemote: boolean,
+  ) {
+    const latestSnapshot = tabs.find(
+      (tab) => tab.repoId === request.repoId,
+    )?.snapshot;
+    if (!latestSnapshot) return;
+    const remoteReferences = deleteRemote ? request.remoteReferences : [];
+    await handleWorkspaceMutation(() =>
+      request.kind === "branch"
+        ? deleteBranch(
+            request.repoId,
+            latestSnapshot.revision,
+            request.name,
+            remoteReferences,
+          )
+        : deleteTag(
+            request.repoId,
+            latestSnapshot.revision,
+            request.name,
+            remoteReferences,
+          ),
+    );
   }
 
   async function handleStashApply(reference: string, dropAfterApply: boolean) {
@@ -1695,20 +1823,10 @@ export function App() {
                 }
                 onClick={() => {
                   const name = referenceContextMenu.name;
+                  const upstream = referenceContextMenu.upstream;
+                  const repoId = activeSnapshot.repository.id;
                   setReferenceContextMenu(undefined);
-                  if (
-                    window.confirm(
-                      t("Delete merged branch {branch}?", { branch: name }),
-                    )
-                  ) {
-                    void handleWorkspaceMutation(() =>
-                      deleteBranch(
-                        activeSnapshot.repository.id,
-                        activeSnapshot.revision,
-                        name,
-                      ),
-                    );
-                  }
+                  openBranchDeleteDialog(repoId, name, upstream);
                 }}
               >
                 {t("Delete branch")}
@@ -1728,7 +1846,7 @@ export function App() {
                       : "HEAD";
                   setReferenceContextMenu(undefined);
                   if (
-                    window.confirm(
+                    confirmRepositoryMutation(
                       t("Rebase {branch} onto {target}?", {
                         branch: current,
                         target: name,
@@ -1788,16 +1906,9 @@ export function App() {
               className="danger-button"
               onClick={() => {
                 const name = referenceContextMenu.name;
+                const repoId = activeSnapshot.repository.id;
                 setReferenceContextMenu(undefined);
-                if (window.confirm(t("Delete tag {tag}?", { tag: name }))) {
-                  void handleWorkspaceMutation(() =>
-                    deleteTag(
-                      activeSnapshot.repository.id,
-                      activeSnapshot.revision,
-                      name,
-                    ),
-                  );
-                }
+                void openTagDeleteDialog(repoId, name);
               }}
             >
               {t("Delete tag")}
@@ -1830,7 +1941,7 @@ export function App() {
               const { reference } = stashContextMenu.stash;
               setStashContextMenu(undefined);
               if (
-                window.confirm(
+                confirmRepositoryMutation(
                   t("Drop {reference}? The stash entry cannot be recovered.", {
                     reference,
                   }),
@@ -1892,7 +2003,7 @@ export function App() {
                   setRemoteContextMenu(undefined);
                   if (
                     name &&
-                    window.confirm(
+                    confirmRepositoryMutation(
                       t("Remove remote {name}? Remote-tracking branches will be deleted.", {
                         name,
                       }),
@@ -1973,6 +2084,7 @@ export function App() {
       {referenceEditor && activeSnapshot && (
         <ReferenceEditorDialog
           editor={referenceEditor}
+          blocked={refreshing.has(activeSnapshot.repository.id)}
           onClose={() => setReferenceEditor(undefined)}
           onSave={(name, renameRemote) => {
             if (referenceEditor.mode === "createBranch") {
@@ -2004,6 +2116,15 @@ export function App() {
               ),
             );
           }}
+        />
+      )}
+      {referenceDeleteDialog && (
+        <ReferenceDeleteDialog
+          request={referenceDeleteDialog}
+          onClose={() => setReferenceDeleteDialog(undefined)}
+          onDelete={(deleteRemote) =>
+            handleReferenceDelete(referenceDeleteDialog, deleteRemote)
+          }
         />
       )}
       {checkoutTarget && activeSnapshot && (
@@ -2420,12 +2541,113 @@ function StashCreateDialog({
   );
 }
 
+function ReferenceDeleteDialog({
+  request,
+  onClose,
+  onDelete,
+}: {
+  request: ReferenceDeleteDialogState;
+  onClose: () => void;
+  onDelete: (deleteRemote: boolean) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const title =
+    request.kind === "branch" ? t("Delete branch") : t("Delete tag");
+  const remoteNames = request.remoteReferences
+    .map((reference) => `${reference.remote}/${reference.name}`)
+    .join(", ");
+  const remove = async (deleteRemote: boolean) => {
+    setBusy(true);
+    await onDelete(deleteRemote);
+    setBusy(false);
+    onClose();
+  };
+
+  return (
+    <div
+      className="modal-overlay"
+      onClick={() => !busy && onClose()}
+      role="presentation"
+    >
+      <div
+        className="settings-modal remote-operation-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reference-delete-title"
+      >
+        <div className="settings-modal-header">
+          <h2 id="reference-delete-title">{title}</h2>
+          <button
+            className="settings-close-btn"
+            type="button"
+            aria-label={t("Cancel")}
+            disabled={busy}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="remote-manager-body">
+          <form
+            className="remote-form remote-operation-form"
+            onSubmit={(event) => event.preventDefault()}
+          >
+            <p>
+              {request.kind === "branch"
+                ? t("Delete merged branch {branch}?", { branch: request.name })
+                : t("Delete tag {tag}?", { tag: request.name })}
+            </p>
+            {request.loading ? (
+              <small>{t("Checking remotes…")}</small>
+            ) : request.remoteReferences.length > 0 ? (
+              <small>
+                {t("This reference also exists on {remotes}.", {
+                  remotes: remoteNames,
+                })}
+              </small>
+            ) : (
+              <small>{t("No matching remote reference was found.")}</small>
+            )}
+            <div className="remote-form-actions">
+              <button type="button" disabled={busy} onClick={onClose}>
+                {t("Cancel")}
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                disabled={busy || request.loading}
+                onClick={() => void remove(false)}
+                autoFocus
+              >
+                {busy ? t("Deleting…") : t("Delete locally")}
+              </button>
+              {request.remoteReferences.length > 0 && (
+                <button
+                  type="button"
+                  className="danger-button"
+                  disabled={busy || request.loading}
+                  onClick={() => void remove(true)}
+                >
+                  {busy ? t("Deleting…") : t("Delete locally and remotely")}
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReferenceEditorDialog({
   editor,
+  blocked,
   onClose,
   onSave,
 }: {
   editor: ReferenceEditor;
+  blocked: boolean;
   onClose: () => void;
   onSave: (name: string, renameRemote: boolean) => Promise<void>;
 }) {
@@ -2469,7 +2691,7 @@ function ReferenceEditorDialog({
             onSubmit={(event) => {
               event.preventDefault();
               const nextName = name.trim();
-              if (!nextName) return;
+              if (!nextName || blocked) return;
               setBusy(true);
               void onSave(nextName, renameRemote).finally(() => {
                 setBusy(false);
@@ -2519,7 +2741,7 @@ function ReferenceEditorDialog({
               <button type="button" disabled={busy} onClick={onClose}>
                 {t("Cancel")}
               </button>
-              <button type="submit" disabled={busy || !name.trim()}>
+              <button type="submit" disabled={busy || blocked || !name.trim()}>
                 {busy ? t("Saving…") : title}
               </button>
             </div>
@@ -3539,7 +3761,7 @@ function ChangesView({
   function discardSelected() {
     if (!selected || selectedTarget !== "unstaged") return;
     if (
-      !window.confirm(
+      !confirmRepositoryMutation(
         t("Discard the displayed working-tree changes in {path}? This cannot be undone by GitAcorn.", { path: selected.path }),
       )
     ) {
@@ -3633,7 +3855,7 @@ function ChangesView({
     setChangeContextMenu(undefined);
     if (
       changes.length === 0 ||
-      !window.confirm(
+      !confirmRepositoryMutation(
         t("Discard {count} selected files? This cannot be undone by GitAcorn.", {
           count: changes.length,
         }),
@@ -4046,7 +4268,13 @@ function ChangesView({
                     className="danger-button"
                     disabled={mutationBlocked}
                     onClick={() => {
-                      if (window.confirm(t("Abort this merge and restore the pre-merge working tree?"))) {
+                      if (
+                        confirmRepositoryMutation(
+                          t(
+                            "Abort this merge and restore the pre-merge working tree?",
+                          ),
+                        )
+                      ) {
                         void mutate(t("Aborting merge…"), () =>
                           abortMerge(snapshot.repository.id, snapshot.revision),
                         );

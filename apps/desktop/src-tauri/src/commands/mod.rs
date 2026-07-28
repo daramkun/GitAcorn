@@ -11,8 +11,8 @@ use crate::dto::{
     AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto, CommitRequestDto,
     DiffDto, GitRemoteDto, HistoryPageDto, OperationEventDto, OperationRecordDto,
     OperationStartedDto, PatchSelectionDto, ReferenceDto, RemoteMutationRequestDto,
-    RemoteRequestDto, RemoteTagDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
-    SessionTabUpdateDto, StashRequestDto,
+    RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto, RepositorySidebarDto,
+    RepositorySnapshotDto, SessionDto, SessionTabUpdateDto, StashRequestDto,
 };
 use crate::state::{ApplicationState, SessionTabUpdate};
 
@@ -472,10 +472,15 @@ pub fn branch_delete(
     repo_id: String,
     revision: u64,
     name: String,
+    remote_references: Vec<RemoteReferenceDeleteDto>,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<RepositorySnapshotDto> {
+    let remote_references = remote_references
+        .into_iter()
+        .map(|reference| (reference.remote, reference.name))
+        .collect::<Vec<_>>();
     state
-        .delete_branch(&repo_id, revision, &name)
+        .delete_branch(&repo_id, revision, &name, &remote_references)
         .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
@@ -527,10 +532,15 @@ pub fn tag_delete(
     repo_id: String,
     revision: u64,
     name: String,
+    remote_references: Vec<RemoteReferenceDeleteDto>,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<RepositorySnapshotDto> {
+    let remote_references = remote_references
+        .into_iter()
+        .map(|reference| (reference.remote, reference.name))
+        .collect::<Vec<_>>();
     state
-        .delete_tag(&repo_id, revision, &name)
+        .delete_tag(&repo_id, revision, &name, &remote_references)
         .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }

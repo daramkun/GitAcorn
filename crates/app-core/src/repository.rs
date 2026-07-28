@@ -672,7 +672,27 @@ impl RepositoryService {
         repository: &RepositoryDescriptor,
         name: &str,
     ) -> Result<(), AppError> {
-        self.git_unit(repository, ["branch", "--delete", name])
+        let name = self.validate_branch_name(repository, name)?;
+        self.git_unit(repository, ["branch", "--delete", &name])
+    }
+
+    pub fn delete_remote_branch(
+        &self,
+        repository: &RepositoryDescriptor,
+        remote: &str,
+        name: &str,
+    ) -> Result<(), AppError> {
+        let remote = validate_remote_name(remote)?;
+        let name = self.validate_branch_name(repository, name)?;
+        self.git_unit(
+            repository,
+            [
+                OsString::from("push"),
+                OsString::from("--delete"),
+                OsString::from(remote),
+                OsString::from(format!("refs/heads/{name}")),
+            ],
+        )
     }
 
     pub fn rename_branch(
@@ -793,6 +813,25 @@ impl RepositoryService {
     ) -> Result<(), AppError> {
         let name = self.validate_tag_name(repository, name)?;
         self.git_unit(repository, ["tag", "--delete", &name])
+    }
+
+    pub fn delete_remote_tag(
+        &self,
+        repository: &RepositoryDescriptor,
+        remote: &str,
+        name: &str,
+    ) -> Result<(), AppError> {
+        let remote = validate_remote_name(remote)?;
+        let name = self.validate_tag_name(repository, name)?;
+        self.git_unit(
+            repository,
+            [
+                OsString::from("push"),
+                OsString::from("--delete"),
+                OsString::from(remote),
+                OsString::from(format!("refs/tags/{name}")),
+            ],
+        )
     }
 
     pub fn merge_reference(

@@ -33,6 +33,13 @@ pub struct RemoteMutationRequestDto {
     pub url: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteReferenceDeleteDto {
+    pub remote: String,
+    pub name: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRemoteDto {

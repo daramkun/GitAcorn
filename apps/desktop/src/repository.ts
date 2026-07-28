@@ -138,6 +138,11 @@ export type GitRemoteDto = {
   url: string;
 };
 
+export type RemoteReferenceDeleteTarget = {
+  remote: string;
+  name: string;
+};
+
 export type RepositorySidebarDto = {
   schemaVersion: 1;
   worktrees: Array<{
@@ -393,8 +398,14 @@ export function deleteBranch(
   repoId: string,
   revision: number,
   name: string,
+  remoteReferences: RemoteReferenceDeleteTarget[] = [],
 ): Promise<RepositorySnapshotDto> {
-  return invoke<RepositorySnapshotDto>("branch_delete", { repoId, revision, name });
+  return invoke<RepositorySnapshotDto>("branch_delete", {
+    repoId,
+    revision,
+    name,
+    remoteReferences,
+  });
 }
 
 export function renameBranch(
@@ -443,8 +454,14 @@ export function deleteTag(
   repoId: string,
   revision: number,
   name: string,
+  remoteReferences: RemoteReferenceDeleteTarget[] = [],
 ): Promise<RepositorySnapshotDto> {
-  return invoke<RepositorySnapshotDto>("tag_delete", { repoId, revision, name });
+  return invoke<RepositorySnapshotDto>("tag_delete", {
+    repoId,
+    revision,
+    name,
+    remoteReferences,
+  });
 }
 
 export function mergeBranch(
