@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 pub use remote::{CloneRequest, RemoteOperationKind, RemoteProgress, RemoteRequest};
 pub use repository::{
-    BranchRequest, CommitRequest, DiffTarget, GitReference, GitRemote, GitVersion, HistoryFilter,
-    PatchSelection, RefSummary, ReferenceKind, RemoteTagSummary, RepositoryService,
+    BranchRequest, CommitFile, CommitRequest, DiffTarget, GitReference, GitRemote, GitVersion,
+    HistoryFilter, PatchSelection, RefSummary, ReferenceKind, RemoteTagSummary, RepositoryService,
     RepositorySidebar, StashSummary, WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;

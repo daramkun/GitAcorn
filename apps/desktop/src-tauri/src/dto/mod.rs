@@ -1,5 +1,5 @@
 use app_core::{
-    AppErrorDto, BranchRequest, CloneRequest, CommitRequest, GitReference, GitRemote,
+    AppErrorDto, BranchRequest, CloneRequest, CommitFile, CommitRequest, GitReference, GitRemote,
     PatchSelection, ReferenceKind, RemoteOperationKind, RemoteRequest, RemoteTagSummary,
     RepositorySidebar,
 };
@@ -305,6 +305,22 @@ pub struct DiffDto {
     pub old_path: String,
     pub new_path: String,
     pub hunks: Vec<DiffHunkDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitFileDto {
+    pub path: String,
+    pub path_bytes: Vec<u8>,
+}
+
+impl From<CommitFile> for CommitFileDto {
+    fn from(file: CommitFile) -> Self {
+        Self {
+            path: String::from_utf8_lossy(&file.path).into_owned(),
+            path_bytes: file.path,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

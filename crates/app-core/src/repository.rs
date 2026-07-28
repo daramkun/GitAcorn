@@ -108,6 +108,11 @@ pub struct CommitRequest {
     pub amend: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitFile {
+    pub path: Vec<u8>,
+}
+
 const MINIMUM_GIT_VERSION: GitVersion = GitVersion {
     major: 2,
     minor: 40,
@@ -867,6 +872,82 @@ impl RepositoryService {
         parse_unified_diff(&output).map_err(|error| AppError::InvalidGitOutput(error.to_string()))
     }
 
+    pub fn commit_files(
+        &self,
+        repository: &RepositoryDescriptor,
+        revision: &str,
+    ) -> Result<Vec<CommitFile>, AppError> {
+        let (commit, parent) = self.commit_and_parent(repository, revision)?;
+        let output = if let Some(parent) = parent {
+            self.git_bytes(
+                repository,
+                [
+                    OsString::from("diff"),
+                    OsString::from("--name-only"),
+                    OsString::from("-z"),
+                    parent,
+                    commit,
+                    OsString::from("--"),
+                ],
+            )?
+        } else {
+            self.git_bytes(
+                repository,
+                [
+                    OsString::from("diff-tree"),
+                    OsString::from("--root"),
+                    OsString::from("--no-commit-id"),
+                    OsString::from("--name-only"),
+                    OsString::from("-r"),
+                    OsString::from("-z"),
+                    commit,
+                    OsString::from("--"),
+                ],
+            )?
+        };
+        Ok(output
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| CommitFile {
+                path: path.to_vec(),
+            })
+            .collect())
+    }
+
+    pub fn commit_diff(
+        &self,
+        repository: &RepositoryDescriptor,
+        revision: &str,
+        path: &[u8],
+    ) -> Result<DiffDocument, AppError> {
+        let (commit, parent) = self.commit_and_parent(repository, revision)?;
+        let mut args = if let Some(parent) = parent {
+            vec![
+                OsString::from("diff"),
+                OsString::from("--no-ext-diff"),
+                OsString::from("--no-color"),
+                OsString::from("--unified=3"),
+                parent,
+                commit,
+            ]
+        } else {
+            vec![
+                OsString::from("diff-tree"),
+                OsString::from("--root"),
+                OsString::from("--no-commit-id"),
+                OsString::from("-p"),
+                OsString::from("--no-ext-diff"),
+                OsString::from("--no-color"),
+                OsString::from("--unified=3"),
+                commit,
+            ]
+        };
+        args.push(OsString::from("--"));
+        args.push(path_argument(path)?);
+        let output = self.git_bytes(repository, args)?;
+        parse_unified_diff(&output).map_err(|error| AppError::InvalidGitOutput(error.to_string()))
+    }
+
     pub fn stage_paths(
         &self,
         repository: &RepositoryDescriptor,
@@ -1047,6 +1128,37 @@ impl RepositoryService {
         S: Into<OsString>,
     {
         self.git_bytes(repository, args).map(|_| ())
+    }
+
+    fn commit_and_parent(
+        &self,
+        repository: &RepositoryDescriptor,
+        revision: &str,
+    ) -> Result<(OsString, Option<OsString>), AppError> {
+        let commit = self
+            .git_text(
+                repository,
+                [
+                    OsString::from("rev-parse"),
+                    OsString::from("--verify"),
+                    OsString::from("--end-of-options"),
+                    OsString::from(format!("{revision}^{{commit}}")),
+                ],
+            )?
+            .trim()
+            .to_owned();
+        let parents = self.git_text(
+            repository,
+            [
+                OsString::from("rev-list"),
+                OsString::from("--parents"),
+                OsString::from("-n"),
+                OsString::from("1"),
+                OsString::from(&commit),
+            ],
+        )?;
+        let parent = parents.split_whitespace().nth(1).map(OsString::from);
+        Ok((OsString::from(commit), parent))
     }
 
     fn diff_bytes(

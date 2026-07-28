@@ -44,6 +44,8 @@ import {
   dropStash,
   fastForwardBranch,
   getDiff,
+  getCommitDiff,
+  getCommitFiles,
   getHistoryPage,
   getDiagnostics,
   getOperationHistory,
@@ -53,7 +55,6 @@ import {
   getRepositorySidebar,
   getRepositorySnapshot,
   listenForRepositoryChanges,
-  mergeBranch,
   normalizeAppError,
   openRepository,
   rebaseBranch,
@@ -70,6 +71,7 @@ import {
   updateRemote,
   type AppErrorDto,
   type CommitDto,
+  type CommitFileDto,
   type DiffDto,
   type DiffTarget,
   type FileChangeDto,
@@ -1527,20 +1529,6 @@ export function App() {
                 tab={activeTab}
                 snapshot={activeSnapshot}
                 onPersist={(patch) => updateActiveTab(patch)}
-                onSnapshot={(next) =>
-                  setTabs((current) =>
-                    current.map((tab) =>
-                      tab.repoId === next.repository.id ? { ...tab, snapshot: next } : tab,
-                    ),
-                  )
-                }
-                onSidebarInvalidated={() =>
-                  setSidebars((current) => {
-                    const next = { ...current };
-                    delete next[activeTab.repoId];
-                    return next;
-                  })
-                }
                 onError={reportError}
               />
             ) : (
@@ -4204,6 +4192,7 @@ function DiffRenderer({
   onApplyHunk,
   actionLabel,
   actionDisabled,
+  readOnly = false,
 }: {
   diff: DiffDto;
   selectedLines: Set<string>;
@@ -4212,6 +4201,7 @@ function DiffRenderer({
   onApplyHunk: (hunkIndex: number) => void;
   actionLabel: string;
   actionDisabled: boolean;
+  readOnly?: boolean;
 }) {
   const selectableKeys = useMemo(
     () =>
@@ -4297,19 +4287,21 @@ function DiffRenderer({
     <div
       className={`diff-scroll ${dragSelecting ? "drag-selecting" : ""}`}
       aria-label={t("File diff")}
-      title={t("Click or drag across changed lines to select them.")}
+      title={readOnly ? undefined : t("Click or drag across changed lines to select them.")}
     >
       {diff.hunks.map((hunk) => (
         <div className="diff-hunk" key={hunk.index}>
           <div className="diff-hunk-header">
             <code>{hunk.header}</code>
-            <button
-              type="button"
-              disabled={actionDisabled}
-              onClick={() => onApplyHunk(hunk.index)}
-            >
-              {actionLabel}
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                disabled={actionDisabled}
+                onClick={() => onApplyHunk(hunk.index)}
+              >
+                {actionLabel}
+              </button>
+            )}
           </div>
           <VirtualDiffLines
             hunkIndex={hunk.index}
@@ -4318,6 +4310,7 @@ function DiffRenderer({
             onToggleLine={onToggleLine}
             onBeginSelection={beginDragSelection}
             onExtendSelection={extendDragSelection}
+            readOnly={readOnly}
           />
         </div>
       ))}
@@ -4398,6 +4391,7 @@ function VirtualDiffLines({
   onToggleLine,
   onBeginSelection,
   onExtendSelection,
+  readOnly = false,
 }: {
   hunkIndex: number;
   lines: DiffDto["hunks"][number]["lines"];
@@ -4411,6 +4405,7 @@ function VirtualDiffLines({
     key: string,
     event: ReactMouseEvent<HTMLButtonElement>,
   ) => void;
+  readOnly?: boolean;
 }) {
   const rowHeight = 23;
   const [scrollTop, setScrollTop] = useState(0);
@@ -4424,16 +4419,16 @@ function VirtualDiffLines({
         type="button"
         key={key}
         className={`diff-line ${line.kind} ${selectedLines.has(key) ? "selected" : ""}`}
-        disabled={!line.selectable}
-        aria-pressed={line.selectable ? selectedLines.has(key) : undefined}
+        disabled={readOnly || !line.selectable}
+        aria-pressed={!readOnly && line.selectable ? selectedLines.has(key) : undefined}
         onMouseDown={(event) =>
-          line.selectable && onBeginSelection(key, event)
+          !readOnly && line.selectable && onBeginSelection(key, event)
         }
         onMouseEnter={(event) =>
-          line.selectable && onExtendSelection(key, event)
+          !readOnly && line.selectable && onExtendSelection(key, event)
         }
         onClick={(event) => {
-          if (line.selectable && event.detail === 0) onToggleLine(key);
+          if (!readOnly && line.selectable && event.detail === 0) onToggleLine(key);
         }}
       >
         <span>{line.oldLine ?? ""}</span>
@@ -4506,8 +4501,6 @@ function HistoryView({
   tab,
   snapshot,
   onPersist,
-  onSnapshot,
-  onSidebarInvalidated,
   onError,
 }: {
   tab: SessionTabDto;
@@ -4517,8 +4510,6 @@ function HistoryView({
       Pick<SessionTabDto, "historyCursor" | "selectedCommit" | "historyFilter">
     >,
   ) => void;
-  onSnapshot: (snapshot: RepositorySnapshotDto) => void;
-  onSidebarInvalidated: () => void;
   onError: (error: unknown) => void;
 }) {
   const savedFilter = parseHistoryFilter(tab.historyFilter);
@@ -4530,8 +4521,12 @@ function HistoryView({
   const [nextCursor, setNextCursor] = useState<string>();
   const [selectedOid, setSelectedOid] = useState(tab.selectedCommit);
   const [loading, setLoading] = useState(true);
-  const [operation, setOperation] = useState<string>();
-  const [branchName, setBranchName] = useState("");
+  const [commitFiles, setCommitFiles] = useState<CommitFileDto[]>([]);
+  const [selectedFile, setSelectedFile] = useState<string>();
+  const [commitFilesExpanded, setCommitFilesExpanded] = useState(true);
+  const [commitDiff, setCommitDiff] = useState<DiffDto>();
+  const [loadingCommitFiles, setLoadingCommitFiles] = useState(false);
+  const [loadingCommitDiff, setLoadingCommitDiff] = useState(false);
   const selectedRowRef = useRef<HTMLButtonElement | null>(null);
   const selected = commits.find((commit) => commit.oid === selectedOid) ?? commits[0];
   const graph = useMemo(
@@ -4569,6 +4564,41 @@ function HistoryView({
     setQuery(parsed.query);
     setDraftQuery(parsed.query);
   }, [tab.historyFilter]);
+
+  useEffect(() => {
+    let active = true;
+    setCommitFiles([]);
+    setSelectedFile(undefined);
+    setCommitFilesExpanded(true);
+    setCommitDiff(undefined);
+    if (!selected?.oid) return;
+    setLoadingCommitFiles(true);
+    getCommitFiles(snapshot.repository.id, selected.oid)
+      .then((files) => {
+        if (!active) return;
+        setCommitFiles(files);
+      })
+      .catch(onError)
+      .finally(() => active && setLoadingCommitFiles(false));
+    return () => {
+      active = false;
+    };
+  }, [snapshot.repository.id, selected?.oid]);
+
+  useEffect(() => {
+    let active = true;
+    setCommitDiff(undefined);
+    const file = commitFiles.find((item) => item.path === selectedFile);
+    if (!selected?.oid || !file) return;
+    setLoadingCommitDiff(true);
+    getCommitDiff(snapshot.repository.id, selected.oid, file.pathBytes)
+      .then((diff) => active && setCommitDiff(diff))
+      .catch(onError)
+      .finally(() => active && setLoadingCommitDiff(false));
+    return () => {
+      active = false;
+    };
+  }, [snapshot.repository.id, selected?.oid, selectedFile, commitFiles]);
 
   useEffect(() => {
     let active = true;
@@ -4640,33 +4670,6 @@ function HistoryView({
     });
   }
 
-  async function mutate(label: string, action: () => Promise<RepositorySnapshotDto>) {
-    setOperation(label);
-    try {
-      const next = await action();
-      onSnapshot(next);
-      onSidebarInvalidated();
-      setReferences(await getReferences(snapshot.repository.id));
-      const page = await getHistoryPage(
-        snapshot.repository.id,
-        undefined,
-        reference || undefined,
-        query || undefined,
-      );
-      setCommits(page.commits);
-      setNextCursor(page.nextCursor);
-      onPersist({ historyCursor: undefined });
-    } catch (reason: unknown) {
-      onError(reason);
-    } finally {
-      setOperation(undefined);
-    }
-  }
-
-  const selectedReference = references.find(
-    (item) => item.fullName === reference || item.shortName === reference,
-  );
-  const currentBranch = snapshot.head.kind === "branch" ? snapshot.head.name : undefined;
   const hasConflicts = snapshot.changes.some((change) => change.conflict);
 
   return (
@@ -4764,111 +4767,103 @@ function HistoryView({
         )}
         {selected ? (
           <>
-            <span className="eyebrow">{selected.oid}</span>
-            <h1>{selected.subject}</h1>
-            <p>{selected.authorName} &lt;{selected.authorEmail}&gt;</p>
-            <time dateTime={new Date(selected.authoredAt * 1000).toISOString()}>
-              {new Date(selected.authoredAt * 1000).toLocaleString(localeTag())}
-            </time>
-            {selected.body && <pre>{selected.body}</pre>}
-            <div className="detail-refs">
-              {selected.references.map((item) => <span key={item}>{shortRef(item)}</span>)}
+            <div className="commit-metadata">
+              <span className="eyebrow">{selected.oid}</span>
+              <h1>{selected.subject}</h1>
+              <p>{selected.authorName} &lt;{selected.authorEmail}&gt;</p>
+              <time dateTime={new Date(selected.authoredAt * 1000).toISOString()}>
+                {new Date(selected.authoredAt * 1000).toLocaleString(localeTag())}
+              </time>
+              {selected.body && <pre>{selected.body}</pre>}
+              <div className="detail-refs">
+                {selected.references.map((item) => <span key={item}>{shortRef(item)}</span>)}
+              </div>
             </div>
+            <section className="commit-files" aria-label={t("Files changed in commit")}>
+              <button
+                type="button"
+                className="commit-files-toggle"
+                aria-expanded={commitFilesExpanded}
+                onClick={() => setCommitFilesExpanded((expanded) => !expanded)}
+              >
+                <span
+                  className={`commit-files-chevron ${commitFilesExpanded ? "expanded" : ""}`}
+                  aria-hidden="true"
+                >
+                  ›
+                </span>
+                <strong>{t("Changed files")}</strong>
+                <small>{commitFiles.length}</small>
+              </button>
+              {loadingCommitFiles ? (
+                <div className="history-state" role="status">{t("Loading changed files…")}</div>
+              ) : commitFiles.length === 0 ? (
+                <div className="history-state">{t("No changed files.")}</div>
+              ) : commitFilesExpanded ? (
+                <div className="commit-file-list">
+                  {commitFiles.map((file) => {
+                    const expanded = selectedFile === file.path;
+                    return (
+                      <div className="commit-file-entry" key={file.path}>
+                        <button
+                          type="button"
+                          className={expanded ? "selected" : ""}
+                          aria-expanded={expanded}
+                          onClick={() =>
+                            setSelectedFile((selected) =>
+                              selected === file.path ? undefined : file.path,
+                            )
+                          }
+                        >
+                          <span
+                            className={`commit-file-chevron ${expanded ? "expanded" : ""}`}
+                            aria-hidden="true"
+                          >
+                            ›
+                          </span>
+                          <span>{file.path}</span>
+                        </button>
+                        {expanded && (
+                          <section
+                            className="commit-file-diff"
+                            aria-label={t("Selected file changes")}
+                          >
+                            {loadingCommitDiff ? (
+                              <div className="diff-state" role="status">
+                                {t("Loading diff…")}
+                              </div>
+                            ) : commitDiff?.binary ? (
+                              <div className="diff-state">
+                                {t("Binary file preview is unavailable.")}
+                              </div>
+                            ) : commitDiff && commitDiff.hunks.length > 0 ? (
+                              <DiffRenderer
+                                diff={commitDiff}
+                                selectedLines={new Set()}
+                                onSelectionChange={() => undefined}
+                                onToggleLine={() => undefined}
+                                onApplyHunk={() => undefined}
+                                actionLabel=""
+                                actionDisabled
+                                readOnly
+                              />
+                            ) : (
+                              <div className="diff-state">
+                                {t("No textual changes to display.")}
+                              </div>
+                            )}
+                          </section>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
           </>
         ) : (
           <div className="history-state">{t("Select a commit to inspect it.")}</div>
         )}
-
-        <div className="reference-actions">
-          <h2>{t("Reference actions")}</h2>
-          {selectedReference ? (
-            <>
-              <strong>{selectedReference.shortName}</strong>
-              {selectedReference.upstream && (
-                <span>
-                  {selectedReference.upstream} · ↑{selectedReference.ahead} ↓{selectedReference.behind}
-                </span>
-              )}
-              {selectedReference.kind === "localBranch" && (
-                <div>
-                  <button
-                    type="button"
-                    disabled={Boolean(operation) || selectedReference.shortName === currentBranch}
-                    onClick={() =>
-                      void mutate(t("Checking out…"), () =>
-                        checkoutBranch(
-                          snapshot.repository.id,
-                          snapshot.revision,
-                          selectedReference.shortName,
-                        ),
-                      )
-                    }
-                  >
-                    {t("Checkout")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={Boolean(operation) || selectedReference.shortName === currentBranch}
-                    onClick={() =>
-                      window.confirm(t("Delete merged branch {branch}?", { branch: selectedReference.shortName })) &&
-                      void mutate(t("Deleting branch…"), () =>
-                        deleteBranch(
-                          snapshot.repository.id,
-                          snapshot.revision,
-                          selectedReference.shortName,
-                        ),
-                      )
-                    }
-                  >
-                    {t("Delete")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={Boolean(operation) || selectedReference.shortName === currentBranch}
-                    onClick={() =>
-                      window.confirm(t("Merge {branch} into {target}?", { branch: selectedReference.shortName, target: currentBranch ?? "HEAD" })) &&
-                      void mutate(t("Merging…"), () =>
-                        mergeBranch(
-                          snapshot.repository.id,
-                          snapshot.revision,
-                          selectedReference.shortName,
-                        ),
-                      )
-                    }
-                  >
-                    {t("Merge")}
-                  </button>
-                </div>
-              )}
-            </>
-          ) : (
-            <span>{t("Choose a branch or tag to enable explicit actions.")}</span>
-          )}
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              const name = branchName.trim();
-              if (!name) return;
-              void mutate(t("Creating branch…"), () =>
-                createBranch(snapshot.repository.id, snapshot.revision, {
-                  name,
-                  startPoint: selected?.oid,
-                }),
-              ).then(() => setBranchName(""));
-            }}
-          >
-            <input
-              aria-label={t("New branch name")}
-              value={branchName}
-              onChange={(event) => setBranchName(event.currentTarget.value)}
-              placeholder="new/branch-name"
-            />
-            <button type="submit" disabled={!branchName.trim() || Boolean(operation)}>
-              {t("Create at selected commit")}
-            </button>
-          </form>
-          {operation && <span role="status">{operation}</span>}
-        </div>
       </aside>
     </div>
   );

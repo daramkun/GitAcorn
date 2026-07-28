@@ -270,3 +270,9 @@ export function t(key: TranslationKey, parameters: Parameters = {}): string {
 export function localeTag(): string {
   return resolveLocale() === "ko" ? "ko-KR" : "en";
 }
+  "Files changed in commit": "커밋에서 변경된 파일",
+  "Selected file changes": "선택한 파일의 변경 내용",
+  "Loading changed files…": "변경된 파일을 불러오는 중…",
+  "No changed files.": "변경된 파일이 없습니다.",
+  "No textual changes to display.": "표시할 텍스트 변경 내용이 없습니다.",
+  "Binary file preview is unavailable.": "바이너리 파일은 미리 볼 수 없습니다.",

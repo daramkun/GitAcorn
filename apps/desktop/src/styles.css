@@ -2024,24 +2024,34 @@ button:disabled {
 }
 
 .commit-detail {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  overflow: auto;
-  padding: 24px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
 }
 
-.commit-detail h1 {
+.commit-metadata {
+  flex: 0 1 auto;
+  max-height: 38%;
+  overflow: auto;
+  padding: 24px 24px 0;
+}
+
+.commit-metadata h1 {
   margin: 8px 0;
   font-size: 21px;
 }
 
-.commit-detail time,
-.commit-detail > p {
+.commit-metadata time,
+.commit-metadata > p {
   display: block;
   color: var(--muted);
   font-size: 12px;
 }
 
-.commit-detail pre {
+.commit-metadata pre {
   margin: 18px 0;
   padding: 12px;
   overflow: auto;
@@ -2058,6 +2068,111 @@ button:disabled {
   flex-wrap: wrap;
   gap: 5px;
   margin: 14px 0;
+}
+
+.commit-files {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.commit-files-toggle {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 10px 14px;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  background: var(--surface-soft);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.commit-files-toggle strong {
+  flex: 1;
+}
+
+.commit-files-toggle small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.commit-files-chevron,
+.commit-file-chevron {
+  display: inline-block;
+  color: var(--muted);
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+
+.commit-files-chevron.expanded,
+.commit-file-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.commit-files .history-state {
+  padding: 18px;
+}
+
+.commit-file-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.commit-file-entry {
+  border-bottom: 1px solid var(--border);
+}
+
+.commit-file-entry > button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  overflow: hidden;
+  color: var(--text);
+  text-align: left;
+  font-size: 11px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.commit-file-entry > button > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-file-entry > button:hover,
+.commit-file-entry > button.selected {
+  background: var(--surface-soft);
+}
+
+.commit-file-entry > button.selected {
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.commit-file-diff {
+  display: flex;
+  width: 100%;
+  min-height: 120px;
+  max-height: 360px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+}
+
+.commit-file-diff .diff-scroll {
+  width: 100%;
+  max-height: 360px;
 }
 
 .reference-actions {

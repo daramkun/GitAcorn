@@ -273,6 +273,30 @@ impl ApplicationState {
         })
     }
 
+    pub fn repository_commit_files(
+        &self,
+        repo_id: &str,
+        revision: &str,
+    ) -> Result<Vec<app_core::CommitFile>, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.commit_files(&descriptor, revision))
+    }
+
+    pub fn repository_commit_diff(
+        &self,
+        repo_id: &str,
+        revision: &str,
+        path: &[u8],
+    ) -> Result<DiffDocument, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.read(repo_id, || {
+            self.service.commit_diff(&descriptor, revision, path)
+        })
+    }
+
     pub fn stage_paths(
         &self,
         repo_id: &str,

@@ -47,6 +47,8 @@ pub fn run() {
             commands::remote_update,
             commands::remote_remove,
             commands::diff_get,
+            commands::commit_files,
+            commands::commit_diff_get,
             commands::stage_paths,
             commands::unstage_paths,
             commands::apply_patch_selection,

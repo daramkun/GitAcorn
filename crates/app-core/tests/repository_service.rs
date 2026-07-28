@@ -637,6 +637,48 @@ fn stages_selected_lines_and_unstages_them_without_touching_other_changes() {
 }
 
 #[test]
+fn reads_files_and_diff_for_a_selected_commit() {
+    let fixture = TestRepository::init();
+    fixture.write("tracked.txt", "changed in commit\n");
+    fixture.write("added.txt", "new file\n");
+    fixture.git(["add", "tracked.txt", "added.txt"]);
+    fixture.git(["commit", "-m", "selected commit"]);
+    let revision = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("UTF-8 revision")
+        .trim()
+        .to_owned();
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let files = service
+        .commit_files(&repository, &revision)
+        .expect("commit files");
+
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| String::from_utf8_lossy(&file.path).into_owned())
+            .collect::<Vec<_>>(),
+        ["added.txt", "tracked.txt"]
+    );
+
+    let diff = service
+        .commit_diff(&repository, &revision, b"tracked.txt")
+        .expect("commit diff");
+    let lines = &diff.files[0].hunks[0].lines;
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Deletion && line.content == "initial")
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Addition && line.content == "changed in commit")
+    );
+}
+
+#[test]
 fn stages_selected_lines_in_a_crlf_file() {
     let fixture = TestRepository::init();
     fixture.git(["config", "core.autocrlf", "false"]);

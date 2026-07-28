@@ -106,6 +106,11 @@ export type CommitDto = {
   laneCount: number;
 };
 
+export type CommitFileDto = {
+  path: string;
+  pathBytes: number[];
+};
+
 export type HistoryPageDto = {
   schemaVersion: 1;
   commits: CommitDto[];
@@ -300,6 +305,21 @@ export function getHistoryPage(
 
 export function getReferences(repoId: string): Promise<ReferenceDto[]> {
   return invoke<ReferenceDto[]>("references_list", { repoId });
+}
+
+export function getCommitFiles(
+  repoId: string,
+  revision: string,
+): Promise<CommitFileDto[]> {
+  return invoke<CommitFileDto[]>("commit_files", { repoId, revision });
+}
+
+export function getCommitDiff(
+  repoId: string,
+  revision: string,
+  pathBytes: number[],
+): Promise<DiffDto> {
+  return invoke<DiffDto>("commit_diff_get", { repoId, revision, pathBytes });
 }
 
 export function getRemoteTags(

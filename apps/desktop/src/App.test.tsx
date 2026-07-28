@@ -24,6 +24,8 @@ import {
   discardPath,
   fastForwardBranch,
   getDiff,
+  getCommitDiff,
+  getCommitFiles,
   getHistoryPage,
   getOperationHistory,
   getRemotes,
@@ -80,6 +82,8 @@ vi.mock("./repository", () => ({
   dropStash: vi.fn(),
   fastForwardBranch: vi.fn(),
   getDiff: vi.fn(),
+  getCommitDiff: vi.fn(),
+  getCommitFiles: vi.fn(),
   getHistoryPage: vi.fn(),
   getDiagnostics: vi.fn(),
   getOperationHistory: vi.fn(),
@@ -129,6 +133,8 @@ const mockedReorderTabs = vi.mocked(reorderSessionTabs);
 const mockedUpdateTab = vi.mocked(updateSessionTab);
 const mockedGetSnapshot = vi.mocked(getRepositorySnapshot);
 const mockedGetDiff = vi.mocked(getDiff);
+const mockedGetCommitDiff = vi.mocked(getCommitDiff);
+const mockedGetCommitFiles = vi.mocked(getCommitFiles);
 const mockedGetHistory = vi.mocked(getHistoryPage);
 const mockedGetReferences = vi.mocked(getReferences);
 const mockedGetRemoteTags = vi.mocked(getRemoteTags);
@@ -300,6 +306,44 @@ describe("App", () => {
       schemaVersion: 1,
       operationId: "remote-operation",
     });
+    mockedGetCommitFiles.mockResolvedValue([
+      {
+        path: "tracked.txt",
+        pathBytes: [116, 114, 97, 99, 107, 101, 100, 46, 116, 120, 116],
+      },
+    ]);
+    mockedGetCommitDiff.mockResolvedValue({
+      schemaVersion: 1,
+      binary: false,
+      oldPath: "tracked.txt",
+      newPath: "tracked.txt",
+      hunks: [
+        {
+          index: 0,
+          header: "@@ -1 +1 @@",
+          oldStart: 1,
+          oldCount: 1,
+          newStart: 1,
+          newCount: 1,
+          lines: [
+            {
+              index: 0,
+              kind: "deletion",
+              oldLine: 1,
+              content: "before commit",
+              selectable: true,
+            },
+            {
+              index: 1,
+              kind: "addition",
+              newLine: 1,
+              content: "after commit",
+              selectable: true,
+            },
+          ],
+        },
+      ],
+    });
     mockedUnstagePaths.mockResolvedValue(snapshot);
     mockedApplyPatch.mockResolvedValue(snapshot);
     mockedDiscardPath.mockResolvedValue(snapshot);
@@ -417,6 +461,43 @@ describe("App", () => {
     ).toHaveClass("commit-row", "remote-only");
   });
 
+  it("toggles the changed file list and each selected file diff", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetCommitFiles.mockResolvedValue([
+      { path: "first.txt", pathBytes: [102, 105, 114, 115, 116, 46, 116, 120, 116] },
+      { path: "second.txt", pathBytes: [115, 101, 99, 111, 110, 100, 46, 116, 120, 116] },
+    ]);
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+
+    const firstFile = await screen.findByRole("button", { name: "first.txt" });
+    expect(firstFile).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("after commit")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reference actions")).not.toBeInTheDocument();
+
+    fireEvent.click(firstFile);
+    expect(firstFile).toHaveAttribute("aria-expanded", "true");
+    expect(await screen.findByText("after commit")).toBeInTheDocument();
+
+    fireEvent.click(firstFile);
+    expect(firstFile).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("after commit")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "second.txt" }));
+    await waitFor(() =>
+      expect(mockedGetCommitDiff).toHaveBeenLastCalledWith(
+        snapshot.repository.id,
+        "abcdef123456",
+        [115, 101, 99, 111, 110, 100, 46, 116, 120, 116],
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Changed files/ }));
+    expect(screen.queryByRole("button", { name: "second.txt" })).not.toBeInTheDocument();
+  });
+
   it("opens history at the newest page instead of a persisted older cursor", async () => {
     mockedRestoreSession.mockResolvedValue({
       ...sessionWithSnapshot,
@@ -523,7 +604,7 @@ describe("App", () => {
     Reflect.deleteProperty(document, "elementFromPoint");
   });
 
-  it("keeps reference selection separate from explicit checkout", async () => {
+  it("filters history by reference without showing reference actions", async () => {
     mockedRestoreSession.mockResolvedValue({
       ...sessionWithSnapshot,
       tabs: [{ ...sessionWithSnapshot.tabs[0], page: "history" }],
@@ -556,14 +637,16 @@ describe("App", () => {
     fireEvent.change(picker, { target: { value: "refs/heads/topic" } });
 
     expect(mockedCheckoutBranch).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByRole("button", { name: "Checkout" }));
     await waitFor(() =>
-      expect(mockedCheckoutBranch).toHaveBeenCalledWith(
+      expect(mockedGetHistory).toHaveBeenLastCalledWith(
         snapshot.repository.id,
-        snapshot.revision,
-        "topic",
+        undefined,
+        "refs/heads/topic",
+        undefined,
       ),
     );
+    expect(screen.queryByRole("button", { name: "Checkout" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Reference actions")).not.toBeInTheDocument();
   });
 
   it("rapidly switches three repositories without mixing page, branch, or selection", async () => {

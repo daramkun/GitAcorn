@@ -8,10 +8,11 @@ use tauri::{AppHandle, Manager, State, ipc::Channel};
 use uuid::Uuid;
 
 use crate::dto::{
-    AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitRequestDto, DiffDto,
-    GitRemoteDto, HistoryPageDto, OperationEventDto, OperationRecordDto, OperationStartedDto,
-    PatchSelectionDto, ReferenceDto, RemoteMutationRequestDto, RemoteRequestDto, RemoteTagDto,
-    RepositorySidebarDto, RepositorySnapshotDto, SessionDto, SessionTabUpdateDto, StashRequestDto,
+    AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto, CommitRequestDto,
+    DiffDto, GitRemoteDto, HistoryPageDto, OperationEventDto, OperationRecordDto,
+    OperationStartedDto, PatchSelectionDto, ReferenceDto, RemoteMutationRequestDto,
+    RemoteRequestDto, RemoteTagDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
+    SessionTabUpdateDto, StashRequestDto,
 };
 use crate::state::{ApplicationState, SessionTabUpdate};
 
@@ -569,6 +570,31 @@ pub fn diff_get(
 ) -> CommandResult<DiffDto> {
     state
         .repository_diff(&repo_id, &path_bytes, parse_diff_target(&target)?)
+        .map(DiffDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn commit_files(
+    repo_id: String,
+    revision: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<Vec<CommitFileDto>> {
+    state
+        .repository_commit_files(&repo_id, &revision)
+        .map(|files| files.into_iter().map(CommitFileDto::from).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn commit_diff_get(
+    repo_id: String,
+    revision: String,
+    path_bytes: Vec<u8>,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<DiffDto> {
+    state
+        .repository_commit_diff(&repo_id, &revision, &path_bytes)
         .map(DiffDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
