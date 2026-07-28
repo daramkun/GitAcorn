@@ -10,6 +10,7 @@ pub struct CommitSummary {
     pub subject: String,
     pub body: String,
     pub references: Vec<String>,
+    pub remote_only: bool,
     pub lane: usize,
     pub lane_count: usize,
 }
@@ -57,6 +58,7 @@ pub fn parse_history_records(input: &[u8]) -> Result<Vec<CommitSummary>, String>
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
                 .collect(),
+            remote_only: false,
             lane: 0,
             lane_count: 1,
         });

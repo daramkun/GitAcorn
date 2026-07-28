@@ -101,6 +101,7 @@ export type CommitDto = {
   subject: string;
   body: string;
   references: string[];
+  remoteOnly?: boolean;
   lane: number;
   laneCount: number;
 };

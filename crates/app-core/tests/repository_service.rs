@@ -149,6 +149,72 @@ fn pages_history_and_manages_branches_without_implicit_checkout() {
 }
 
 #[test]
+fn history_keeps_every_remote_tip_visible_and_marks_remote_only_commits() {
+    let fixture = TestRepository::init();
+    let main_oid = String::from_utf8(fixture.git_output(["rev-parse", "main"])).expect("main oid");
+    let mut remote_oids = Vec::new();
+    for branch in ["dev", "release", "experiment"] {
+        fixture.git(["switch", "-c", branch]);
+        fixture.write("tracked.txt", &format!("{branch}\n"));
+        fixture.git(["add", "tracked.txt"]);
+        fixture.git(["commit", "-m", &format!("{branch} commit")]);
+        let oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+            .expect("remote branch oid")
+            .trim()
+            .to_owned();
+        fixture.git(["update-ref", &format!("refs/remotes/origin/{branch}"), &oid]);
+        fixture.git(["switch", "main"]);
+        fixture.git(["branch", "-D", branch]);
+        remote_oids.push(oid);
+    }
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let first = service
+        .history(
+            &repository,
+            &HistoryFilter {
+                limit: 1,
+                ..HistoryFilter::default()
+            },
+        )
+        .expect("first history page");
+
+    for oid in &remote_oids {
+        let commit = first
+            .commits
+            .iter()
+            .find(|commit| &commit.oid == oid)
+            .expect("remote tip is pinned to the first page");
+        assert!(commit.remote_only);
+        assert!(
+            commit
+                .references
+                .iter()
+                .any(|reference| reference.starts_with("refs/remotes/origin/"))
+        );
+    }
+
+    let complete = service
+        .history(
+            &repository,
+            &HistoryFilter {
+                limit: 200,
+                ..HistoryFilter::default()
+            },
+        )
+        .expect("complete history");
+    assert!(
+        !complete
+            .commits
+            .iter()
+            .find(|commit| commit.oid == main_oid.trim())
+            .expect("main commit")
+            .remote_only
+    );
+}
+
+#[test]
 fn renames_rebases_and_manages_tags_for_local_branches() {
     let fixture = TestRepository::init();
     fixture.git(["branch", "topic"]);

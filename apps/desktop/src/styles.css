@@ -1932,6 +1932,15 @@ button:disabled {
   box-shadow: inset 3px 0 var(--accent);
 }
 
+.commit-row.remote-only {
+  opacity: 0.55;
+}
+
+.commit-row.remote-only:hover,
+.commit-row.remote-only.selected {
+  opacity: 0.78;
+}
+
 .commit-graph {
   display: block;
   width: var(--graph-width);

@@ -410,7 +410,12 @@ impl RepositoryService {
             OsString::from("--topo-order"),
             OsString::from("--date-order"),
             OsString::from("--decorate=full"),
-            OsString::from("--all"),
+            OsString::from("--decorate-refs=refs/heads/*"),
+            OsString::from("--decorate-refs=refs/remotes/*"),
+            OsString::from("--decorate-refs=refs/tags/*"),
+            OsString::from("--branches"),
+            OsString::from("--remotes"),
+            OsString::from("--tags"),
             OsString::from("--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%b%x00%D%x00%x1e"),
             OsString::from(format!("--skip={offset}")),
             OsString::from(format!("--max-count={}", limit + 1)),
@@ -435,17 +440,106 @@ impl RepositoryService {
             .as_deref()
             .filter(|value| !value.trim().is_empty())
         {
-            args.retain(|arg| arg != "--all");
+            args.retain(|arg| arg != "--branches" && arg != "--remotes" && arg != "--tags");
             args.push(OsString::from(reference));
         }
         let output = self.git_bytes(repository, args)?;
         let mut commits = parse_history_records(&output).map_err(AppError::InvalidGitOutput)?;
         let has_more = commits.len() > limit;
         commits.truncate(limit);
+        if offset == 0
+            && filter.reference.as_deref().is_none_or(str::is_empty)
+            && filter.query.as_deref().is_none_or(str::is_empty)
+            && filter.author.as_deref().is_none_or(str::is_empty)
+        {
+            self.prepend_missing_remote_tips(repository, &mut commits)?;
+        }
+        self.mark_remote_only_commits(repository, &mut commits)?;
         Ok(HistoryPage {
             commits,
             next_cursor: has_more.then(|| format!("offset:{}", offset + limit)),
         })
+    }
+
+    fn prepend_missing_remote_tips(
+        &self,
+        repository: &RepositoryDescriptor,
+        commits: &mut Vec<git_domain::CommitSummary>,
+    ) -> Result<(), AppError> {
+        let refs = self.git_text(
+            repository,
+            [
+                "for-each-ref",
+                "--format=%(objectname)%00%(refname)",
+                "refs/remotes",
+            ],
+        )?;
+        let existing: std::collections::HashSet<&str> =
+            commits.iter().map(|commit| commit.oid.as_str()).collect();
+        let mut missing = Vec::new();
+        for line in refs.lines() {
+            let Some((oid, reference)) = line.split_once('\0') else {
+                continue;
+            };
+            if !reference.ends_with("/HEAD")
+                && !existing.contains(oid)
+                && !missing.iter().any(|item| item == oid)
+            {
+                missing.push(oid.to_owned());
+            }
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        let mut tips = Vec::new();
+        for chunk in missing.chunks(128) {
+            let mut args = vec![
+                OsString::from("log"),
+                OsString::from("--no-walk=unsorted"),
+                OsString::from("--decorate=full"),
+                OsString::from("--decorate-refs=refs/heads/*"),
+                OsString::from("--decorate-refs=refs/remotes/*"),
+                OsString::from("--decorate-refs=refs/tags/*"),
+                OsString::from("--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%b%x00%D%x00%x1e"),
+            ];
+            args.extend(chunk.iter().map(OsString::from));
+            let output = self.git_bytes(repository, args)?;
+            tips.extend(parse_history_records(&output).map_err(AppError::InvalidGitOutput)?);
+        }
+        tips.sort_by(|left, right| right.authored_at.cmp(&left.authored_at));
+        tips.append(commits);
+        *commits = tips;
+        Ok(())
+    }
+
+    fn mark_remote_only_commits(
+        &self,
+        repository: &RepositoryDescriptor,
+        commits: &mut [git_domain::CommitSummary],
+    ) -> Result<(), AppError> {
+        if commits.is_empty() {
+            return Ok(());
+        }
+        for chunk in commits.chunks_mut(128) {
+            let mut args = vec![
+                OsString::from("name-rev"),
+                OsString::from("--name-only"),
+                OsString::from("--refs=refs/heads/*"),
+            ];
+            args.extend(chunk.iter().map(|commit| OsString::from(&commit.oid)));
+            let names = self.git_text(repository, args)?;
+            let names: Vec<&str> = names.lines().collect();
+            if names.len() != chunk.len() {
+                return Err(AppError::InvalidGitOutput(
+                    "git name-rev returned an unexpected number of records".to_owned(),
+                ));
+            }
+            for (commit, name) in chunk.iter_mut().zip(names) {
+                commit.remote_only = name.trim() == "undefined";
+            }
+        }
+        Ok(())
     }
 
     pub fn create_branch(

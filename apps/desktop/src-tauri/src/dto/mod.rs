@@ -386,6 +386,7 @@ pub struct CommitDto {
     pub subject: String,
     pub body: String,
     pub references: Vec<String>,
+    pub remote_only: bool,
     pub lane: usize,
     pub lane_count: usize,
 }
@@ -631,6 +632,7 @@ impl From<CommitSummary> for CommitDto {
             subject: commit.subject,
             body: commit.body,
             references: commit.references,
+            remote_only: commit.remote_only,
             lane: commit.lane,
             lane_count: commit.lane_count,
         }

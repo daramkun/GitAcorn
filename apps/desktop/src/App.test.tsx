@@ -387,6 +387,59 @@ describe("App", () => {
     );
   });
 
+  it("dims commits that are only reachable from remote branches", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: "remote123456",
+          parents: ["abcdef123456"],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_100,
+          subject: "Remote-only commit",
+          body: "",
+          references: ["refs/remotes/origin/dev"],
+          remoteOnly: true,
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+
+    expect(
+      await screen.findByRole("button", { name: /Remote-only commit/ }),
+    ).toHaveClass("commit-row", "remote-only");
+  });
+
+  it("opens history at the newest page instead of a persisted older cursor", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [
+        {
+          ...sessionWithSnapshot.tabs[0],
+          page: "history",
+          historyCursor: "offset:100",
+        },
+      ],
+    });
+    render(<App />);
+
+    await screen.findByRole("button", { name: /Initial commit/ });
+
+    expect(mockedGetHistory.mock.calls[0]).toEqual([
+      snapshot.repository.id,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+
   it("shows a recoverable error state when the core cannot be reached", async () => {
     mockedGetAppInfo.mockRejectedValue(new Error("IPC unavailable"));
     render(<App />);

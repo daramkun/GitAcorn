@@ -4575,7 +4575,7 @@ function HistoryView({
     Promise.all([
       getHistoryPage(
         snapshot.repository.id,
-        tab.historyCursor,
+        undefined,
         reference || undefined,
         query || undefined,
       ),
@@ -4618,9 +4618,14 @@ function HistoryView({
         reference || undefined,
         query || undefined,
       );
-      setCommits((current) => [...current, ...page.commits]);
+      setCommits((current) => {
+        const existing = new Set(current.map((commit) => commit.oid));
+        return [
+          ...current,
+          ...page.commits.filter((commit) => !existing.has(commit.oid)),
+        ];
+      });
       setNextCursor(page.nextCursor);
-      onPersist({ historyCursor: cursor });
     } catch (reason: unknown) {
       onError(reason);
     } finally {
@@ -4713,7 +4718,11 @@ function HistoryView({
                 type="button"
                 key={commit.oid}
                 ref={selected?.oid === commit.oid ? selectedRowRef : undefined}
-                className={selected?.oid === commit.oid ? "commit-row selected" : "commit-row"}
+                className={[
+                  "commit-row",
+                  commit.remoteOnly ? "remote-only" : "",
+                  selected?.oid === commit.oid ? "selected" : "",
+                ].filter(Boolean).join(" ")}
                 aria-current={selected?.oid === commit.oid ? "true" : undefined}
                 onClick={() => {
                   setSelectedOid(commit.oid);
