@@ -10,6 +10,7 @@ import {
 } from "./windowControls";
 import {
   applyPatchSelection,
+  applyStash,
   addRemote,
   activateSessionTab,
   activateWorktree,
@@ -22,6 +23,7 @@ import {
   deleteBranch,
   deleteTag,
   discardPath,
+  dropStash,
   fastForwardBranch,
   getDiff,
   getCommitDiff,
@@ -148,6 +150,8 @@ const mockedUnstagePaths = vi.mocked(unstagePaths);
 const mockedApplyPatch = vi.mocked(applyPatchSelection);
 const mockedDiscardPath = vi.mocked(discardPath);
 const mockedCreateStash = vi.mocked(createStash);
+const mockedApplyStash = vi.mocked(applyStash);
+const mockedDropStash = vi.mocked(dropStash);
 const mockedFastForwardBranch = vi.mocked(fastForwardBranch);
 const mockedCreateCommit = vi.mocked(createCommit);
 const mockedDeleteBranch = vi.mocked(deleteBranch);
@@ -355,6 +359,8 @@ describe("App", () => {
     mockedDeleteTag.mockResolvedValue(snapshot);
     mockedMergeBranch.mockResolvedValue(snapshot);
     mockedCreateStash.mockResolvedValue(snapshot);
+    mockedApplyStash.mockResolvedValue(snapshot);
+    mockedDropStash.mockResolvedValue(snapshot);
     mockedResolveConflict.mockResolvedValue(snapshot);
     mockedGetOperationHistory.mockResolvedValue([]);
     mockedListenForChanges.mockResolvedValue(vi.fn());
@@ -900,8 +906,9 @@ describe("App", () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /staged file\.txt/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Unstage file" }));
+    const stagedRow = await screen.findByRole("button", { name: /staged file\.txt/ });
+    fireEvent.contextMenu(stagedRow, { clientX: 40, clientY: 50 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unstage file" }));
 
     expect(mockedUnstagePaths).toHaveBeenCalledWith(
       snapshot.repository.id,
@@ -958,7 +965,9 @@ describe("App", () => {
     });
     render(<App />);
 
-    const stageFile = await screen.findByRole("button", { name: "Stage file" });
+    const trackedRow = await screen.findByRole("button", { name: /tracked\.txt/ });
+    fireEvent.contextMenu(trackedRow, { clientX: 40, clientY: 50 });
+    const stageFile = screen.getByRole("menuitem", { name: "Stage file" });
     expect(stageFile).toBeEnabled();
     await waitFor(() => expect(notifyRepositoryChange).toBeDefined());
 
@@ -1891,21 +1900,127 @@ describe("App", () => {
     ).toBeLessThan(100);
   });
 
-  it("creates a stash including untracked files from the sidebar", async () => {
+  it("creates a stash for files selected in Changes while the sidebar stays list-only", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     render(<App />);
 
-    fireEvent.change(await screen.findByRole("textbox", { name: "Stash message" }), {
+    const navigation = await screen.findByRole("navigation", {
+      name: "Repository navigation",
+    });
+    expect(
+      within(navigation).queryByRole("textbox", { name: "Stash message" }),
+    ).not.toBeInTheDocument();
+
+    const trackedRow = await screen.findByRole("button", { name: /tracked\.txt/ });
+    fireEvent.contextMenu(trackedRow, { clientX: 40, clientY: 50 });
+
+    const fileActions = screen.getByRole("menu", { name: "File actions" });
+    expect(within(fileActions).getByRole("menuitem", { name: "Stage file" })).toBeInTheDocument();
+    expect(within(fileActions).getByRole("menuitem", { name: "Discard…" })).toBeInTheDocument();
+    fireEvent.click(within(fileActions).getByRole("menuitem", { name: "Stash…" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Create stash" });
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Stash name" }), {
       target: { value: "before refactor" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Stash changes" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create stash" }));
 
     await waitFor(() =>
       expect(mockedCreateStash).toHaveBeenCalledWith(
         snapshot.repository.id,
         snapshot.revision,
         "before refactor",
-        true,
+        [snapshot.changes[0].pathBytes],
+      ),
+    );
+  });
+
+  it("keeps the staged and unstaged file selections mutually exclusive", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    const unstagedRow = await screen.findByRole("button", { name: /tracked\.txt/ });
+    const stagedRow = screen.getByRole("button", { name: /staged file\.txt/ });
+
+    fireEvent.click(unstagedRow);
+    expect(unstagedRow).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(stagedRow);
+    expect(unstagedRow).toHaveAttribute("aria-pressed", "false");
+    expect(stagedRow).toHaveAttribute("aria-pressed", "true");
+    fireEvent.contextMenu(stagedRow, { clientX: 40, clientY: 50 });
+    const stagedActions = screen.getByRole("menu", { name: "File actions" });
+    expect(
+      within(stagedActions).getByRole("menuitem", { name: "Unstage file" }),
+    ).toBeInTheDocument();
+    expect(
+      within(stagedActions).queryByRole("menuitem", { name: "Discard…" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(document.body);
+
+    fireEvent.click(unstagedRow);
+    expect(stagedRow).toHaveAttribute("aria-pressed", "false");
+    expect(unstagedRow).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("opens stash actions from a branch-like row and can apply then drop", async () => {
+    const stash = {
+      reference: "stash@{0}",
+      message: "before refactor",
+    };
+    const stashSnapshot = { ...snapshot, stashCount: 1 };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], snapshot: stashSnapshot }],
+    });
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [stash],
+    });
+    mockedApplyStash.mockResolvedValue({ ...stashSnapshot, revision: 2 });
+    mockedDropStash.mockResolvedValue({
+      ...stashSnapshot,
+      revision: 3,
+      stashCount: 0,
+    });
+    render(<App />);
+
+    const stashRow = await screen.findByRole("button", {
+      name: "Stash stash@{0}: before refactor",
+    });
+    expect(stashRow).toHaveClass("tree-leaf-row", "branch-item-row");
+
+    fireEvent.contextMenu(stashRow, { clientX: 40, clientY: 50 });
+    expect(screen.getByRole("menuitem", { name: "Drop" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Apply" }));
+
+    expect(
+      screen.getByRole("dialog", { name: "Apply stash" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Drop this stash after applying",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() =>
+      expect(mockedApplyStash).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        stashSnapshot.revision,
+        stash.reference,
+      ),
+    );
+    await waitFor(() =>
+      expect(mockedDropStash).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        2,
+        stash.reference,
       ),
     );
   });
@@ -1954,7 +2069,8 @@ describe("App", () => {
     ]);
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /Operations/ }));
+    expect(screen.queryByRole("button", { name: "Operations" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Show operation history" }));
 
     expect(
       await screen.findByText("Interrupted when GitAcorn last exited"),

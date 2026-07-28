@@ -598,6 +598,7 @@ impl RepositoryService {
                 &crate::StashRequest {
                     message: "GitAcorn automatic checkout stash".to_owned(),
                     include_untracked: true,
+                    paths: Vec::new(),
                 },
             )?;
         }

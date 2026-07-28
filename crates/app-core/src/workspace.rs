@@ -11,6 +11,7 @@ use crate::{AppError, RepositoryService};
 pub struct StashRequest {
     pub message: String,
     pub include_untracked: bool,
+    pub paths: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,16 @@ impl RepositoryService {
         if !message.is_empty() {
             args.push(OsString::from("--message"));
             args.push(OsString::from(message));
+        }
+        if !request.paths.is_empty() {
+            args.push(OsString::from("--"));
+            args.extend(
+                request
+                    .paths
+                    .iter()
+                    .map(|path| path_argument(path))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
         }
         self.workspace_git_unit(repository, args)
     }

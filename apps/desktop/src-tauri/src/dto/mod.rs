@@ -120,6 +120,8 @@ pub struct StashRequestDto {
     pub message: String,
     #[serde(default)]
     pub include_untracked: bool,
+    #[serde(default)]
+    pub paths: Vec<Vec<u8>>,
 }
 
 impl From<StashRequestDto> for app_core::StashRequest {
@@ -127,6 +129,7 @@ impl From<StashRequestDto> for app_core::StashRequest {
         Self {
             message: request.message,
             include_untracked: request.include_untracked,
+            paths: request.paths,
         }
     }
 }

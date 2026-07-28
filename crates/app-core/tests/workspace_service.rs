@@ -15,6 +15,7 @@ fn creates_applies_and_drops_a_stash_with_untracked_files() {
             &StashRequest {
                 message: "alpha backup".to_owned(),
                 include_untracked: true,
+                paths: Vec::new(),
             },
         )
         .expect("create stash");
@@ -38,6 +39,47 @@ fn creates_applies_and_drops_a_stash_with_untracked_files() {
             .stashes
             .is_empty()
     );
+}
+
+#[test]
+fn creates_a_stash_for_only_the_selected_paths() {
+    let fixture = TestRepository::init();
+    fixture.write("selected.txt", "initial\n");
+    fixture.write("remaining.txt", "initial\n");
+    fixture.git(["add", "selected.txt", "remaining.txt"]);
+    fixture.git(["commit", "-m", "add selectable files"]);
+    fixture.write("selected.txt", "selected change\n");
+    fixture.write("remaining.txt", "remaining change\n");
+    fixture.write("selected-untracked.txt", "selected untracked\n");
+    fixture.write("remaining-untracked.txt", "remaining untracked\n");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .create_stash(
+            &repository,
+            &StashRequest {
+                message: "selected files".to_owned(),
+                include_untracked: true,
+                paths: vec![b"selected.txt".to_vec(), b"selected-untracked.txt".to_vec()],
+            },
+        )
+        .expect("create selected stash");
+
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("selected.txt"))
+            .expect("selected content")
+            .replace("\r\n", "\n"),
+        "initial\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("remaining.txt"))
+            .expect("remaining content")
+            .replace("\r\n", "\n"),
+        "remaining change\n"
+    );
+    assert!(!fixture.path().join("selected-untracked.txt").exists());
+    assert!(fixture.path().join("remaining-untracked.txt").is_file());
 }
 
 #[test]

@@ -88,7 +88,7 @@ import {
 import { updateRepositoryOperation } from "./remote-operations";
 import { localeTag, t } from "./i18n";
 
-type Page = "changes" | "history" | "operations";
+type Page = "changes" | "history";
 type AppInfoState =
   | { status: "loading" }
   | { status: "ready"; value: AppInfoDto }
@@ -97,14 +97,23 @@ type AppInfoState =
 const navigation: ReadonlyArray<{ id: Page; label: string; shortcut: string }> = [
   { id: "changes", label: t("Changes"), shortcut: "⌘1" },
   { id: "history", label: t("History"), shortcut: "⌘2" },
-  { id: "operations", label: t("Operations"), shortcut: "⌘3" },
 ];
+
+const alphaFeaturesEnabled = import.meta.env.DEV;
 
 type MultiSelection = ReturnType<typeof useMultiSelection>;
 
 type ReferenceContextMenu =
   | { x: number; y: number; kind: "branch"; name: string; upstream?: string }
   | { x: number; y: number; kind: "tag"; name: string };
+
+type StashItem = RepositorySidebarDto["stashes"][number];
+
+type StashContextMenu = {
+  x: number;
+  y: number;
+  stash: StashItem;
+};
 
 type ReferenceEditor =
   | { mode: "createBranch"; source: string }
@@ -334,6 +343,9 @@ export function App() {
   }>();
   const [referenceContextMenu, setReferenceContextMenu] =
     useState<ReferenceContextMenu>();
+  const [stashContextMenu, setStashContextMenu] =
+    useState<StashContextMenu>();
+  const [stashDialog, setStashDialog] = useState<StashItem>();
   const [referenceEditor, setReferenceEditor] = useState<ReferenceEditor>();
   const [checkoutTarget, setCheckoutTarget] = useState<CheckoutTarget>();
   const [error, setError] = useState<AppErrorDto>();
@@ -348,6 +360,7 @@ export function App() {
   const [showClone, setShowClone] = useState(false);
   const [cloneOperation, setCloneOperation] = useState<OperationEventDto>();
   const [showSettings, setShowSettings] = useState(false);
+  const [showOperationCenter, setShowOperationCenter] = useState(false);
   const [themeSetting, setThemeSetting] = useState<ThemeSetting>(() => {
     if (typeof window !== "undefined") {
       try {
@@ -402,10 +415,13 @@ export function App() {
         if (remoteEditor) setRemoteEditor(undefined);
         else if (remoteDialog) setRemoteDialog(undefined);
         else if (checkoutTarget) setCheckoutTarget(undefined);
+        else if (stashDialog) setStashDialog(undefined);
         else if (referenceEditor) setReferenceEditor(undefined);
+        else if (stashContextMenu) setStashContextMenu(undefined);
         else if (referenceContextMenu) setReferenceContextMenu(undefined);
         else if (remoteContextMenu) setRemoteContextMenu(undefined);
         else if (showSettings) setShowSettings(false);
+        else if (showOperationCenter) setShowOperationCenter(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -414,10 +430,13 @@ export function App() {
     referenceContextMenu,
     referenceEditor,
     checkoutTarget,
+    stashContextMenu,
+    stashDialog,
     remoteContextMenu,
     remoteDialog,
     remoteEditor,
     showSettings,
+    showOperationCenter,
   ]);
 
   const refreshRequests = useRef(new Map<string, boolean>());
@@ -427,7 +446,7 @@ export function App() {
   const activeRepoIdRef = useRef(activeRepoId);
   activeRepoIdRef.current = activeRepoId;
   const activeRepositoryReady = Boolean(activeSnapshot);
-  const page = activeTab?.page ?? "changes";
+  const page: Page = activeTab?.page === "history" ? "history" : "changes";
   const activeSidebar = activeTab ? sidebars[activeTab.repoId] : undefined;
 
   const remoteBranchItems = useMemo(() => {
@@ -630,10 +649,11 @@ export function App() {
   }, [activeRepoId, activeRepositoryReady, reportError]);
 
   useEffect(() => {
-    if (!remoteContextMenu && !referenceContextMenu) return;
+    if (!remoteContextMenu && !referenceContextMenu && !stashContextMenu) return;
     const close = () => {
       setRemoteContextMenu(undefined);
       setReferenceContextMenu(undefined);
+      setStashContextMenu(undefined);
     };
     window.addEventListener("click", close);
     window.addEventListener("blur", close);
@@ -641,7 +661,7 @@ export function App() {
       window.removeEventListener("click", close);
       window.removeEventListener("blur", close);
     };
-  }, [referenceContextMenu, remoteContextMenu]);
+  }, [referenceContextMenu, remoteContextMenu, stashContextMenu]);
 
   useEffect(() => {
     let disposed = false;
@@ -1067,30 +1087,56 @@ export function App() {
     }
   }
 
+  function acceptWorkspaceSnapshot(snapshot: RepositorySnapshotDto) {
+    const repoId = snapshot.repository.id;
+    setTabs((current) =>
+      current.map((tab) =>
+        tab.repoId === repoId ? { ...tab, snapshot } : tab,
+      ),
+    );
+    setSidebars((current) => {
+      const next = { ...current };
+      delete next[repoId];
+      return next;
+    });
+    setReferencesMap((current) => {
+      const next = { ...current };
+      delete next[repoId];
+      return next;
+    });
+  }
+
   async function handleWorkspaceMutation(
     action: () => Promise<RepositorySnapshotDto>,
   ) {
     if (!activeTab) return;
     try {
       setError(undefined);
-      const snapshot = await action();
-      setTabs((current) =>
-        current.map((tab) =>
-          tab.repoId === snapshot.repository.id ? { ...tab, snapshot } : tab,
-        ),
-      );
-      setSidebars((current) => {
-        const next = { ...current };
-        delete next[activeTab.repoId];
-        return next;
-      });
-      setReferencesMap((current) => {
-        const next = { ...current };
-        delete next[activeTab.repoId];
-        return next;
-      });
+      acceptWorkspaceSnapshot(await action());
     } catch (reason: unknown) {
       setError(normalizeAppError(reason));
+    }
+  }
+
+  async function handleStashApply(reference: string, dropAfterApply: boolean) {
+    if (!activeSnapshot) return false;
+    const repoId = activeSnapshot.repository.id;
+    try {
+      setError(undefined);
+      const applied = await applyStash(
+        repoId,
+        activeSnapshot.revision,
+        reference,
+      );
+      acceptWorkspaceSnapshot(applied);
+      if (dropAfterApply) {
+        const dropped = await dropStash(repoId, applied.revision, reference);
+        acceptWorkspaceSnapshot(dropped);
+      }
+      return true;
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+      return false;
     }
   }
 
@@ -1107,7 +1153,19 @@ export function App() {
       <header className="titlebar" data-tauri-drag-region>
         <div className="brand" data-tauri-drag-region>
           <span className="acorn-mark" aria-hidden="true"><span /></span>
-          <span>GitAcorn</span><span className="alpha-badge">ALPHA</span>
+          <span>GitAcorn</span>
+          {alphaFeaturesEnabled && (
+            <button
+              className="alpha-badge"
+              type="button"
+              aria-label={t("Show operation history")}
+              aria-pressed={showOperationCenter}
+              title={t("Show operation history")}
+              onClick={() => setShowOperationCenter((visible) => !visible)}
+            >
+              ALPHA
+            </button>
+          )}
         </div>
         <div className="window-drag-region" data-tauri-drag-region />
         <button
@@ -1209,7 +1267,10 @@ export function App() {
                 type="button"
                 disabled={!activeTab}
                 aria-current={page === item.id ? "page" : undefined}
-                onClick={() => updateActiveTab({ page: item.id })}
+                onClick={() => {
+                  setShowOperationCenter(false);
+                  updateActiveTab({ page: item.id });
+                }}
               >
                 <span className={`nav-icon ${item.id}`} aria-hidden="true" />
                 <span>{item.label}</span><kbd>{item.shortcut}</kbd>
@@ -1371,38 +1432,10 @@ export function App() {
               ))}
             </SidebarGroup>
             <StashControls
-              snapshot={activeSnapshot}
               stashes={activeSidebar?.stashes ?? []}
-              onCreate={(message, includeUntracked) =>
-                activeSnapshot &&
-                handleWorkspaceMutation(() =>
-                  createStash(
-                    activeSnapshot.repository.id,
-                    activeSnapshot.revision,
-                    message,
-                    includeUntracked,
-                  ),
-                )
-              }
-              onApply={(reference) =>
-                activeSnapshot &&
-                handleWorkspaceMutation(() =>
-                  applyStash(
-                    activeSnapshot.repository.id,
-                    activeSnapshot.revision,
-                    reference,
-                  ),
-                )
-              }
-              onDrop={(reference) =>
-                activeSnapshot &&
-                handleWorkspaceMutation(() =>
-                  dropStash(
-                    activeSnapshot.repository.id,
-                    activeSnapshot.revision,
-                    reference,
-                  ),
-                )
+              onApply={setStashDialog}
+              onContextMenu={(stash, x, y) =>
+                setStashContextMenu({ stash, x, y })
               }
             />
             <SidebarGroup label={t("Worktrees")} count={activeSidebar?.worktrees.length}>
@@ -1441,9 +1474,15 @@ export function App() {
           <div className="contextbar">
             <div>
               <span className="eyebrow">{activeTab?.worktreePath ?? t("Local workspace")}</span>
-              <strong>{activeSnapshot ? `${branchLabel} · ${navigation.find((item) => item.id === page)?.label}` : navigation.find((item) => item.id === page)?.label}</strong>
+              <strong>
+                {showOperationCenter
+                  ? t("Operation center")
+                  : activeSnapshot
+                    ? `${branchLabel} · ${navigation.find((item) => item.id === page)?.label}`
+                    : navigation.find((item) => item.id === page)?.label}
+              </strong>
             </div>
-            <div className="remote-actions" aria-label={t("Remote actions")}>
+            {!showOperationCenter && <div className="remote-actions" aria-label={t("Remote actions")}>
               {activeTab && refreshing.has(activeTab.repoId) && <span className="refreshing">{t("Refreshing…")}</span>}
               {activeTab && remoteOperations[activeTab.repoId] &&
                 ["queued", "running"].includes(remoteOperations[activeTab.repoId].state) ? (
@@ -1460,7 +1499,7 @@ export function App() {
                     <button type="button" disabled={!activeTab} onClick={() => setRemoteDialog("push")}>{t("Push")}{activeSnapshot?.ahead ? ` ${activeSnapshot.ahead}` : ""}</button>
                   </>
                 )}
-            </div>
+            </div>}
           </div>
           {showClone && (
             <form className="clone-bar" onSubmit={(event) => { event.preventDefault(); void handleClone(); }}>
@@ -1478,7 +1517,9 @@ export function App() {
           )}
           {appInfo.status === "error" && <ErrorBanner title={t("Could not reach the GitAcorn core.")} message={appInfo.message} />}
           {error && <ErrorBanner title={t("Repository session needs attention.")} message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? t("Choose another folder") : undefined} onAction={handleOpenRepository} />}
-          {activeTab?.unavailable ? (
+          {alphaFeaturesEnabled && showOperationCenter ? (
+            <OperationsView onError={reportError} />
+          ) : activeTab?.unavailable ? (
             <UnavailableRepository tab={activeTab} onLocate={handleOpenRepository} />
           ) : page === "changes" ? (
             activeSnapshot ? (
@@ -1508,14 +1549,23 @@ export function App() {
                   updateActiveTab({ selectedPath, selectedDiff })
                 }
                 onSnapshot={(snapshot) =>
-                  setTabs((current) =>
-                    current.map((tab) =>
-                      tab.repoId === snapshot.repository.id &&
-                      (!tab.snapshot || snapshot.revision >= tab.snapshot.revision)
-                        ? { ...tab, snapshot, unavailable: false }
-                        : tab,
-                    ),
-                  )
+                  {
+                    setTabs((current) =>
+                      current.map((tab) =>
+                        tab.repoId === snapshot.repository.id &&
+                        (!tab.snapshot || snapshot.revision >= tab.snapshot.revision)
+                          ? { ...tab, snapshot, unavailable: false }
+                          : tab,
+                      ),
+                    );
+                    if (snapshot.stashCount !== activeSnapshot.stashCount) {
+                      setSidebars((current) => {
+                        const next = { ...current };
+                        delete next[snapshot.repository.id];
+                        return next;
+                      });
+                    }
+                  }
                 }
                 onError={reportError}
               />
@@ -1535,7 +1585,7 @@ export function App() {
               <HistoryEmpty />
             )
           ) : (
-            <OperationsView onError={reportError} />
+            <HistoryEmpty />
           )}
         </section>
       </main>
@@ -1755,6 +1805,51 @@ export function App() {
           )}
         </div>
       )}
+      {stashContextMenu && activeSnapshot && (
+        <div
+          className="remote-context-menu"
+          role="menu"
+          style={{ left: stashContextMenu.x, top: stashContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setStashDialog(stashContextMenu.stash);
+              setStashContextMenu(undefined);
+            }}
+          >
+            {t("Apply")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="danger-button"
+            onClick={() => {
+              const { reference } = stashContextMenu.stash;
+              setStashContextMenu(undefined);
+              if (
+                window.confirm(
+                  t("Drop {reference}? The stash entry cannot be recovered.", {
+                    reference,
+                  }),
+                )
+              ) {
+                void handleWorkspaceMutation(() =>
+                  dropStash(
+                    activeSnapshot.repository.id,
+                    activeSnapshot.revision,
+                    reference,
+                  ),
+                );
+              }
+            }}
+          >
+            {t("Drop")}
+          </button>
+        </div>
+      )}
       {remoteContextMenu && activeSnapshot && (
         <div
           className="remote-context-menu"
@@ -1864,6 +1959,15 @@ export function App() {
             handleRemote(remoteDialog, options);
             setRemoteDialog(undefined);
           }}
+        />
+      )}
+      {stashDialog && activeSnapshot && (
+        <StashApplyDialog
+          stash={stashDialog}
+          onClose={() => setStashDialog(undefined)}
+          onApply={(dropAfterApply) =>
+            handleStashApply(stashDialog.reference, dropAfterApply)
+          }
         />
       )}
       {referenceEditor && activeSnapshot && (
@@ -2156,6 +2260,157 @@ function RemoteOperationDialog({
               </button>
               <button type="submit" disabled={!remote}>
                 {title}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StashApplyDialog({
+  stash,
+  onClose,
+  onApply,
+}: {
+  stash: StashItem;
+  onClose: () => void;
+  onApply: (dropAfterApply: boolean) => Promise<boolean>;
+}) {
+  const [dropAfterApply, setDropAfterApply] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div
+      className="modal-overlay"
+      onClick={() => !busy && onClose()}
+      role="presentation"
+    >
+      <div
+        className="settings-modal remote-operation-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="stash-apply-title"
+      >
+        <div className="settings-modal-header">
+          <h2 id="stash-apply-title">{t("Apply stash")}</h2>
+          <button
+            className="settings-close-btn"
+            type="button"
+            aria-label={t("Close stash operation")}
+            disabled={busy}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="remote-manager-body">
+          <form
+            className="remote-form remote-operation-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setBusy(true);
+              void onApply(dropAfterApply).then((succeeded) => {
+                setBusy(false);
+                if (succeeded) onClose();
+              });
+            }}
+          >
+            <div className="stash-dialog-summary">
+              <code>{stash.reference}</code>
+              <span>{stash.message}</span>
+            </div>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={dropAfterApply}
+                disabled={busy}
+                onChange={(event) => setDropAfterApply(event.target.checked)}
+              />
+              <span>{t("Drop this stash after applying")}</span>
+            </label>
+            <div className="remote-form-actions">
+              <button type="button" disabled={busy} onClick={onClose}>
+                {t("Cancel")}
+              </button>
+              <button type="submit" disabled={busy} autoFocus>
+                {busy ? t("Applying…") : t("Apply")}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StashCreateDialog({
+  count,
+  busy,
+  onClose,
+  onCreate,
+}: {
+  count: number;
+  busy: boolean;
+  onClose: () => void;
+  onCreate: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+
+  return (
+    <div
+      className="modal-overlay"
+      onClick={() => !busy && onClose()}
+      role="presentation"
+    >
+      <div
+        className="settings-modal remote-operation-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="stash-create-title"
+      >
+        <div className="settings-modal-header">
+          <h2 id="stash-create-title">{t("Create stash")}</h2>
+          <button
+            className="settings-close-btn"
+            type="button"
+            aria-label={t("Close stash creation")}
+            disabled={busy}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="remote-manager-body">
+          <form
+            className="remote-form remote-operation-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onCreate(name);
+            }}
+          >
+            <p>
+              {t("{count} selected files will be stashed.", { count })}
+            </p>
+            <label>
+              <span>{t("Stash name")}</span>
+              <input
+                value={name}
+                disabled={busy}
+                autoFocus
+                onChange={(event) => setName(event.target.value)}
+                placeholder={t("Stash name (optional)")}
+              />
+            </label>
+            <div className="remote-form-actions">
+              <button type="button" disabled={busy} onClick={onClose}>
+                {t("Cancel")}
+              </button>
+              <button type="submit" disabled={busy}>
+                {busy ? t("Stashing selected files…") : t("Create stash")}
               </button>
             </div>
           </form>
@@ -2851,22 +3106,16 @@ function SidebarGroup({
 }
 
 function StashControls({
-  snapshot,
   stashes,
-  onCreate,
   onApply,
-  onDrop,
+  onContextMenu,
 }: {
-  snapshot?: RepositorySnapshotDto;
   stashes: RepositorySidebarDto["stashes"];
-  onCreate: (message: string, includeUntracked: boolean) => void;
-  onApply: (reference: string) => void;
-  onDrop: (reference: string) => void;
+  onApply: (stash: StashItem) => void;
+  onContextMenu: (stash: StashItem, x: number, y: number) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [showAll, setShowAll] = useState(false);
-  const [message, setMessage] = useState("");
-  const [includeUntracked, setIncludeUntracked] = useState(true);
 
   const visibleStashes = showAll ? stashes : stashes.slice(0, 5);
 
@@ -2889,66 +3138,44 @@ function StashControls({
           ›
         </span>
         {t("Stashes")}
-        {snapshot && <small>({snapshot.stashCount})</small>}
+        <small>({stashes.length})</small>
       </div>
       {isExpanded && (
-        <>
-          {snapshot && (
-            <form
-              aria-label={t("Create stash")}
-              onSubmit={(event) => {
-                event.preventDefault();
-                onCreate(message, includeUntracked);
-                setMessage("");
-              }}
-            >
-              <input
-                aria-label={t("Stash message")}
-                placeholder={t("Stash message")}
-                value={message}
-                onChange={(event) => setMessage(event.currentTarget.value)}
-              />
-              <label>
-                <input
-                  type="checkbox"
-                  checked={includeUntracked}
-                  onChange={(event) => setIncludeUntracked(event.currentTarget.checked)}
-                />
-                {t("Include untracked")}
-              </label>
-              <button type="submit" disabled={snapshot.changes.length === 0}>
-                {t("Stash changes")}
-              </button>
-            </form>
-          )}
-          <div className="sidebar-items">
+        <div className="sidebar-items">
             {visibleStashes.map((stash) => (
-              <div className="stash-item" key={stash.reference} title={stash.message}>
-                <span>
-                  {stash.reference} · {stash.message}
-                </span>
-                <div>
-                  <button type="button" onClick={() => onApply(stash.reference)}>
-                    {t("Apply")}
-                  </button>
-                  <button
-                    type="button"
-                    className="danger-button"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          t("Drop {reference}? The stash entry cannot be recovered.", {
-                            reference: stash.reference,
-                          }),
-                        )
-                      ) {
-                        onDrop(stash.reference);
-                      }
-                    }}
-                  >
-                    {t("Drop")}
-                  </button>
-                </div>
+              <div
+                className="stash-item tree-leaf-row branch-item-row"
+                key={stash.reference}
+                role="button"
+                tabIndex={0}
+                aria-label={t("Stash {reference}: {message}", {
+                  reference: stash.reference,
+                  message: stash.message,
+                })}
+                title={stash.message}
+                onDoubleClick={() => onApply(stash)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onContextMenu(stash, event.clientX, event.clientY);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onApply(stash);
+                  } else if (
+                    event.key === "ContextMenu" ||
+                    (event.shiftKey && event.key === "F10")
+                  ) {
+                    event.preventDefault();
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    onContextMenu(stash, bounds.left + 12, bounds.top + 12);
+                  }
+                }}
+              >
+                <span className="branch-icon" aria-hidden="true">◒ </span>
+                <span className="branch-name">{stash.message}</span>
+                <small className="stash-reference">{stash.reference}</small>
               </div>
             ))}
             {stashes.length > 5 && (
@@ -2962,8 +3189,7 @@ function StashControls({
                   : t("Show all ({count})", { count: stashes.length })}
               </button>
             )}
-          </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -3092,6 +3318,15 @@ function ChangesView({
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [amend, setAmend] = useState(false);
+  const [changeContextMenu, setChangeContextMenu] = useState<{
+    x: number;
+    y: number;
+    target: DiffTarget;
+  }>();
+  const [stashCreateDialog, setStashCreateDialog] = useState<{
+    paths: number[][];
+    count: number;
+  }>();
   const [commitExpanded, setCommitExpanded] = useState(true);
   const [commitPanelHeight, setCommitPanelHeight] = useState(() => {
     try {
@@ -3130,6 +3365,22 @@ function ChangesView({
     setLivePanelWidth(panelWidth);
     livePanelWidthRef.current = panelWidth;
   }, [panelWidth]);
+
+  useEffect(() => {
+    if (!changeContextMenu) return;
+    const close = () => setChangeContextMenu(undefined);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [changeContextMenu]);
 
   useEffect(() => {
     if (!selectedPath) return;
@@ -3237,13 +3488,14 @@ function ChangesView({
   async function mutate(
     label: string,
     action: () => Promise<RepositorySnapshotDto>,
-  ) {
-    if (refreshing) return;
+  ): Promise<boolean> {
+    if (refreshing) return false;
     try {
       setOperation(label);
       const next = await action();
       setSelectedLines(new Set());
       onSnapshot(next);
+      return true;
     } catch (reason: unknown) {
       const error = normalizeAppError(reason);
       if (error.code === "staleRevision") {
@@ -3257,6 +3509,7 @@ function ChangesView({
       } else {
         onError(reason);
       }
+      return false;
     } finally {
       setOperation(undefined);
     }
@@ -3311,6 +3564,97 @@ function ChangesView({
         amend,
       }),
     );
+  }
+
+  function selectionFor(target: DiffTarget) {
+    return target === "staged" ? stagedSelection : unstagedSelection;
+  }
+
+  function changesFor(target: DiffTarget) {
+    return target === "staged" ? staged : unstaged;
+  }
+
+  function clearOppositeSelection(target: DiffTarget) {
+    if (target === "staged") unstagedSelection.clear();
+    else stagedSelection.clear();
+  }
+
+  function selectedChangesFor(target: DiffTarget) {
+    const selection = selectionFor(target);
+    return changesFor(target).filter((change) =>
+      selection.selected.has(change.path),
+    );
+  }
+
+  function openChangeContextMenu(
+    target: DiffTarget,
+    path: string,
+    x: number,
+    y: number,
+  ) {
+    const selection = selectionFor(target);
+    clearOppositeSelection(target);
+    if (!selection.selected.has(path)) {
+      selection.setSelected(new Set([path]));
+      onSelect(path, target);
+    }
+    setChangeContextMenu({ target, x, y });
+  }
+
+  function openStashDialog(target: DiffTarget) {
+    const changes = selectedChangesFor(target);
+    if (changes.length === 0) return;
+    setChangeContextMenu(undefined);
+    setStashCreateDialog({
+      paths: changes.map((change) => change.pathBytes),
+      count: changes.length,
+    });
+  }
+
+  function submitStash(name: string) {
+    if (!stashCreateDialog) return;
+    void mutate(t("Stashing selected files…"), () =>
+      createStash(
+        snapshot.repository.id,
+        snapshot.revision,
+        name,
+        stashCreateDialog.paths,
+      ),
+    ).then((succeeded) => {
+      if (!succeeded) return;
+      setStashCreateDialog(undefined);
+      unstagedSelection.clear();
+      stagedSelection.clear();
+    });
+  }
+
+  function discardContextSelection() {
+    const changes = selectedChangesFor("unstaged");
+    setChangeContextMenu(undefined);
+    if (
+      changes.length === 0 ||
+      !window.confirm(
+        t("Discard {count} selected files? This cannot be undone by GitAcorn.", {
+          count: changes.length,
+        }),
+      )
+    ) {
+      return;
+    }
+    void mutate(t("Discarding…"), async () => {
+      let next: RepositorySnapshotDto | undefined;
+      let revision = snapshot.revision;
+      for (const change of changes) {
+        next = await discardPath(
+          snapshot.repository.id,
+          revision,
+          change.pathBytes,
+          change.worktreeStatus === "?",
+        );
+        revision = next.revision;
+      }
+      return next ?? snapshot;
+    });
   }
 
   function beginUnstagedDrag(path: string, event: ReactDragEvent<HTMLElement>) {
@@ -3563,6 +3907,10 @@ function ChangesView({
             selectedTarget={selectedTarget}
             selection={unstagedSelection}
             onSelect={onSelect}
+            onActivateSelection={() => clearOppositeSelection("unstaged")}
+            onContextMenu={(path, x, y) =>
+              openChangeContextMenu("unstaged", path, x, y)
+            }
             onDragStart={beginUnstagedDrag}
             onPointerDragStart={(path, event) =>
               beginPointerDrag(path, "unstaged", event)
@@ -3594,6 +3942,10 @@ function ChangesView({
             selectedTarget={selectedTarget}
             selection={stagedSelection}
             onSelect={onSelect}
+            onActivateSelection={() => clearOppositeSelection("staged")}
+            onContextMenu={(path, x, y) =>
+              openChangeContextMenu("staged", path, x, y)
+            }
             onPointerDragStart={(path, event) =>
               beginPointerDrag(path, "staged", event)
             }
@@ -3706,30 +4058,6 @@ function ChangesView({
                 </div>
               ) : (
               <div>
-                <button
-                  type="button"
-                  disabled={mutationBlocked}
-                  onClick={() =>
-                    void mutate(
-                      selectedTarget === "staged" ? t("Unstaging file…") : t("Staging file…"),
-                      () => {
-                        const activeSelection =
-                          selectedTarget === "staged" ? stagedSelection : unstagedSelection;
-                        const selectedPaths = activeSelection.selected.has(selected.path)
-                          ? activeSelection.selected
-                          : new Set([selected.path]);
-                        const paths = (selectedTarget === "staged" ? staged : unstaged)
-                          .filter((change) => selectedPaths.has(change.path))
-                          .map((change) => change.pathBytes);
-                        return selectedTarget === "staged"
-                          ? unstagePaths(snapshot.repository.id, snapshot.revision, paths)
-                          : stagePaths(snapshot.repository.id, snapshot.revision, paths);
-                      },
-                    )
-                  }
-                >
-                  {selectedTarget === "staged" ? t("Unstage file") : t("Stage file")}
-                </button>
                 <button
                   type="button"
                   disabled={selectedLines.size === 0 || mutationBlocked}
@@ -3911,6 +4239,60 @@ function ChangesView({
           )}
         </aside>
       </section>
+      {changeContextMenu && (
+        <div
+          className="remote-context-menu"
+          role="menu"
+          aria-label={t("File actions")}
+          style={{ left: changeContextMenu.x, top: changeContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={mutationBlocked}
+            onClick={() => {
+              const target = changeContextMenu.target;
+              const paths = [...selectionFor(target).selected];
+              setChangeContextMenu(undefined);
+              moveSelectedPaths(target, paths);
+            }}
+          >
+            {changeContextMenu.target === "staged"
+              ? t("Unstage file")
+              : t("Stage file")}
+          </button>
+          {changeContextMenu.target === "unstaged" && (
+            <button
+              type="button"
+              role="menuitem"
+              className="danger-button"
+              disabled={mutationBlocked}
+              onClick={discardContextSelection}
+            >
+              {t("Discard…")}
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            disabled={mutationBlocked}
+            onClick={() => openStashDialog(changeContextMenu.target)}
+          >
+            {t("Stash…")}
+          </button>
+        </div>
+      )}
+      {stashCreateDialog && (
+        <StashCreateDialog
+          count={stashCreateDialog.count}
+          busy={Boolean(operation)}
+          onClose={() => {
+            if (!operation) setStashCreateDialog(undefined);
+          }}
+          onCreate={submitStash}
+        />
+      )}
     </div>
   );
 }
@@ -3923,6 +4305,8 @@ function ChangeSection({
   selectedTarget,
   selection,
   onSelect,
+  onActivateSelection,
+  onContextMenu,
   onDragStart,
   onPointerDragStart,
   onDragEnd,
@@ -3940,6 +4324,8 @@ function ChangeSection({
   selectedTarget?: DiffTarget;
   selection?: MultiSelection;
   onSelect: (path: string, target: DiffTarget) => void;
+  onActivateSelection?: () => void;
+  onContextMenu?: (path: string, x: number, y: number) => void;
   onDragStart?: (path: string, event: ReactDragEvent<HTMLElement>) => void;
   onPointerDragStart?: (path: string, event: ReactMouseEvent<HTMLElement>) => void;
   onDragEnd?: () => void;
@@ -3972,6 +4358,8 @@ function ChangeSection({
           selectedTarget={selectedTarget}
           selection={selection}
           onSelect={onSelect}
+          onActivateSelection={onActivateSelection}
+          onContextMenu={onContextMenu}
           onDragStart={onDragStart}
           onPointerDragStart={onPointerDragStart}
           onDragEnd={onDragEnd}
@@ -3988,6 +4376,8 @@ function VirtualChangeList({
   selectedTarget,
   selection,
   onSelect,
+  onActivateSelection,
+  onContextMenu,
   onDragStart,
   onPointerDragStart,
   onDragEnd,
@@ -3998,6 +4388,8 @@ function VirtualChangeList({
   selectedTarget?: DiffTarget;
   selection?: MultiSelection;
   onSelect: (path: string, target: DiffTarget) => void;
+  onActivateSelection?: () => void;
+  onContextMenu?: (path: string, x: number, y: number) => void;
   onDragStart?: (path: string, event: ReactDragEvent<HTMLElement>) => void;
   onPointerDragStart?: (path: string, event: ReactMouseEvent<HTMLElement>) => void;
   onDragEnd?: () => void;
@@ -4081,6 +4473,7 @@ function VirtualChangeList({
           return;
         }
         event.preventDefault();
+        onActivateSelection?.();
         const space = event.currentTarget.querySelector<HTMLElement>(
           ".virtual-list-space",
         );
@@ -4130,15 +4523,40 @@ function VirtualChangeList({
                 data-selection-scope={`changes-${target}`}
                 data-selection-index={changes.indexOf(change)}
                 onMouseDown={(event) => {
+                  onActivateSelection?.();
                   selection?.onMouseDown(change.path, event);
                   onPointerDragStart?.(change.path, event);
                 }}
                 onMouseEnter={(event) => selection?.onMouseEnter(change.path, event)}
                 onClick={(event) => {
+                  onActivateSelection?.();
                   selection?.onClick(change.path, event);
                   onSelect(change.path, target);
                 }}
-                onKeyDown={(event) =>
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onContextMenu?.(
+                    change.path,
+                    event.clientX,
+                    event.clientY,
+                  );
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "ContextMenu" ||
+                    (event.shiftKey && event.key === "F10")
+                  ) {
+                    event.preventDefault();
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    onContextMenu?.(
+                      change.path,
+                      bounds.left + 12,
+                      bounds.top + 12,
+                    );
+                    return;
+                  }
+                  onActivateSelection?.();
                   selection?.onKeyDown(
                     change.path,
                     event,
@@ -4150,8 +4568,8 @@ function VirtualChangeList({
                       }
                       focusSelectionIndex(event.currentTarget, index);
                     },
-                  )
-                }
+                  );
+                }}
                 onDragStart={(event) => onDragStart?.(change.path, event)}
                 onDragEnd={onDragEnd}
                 title={change.path}

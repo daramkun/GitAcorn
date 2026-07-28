@@ -471,12 +471,12 @@ export function createStash(
   repoId: string,
   revision: number,
   message: string,
-  includeUntracked: boolean,
+  paths: number[][] = [],
 ): Promise<RepositorySnapshotDto> {
   return invoke("stash_create", {
     repoId,
     revision,
-    request: { message, includeUntracked },
+    request: { message, includeUntracked: true, paths },
   });
 }
 
