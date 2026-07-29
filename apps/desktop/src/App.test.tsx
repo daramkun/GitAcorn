@@ -486,6 +486,32 @@ describe("App", () => {
     expect(screen.queryByText("after commit")).not.toBeInTheDocument();
     expect(screen.queryByText("Reference actions")).not.toBeInTheDocument();
 
+    firstFile.focus();
+    const fileFindShortcut = new KeyboardEvent("keydown", {
+      key: "f",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(fileFindShortcut);
+
+    expect(fileFindShortcut.defaultPrevented).toBe(true);
+    const commitFileFilter = await screen.findByRole("searchbox", {
+      name: "Filter commit changed files",
+    });
+    fireEvent.change(commitFileFilter, { target: { value: "first" } });
+    expect(screen.getByRole("button", { name: "first.txt" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "second.txt" }),
+    ).not.toBeInTheDocument();
+    fireEvent.keyDown(commitFileFilter, { key: "Escape" });
+    expect(
+      screen.queryByRole("searchbox", {
+        name: "Filter commit changed files",
+      }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "second.txt" })).toBeInTheDocument();
+
     fireEvent.click(firstFile);
     expect(firstFile).toHaveAttribute("aria-expanded", "true");
     expect(await screen.findByText("after commit")).toBeInTheDocument();
@@ -532,9 +558,15 @@ describe("App", () => {
 
   it("shows a recoverable error state when the core cannot be reached", async () => {
     mockedGetAppInfo.mockRejectedValue(new Error("IPC unavailable"));
+    mockedRestoreSession.mockRejectedValue(new Error("Session unavailable"));
     render(<App />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("IPC unavailable");
+    await waitFor(() => {
+      expect(mockedRestoreSession).toHaveBeenCalled();
+      expect(screen.getAllByRole("alert")).toHaveLength(1);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("IPC unavailable");
+    expect(screen.queryByText("Session unavailable")).not.toBeInTheDocument();
     expect(screen.getByText("Core unavailable")).toBeInTheDocument();
   });
 
@@ -613,49 +645,186 @@ describe("App", () => {
     Reflect.deleteProperty(document, "elementFromPoint");
   });
 
-  it("filters history by reference without showing reference actions", async () => {
+  it("shows history search only after Ctrl+F in the graph and clears it when closed", async () => {
     mockedRestoreSession.mockResolvedValue({
       ...sessionWithSnapshot,
       tabs: [{ ...sessionWithSnapshot.tabs[0], page: "history" }],
     });
-    mockedGetReferences.mockResolvedValue([
-      {
-        fullName: "refs/heads/main",
-        shortName: "main",
-        oid: "abcdef123456",
-        kind: "localBranch",
-        ahead: 0,
-        behind: 0,
-      },
-      {
-        fullName: "refs/heads/topic",
-        shortName: "topic",
-        oid: "123456abcdef",
-        kind: "localBranch",
-        upstream: "origin/topic",
-        ahead: 2,
-        behind: 1,
-      },
-    ]);
     render(<App />);
 
-    const picker = await screen.findByRole("combobox", {
-      name: "Branch or tag reference",
+    const commit = await screen.findByRole("button", {
+      name: /Initial commit/,
     });
-    await screen.findByRole("option", { name: "topic" });
-    fireEvent.change(picker, { target: { value: "refs/heads/topic" } });
+    expect(
+      screen.queryByRole("searchbox", { name: "Search commit messages" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Branch or tag reference" }),
+    ).not.toBeInTheDocument();
 
-    expect(mockedCheckoutBranch).not.toHaveBeenCalled();
+    commit.focus();
+    const historyFindShortcut = new KeyboardEvent("keydown", {
+      key: "f",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(historyFindShortcut);
+    expect(historyFindShortcut.defaultPrevented).toBe(true);
+
+    const search = await screen.findByRole("searchbox", {
+      name: "Search commit messages",
+    });
+    fireEvent.change(search, { target: { value: "topic" } });
+    fireEvent.submit(search.closest("form")!);
+
     await waitFor(() =>
       expect(mockedGetHistory).toHaveBeenLastCalledWith(
         snapshot.repository.id,
         undefined,
-        "refs/heads/topic",
+        undefined,
+        "topic",
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Close history search" }),
+    );
+
+    expect(
+      screen.queryByRole("searchbox", { name: "Search commit messages" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockedGetHistory).toHaveBeenLastCalledWith(
+        snapshot.repository.id,
+        undefined,
+        undefined,
         undefined,
       ),
     );
-    expect(screen.queryByRole("button", { name: "Checkout" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Reference actions")).not.toBeInTheDocument();
+  });
+
+  it("filters sidebar references after Ctrl+F and closes with Escape", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 2, items: ["main", "feature/topic"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const localBranches = await screen.findByRole("button", {
+      name: /Local Branches/,
+    });
+    expect(
+      screen.queryByRole("searchbox", { name: "Filter sidebar" }),
+    ).not.toBeInTheDocument();
+
+    localBranches.focus();
+    const sidebarFindShortcut = new KeyboardEvent("keydown", {
+      key: "f",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(sidebarFindShortcut);
+    expect(sidebarFindShortcut.defaultPrevented).toBe(true);
+
+    const filter = await screen.findByRole("searchbox", {
+      name: "Filter sidebar",
+    });
+    fireEvent.change(filter, { target: { value: "topic" } });
+
+    expect(
+      screen.queryByRole("button", { name: "Branch main" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Branch feature/topic" }),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(filter, { key: "Escape" });
+
+    expect(
+      screen.queryByRole("searchbox", { name: "Filter sidebar" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Branch main" }),
+    ).toBeInTheDocument();
+  });
+
+  it("routes Ctrl+F to changed-file filtering and diff-content search", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    const { container } = render(<App />);
+
+    const trackedFile = await screen.findByRole("button", {
+      name: /tracked\.txt/,
+    });
+    trackedFile.focus();
+    const fileFindShortcut = new KeyboardEvent("keydown", {
+      key: "f",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(fileFindShortcut);
+
+    expect(fileFindShortcut.defaultPrevented).toBe(true);
+    const fileFilter = await screen.findByRole("searchbox", {
+      name: "Filter changed files",
+    });
+    fireEvent.change(fileFilter, { target: { value: "staged file" } });
+    expect(
+      screen.queryByRole("button", { name: /tracked\.txt/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /staged file\.txt/ }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Close file filter" }),
+    );
+    const restoredTrackedFile = screen.getByRole("button", {
+      name: /tracked\.txt/,
+    });
+    fireEvent.click(restoredTrackedFile);
+
+    await waitFor(() =>
+      expect(container.querySelector(".diff-line")).toBeInTheDocument(),
+    );
+    const diffLine = container.querySelector<HTMLElement>(".diff-line")!;
+    restoredTrackedFile.focus();
+    fireEvent.pointerDown(diffLine);
+    expect(document.activeElement).toBe(restoredTrackedFile);
+    const diffFindShortcut = new KeyboardEvent("keydown", {
+      key: "f",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(diffFindShortcut);
+
+    expect(diffFindShortcut.defaultPrevented).toBe(true);
+    const contentSearch = await screen.findByRole("searchbox", {
+      name: "Search file changes",
+    });
+    fireEvent.change(contentSearch, { target: { value: "initial" } });
+
+    expect(
+      container.querySelectorAll(".diff-line.search-match"),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector(".diff-line.active-search-match"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Close content search" }),
+    );
+    expect(
+      screen.queryByRole("searchbox", { name: "Search file changes" }),
+    ).not.toBeInTheDocument();
   });
 
   it("rapidly switches three repositories without mixing page, branch, or selection", async () => {

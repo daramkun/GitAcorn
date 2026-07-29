@@ -101,6 +101,16 @@ const navigation: ReadonlyArray<{ id: Page; label: string; shortcut: string }> =
 ];
 
 const alphaFeaturesEnabled = import.meta.env.DEV;
+const openHistorySearchEvent = "gitacorn:open-history-search";
+const openHistoryFileSearchEvent = "gitacorn:open-history-file-search";
+const openChangesFileSearchEvent = "gitacorn:open-changes-file-search";
+const openChangesDiffSearchEvent = "gitacorn:open-changes-diff-search";
+type FindScope =
+  | "sidebar"
+  | "changes-files"
+  | "changes-diff"
+  | "history"
+  | "history-files";
 
 let repositoryConfirmationActive = false;
 
@@ -385,6 +395,10 @@ export function App() {
   const [cloneOperation, setCloneOperation] = useState<OperationEventDto>();
   const [showSettings, setShowSettings] = useState(false);
   const [showOperationCenter, setShowOperationCenter] = useState(false);
+  const [showSidebarSearch, setShowSidebarSearch] = useState(false);
+  const [sidebarFilter, setSidebarFilter] = useState("");
+  const sidebarSearchInputRef = useRef<HTMLInputElement>(null);
+  const lastFindScopeRef = useRef<FindScope | undefined>(undefined);
   const [themeSetting, setThemeSetting] = useState<ThemeSetting>(() => {
     if (typeof window !== "undefined") {
       try {
@@ -434,6 +448,12 @@ export function App() {
   }, [themeSetting]);
 
   useEffect(() => {
+    if (showSidebarSearch) {
+      sidebarSearchInputRef.current?.focus();
+    }
+  }, [showSidebarSearch]);
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (remoteEditor) setRemoteEditor(undefined);
@@ -475,6 +495,89 @@ export function App() {
   const page: Page = activeTab?.page === "history" ? "history" : "changes";
   const activeSidebar = activeTab ? sidebars[activeTab.repoId] : undefined;
 
+  useEffect(() => {
+    const findScopeFor = (target: EventTarget | null): FindScope | undefined => {
+      const element = target instanceof Element ? target : null;
+      if (element?.closest(".sidebar")) {
+        return "sidebar";
+      }
+      if (element?.closest(".file-panel")) {
+        return "changes-files";
+      }
+      if (element?.closest(".diff-panel")) {
+        return "changes-diff";
+      }
+      if (element?.closest(".commit-files")) {
+        return "history-files";
+      }
+      if (element?.closest(".history-list-panel")) {
+        return "history";
+      }
+      return undefined;
+    };
+
+    const rememberFindScope = (event: Event) => {
+      const scope = findScopeFor(event.target);
+      if (scope) {
+        lastFindScopeRef.current = scope;
+      }
+    };
+
+    const handleFindShortcut = (event: KeyboardEvent) => {
+      if (
+        !(event.ctrlKey || event.metaKey) ||
+        event.key.toLocaleLowerCase() !== "f"
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const scope =
+        lastFindScopeRef.current ??
+        findScopeFor(document.activeElement) ??
+        (page === "history" ? "history" : "changes-files");
+
+      if (scope === "sidebar") {
+        setShowSidebarSearch(true);
+        window.setTimeout(() => sidebarSearchInputRef.current?.select(), 0);
+        return;
+      }
+
+      if (scope === "changes-files") {
+        window.dispatchEvent(new Event(openChangesFileSearchEvent));
+        return;
+      }
+
+      if (scope === "changes-diff") {
+        window.dispatchEvent(new Event(openChangesDiffSearchEvent));
+        return;
+      }
+
+      if (scope === "history") {
+        window.dispatchEvent(new Event(openHistorySearchEvent));
+        return;
+      }
+
+      if (scope === "history-files") {
+        window.dispatchEvent(new Event(openHistoryFileSearchEvent));
+        return;
+      }
+
+      window.dispatchEvent(new Event(openChangesFileSearchEvent));
+    };
+
+    window.addEventListener("pointerdown", rememberFindScope, true);
+    window.addEventListener("focusin", rememberFindScope, true);
+    window.addEventListener("keydown", handleFindShortcut, true);
+    return () => {
+      window.removeEventListener("pointerdown", rememberFindScope, true);
+      window.removeEventListener("focusin", rememberFindScope, true);
+      window.removeEventListener("keydown", handleFindShortcut, true);
+    };
+  }, [page]);
+
   const remoteBranchItems = useMemo(() => {
     if (activeSidebar?.remoteBranches?.items) {
       return activeSidebar.remoteBranches.items;
@@ -499,9 +602,82 @@ export function App() {
     return [...names].sort((left, right) => left.localeCompare(right));
   }, [activeTab?.repoId, remoteBranchItems, remoteTagsMap, remotes]);
 
+  const sidebarFilterQuery = sidebarFilter.trim().toLocaleLowerCase();
+  const filteredLocalBranchItems = useMemo(
+    () =>
+      (activeSidebar?.branches.items ?? []).filter((branch) =>
+        branch.toLocaleLowerCase().includes(sidebarFilterQuery),
+      ),
+    [activeSidebar?.branches.items, sidebarFilterQuery],
+  );
+  const filteredLocalTags = useMemo(
+    () =>
+      (activeSidebar?.tags.items ?? []).filter((tag) =>
+        tag.toLocaleLowerCase().includes(sidebarFilterQuery),
+      ),
+    [activeSidebar?.tags.items, sidebarFilterQuery],
+  );
+  const filteredStashes = useMemo(
+    () =>
+      (activeSidebar?.stashes ?? []).filter((stash) =>
+        `${stash.reference} ${stash.message}`
+          .toLocaleLowerCase()
+          .includes(sidebarFilterQuery),
+      ),
+    [activeSidebar?.stashes, sidebarFilterQuery],
+  );
+  const filteredWorktrees = useMemo(
+    () =>
+      (activeSidebar?.worktrees ?? []).filter((worktree) =>
+        `${worktree.branch ?? ""} ${worktree.path}`
+          .toLocaleLowerCase()
+          .includes(sidebarFilterQuery),
+      ),
+    [activeSidebar?.worktrees, sidebarFilterQuery],
+  );
+  const remoteSidebarEntries = useMemo(
+    () =>
+      remoteNames
+        .map((remoteName) => {
+          const remoteMatches = remoteName
+            .toLocaleLowerCase()
+            .includes(sidebarFilterQuery);
+          const branches = remoteBranchItems
+            .filter((branch) => branch.startsWith(`${remoteName}/`))
+            .map((branch) => branch.slice(remoteName.length + 1))
+            .filter(
+              (branch) =>
+                remoteMatches ||
+                branch.toLocaleLowerCase().includes(sidebarFilterQuery),
+            );
+          const tags = (
+            remoteTagsMap[activeTab?.repoId ?? ""] ?? []
+          ).filter(
+            (tag) =>
+              tag.remote === remoteName &&
+              (remoteMatches ||
+                tag.name.toLocaleLowerCase().includes(sidebarFilterQuery)),
+          );
+          return { name: remoteName, branches, tags, remoteMatches };
+        })
+        .filter(
+          (entry) =>
+            !sidebarFilterQuery ||
+            entry.remoteMatches ||
+            entry.branches.length > 0 ||
+            entry.tags.length > 0,
+        ),
+    [
+      activeTab?.repoId,
+      remoteBranchItems,
+      remoteNames,
+      remoteTagsMap,
+      sidebarFilterQuery,
+    ],
+  );
   const localBranchTree = useMemo(
-    () => buildBranchTree(activeSidebar?.branches.items ?? [], false),
-    [activeSidebar?.branches.items],
+    () => buildBranchTree(filteredLocalBranchItems, false),
+    [filteredLocalBranchItems],
   );
   const branchSelectionItems = useMemo(
     () => [
@@ -1268,6 +1444,31 @@ export function App() {
     }
   }
 
+  const closeSidebarSearch = () => {
+    setShowSidebarSearch(false);
+    setSidebarFilter("");
+  };
+
+  const handleSidebarKeyDownCapture = (
+    event: ReactKeyboardEvent<HTMLElement>,
+  ) => {
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      event.key.toLocaleLowerCase() === "f"
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      setShowSidebarSearch(true);
+      window.setTimeout(() => sidebarSearchInputRef.current?.select(), 0);
+      return;
+    }
+    if (event.key === "Escape" && showSidebarSearch) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSidebarSearch();
+    }
+  };
+
   const branchLabel = activeSnapshot
     ? activeSnapshot.head.kind === "branch"
       ? activeSnapshot.head.name
@@ -1373,10 +1574,10 @@ export function App() {
             </div>
           ))}
         </div>
-        <button className="open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
+        <button className="control-button control-button--primary open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
           <span aria-hidden="true">＋</span>{" "}{opening ? t("Opening…") : t("Open a repository")}
         </button>
-        <button className="open-button" type="button" onClick={() => setShowClone((value) => !value)}>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => setShowClone((value) => !value)}>
           {t("Clone")}
         </button>
       </div>
@@ -1385,7 +1586,10 @@ export function App() {
         className="workspace"
         style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
       >
-        <aside className="sidebar">
+        <aside
+          className="sidebar"
+          onKeyDownCapture={handleSidebarKeyDownCapture}
+        >
           <nav aria-label={t("Repository navigation")}>
             <p className="section-label">{t("Workspace")}</p>
             {navigation.map((item) => (
@@ -1405,10 +1609,37 @@ export function App() {
               </button>
             ))}
           </nav>
+          {showSidebarSearch && (
+            <div className="sidebar-searchbar" role="search">
+              <input
+                ref={sidebarSearchInputRef}
+                className="control-input"
+                type="search"
+                aria-label={t("Filter sidebar")}
+                placeholder={t("Filter branches, tags, stashes, or worktrees")}
+                value={sidebarFilter}
+                onChange={(event) =>
+                  setSidebarFilter(event.currentTarget.value)
+                }
+              />
+              <button
+                className="search-close-button"
+                type="button"
+                aria-label={t("Close sidebar filter")}
+                onClick={closeSidebarSearch}
+              >
+                ×
+              </button>
+            </div>
+          )}
           <div className="sidebar-groups">
             <SidebarGroup
               label={t("Local Branches")}
-              count={activeSidebar?.branches.total}
+              count={
+                sidebarFilterQuery
+                  ? filteredLocalBranchItems.length
+                  : activeSidebar?.branches.total
+              }
               initialLimit={999}
               onClearSelection={branchSelection.clear}
             >
@@ -1450,7 +1681,7 @@ export function App() {
             </SidebarGroup>
             <SidebarGroup
               label={t("Remote")}
-              count={remoteNames.length}
+              count={remoteSidebarEntries.length}
               initialLimit={999}
               onClearSelection={() => {
                 branchSelection.clear();
@@ -1464,16 +1695,12 @@ export function App() {
                 });
               }}
             >
-              {remoteNames.map((remoteName) => (
+              {remoteSidebarEntries.map((remote) => (
                 <RemoteReferenceNode
-                  key={remoteName}
-                  name={remoteName}
-                  branches={remoteBranchItems
-                    .filter((branch) => branch.startsWith(`${remoteName}/`))
-                    .map((branch) => branch.slice(remoteName.length + 1))}
-                  tags={(remoteTagsMap[activeTab?.repoId ?? ""] ?? []).filter(
-                    (tag) => tag.remote === remoteName,
-                  )}
+                  key={remote.name}
+                  name={remote.name}
+                  branches={remote.branches}
+                  tags={remote.tags}
                   branchSelection={branchSelection}
                   tagSelection={tagSelection}
                   tagSelectionItems={tagSelectionItems}
@@ -1494,8 +1721,8 @@ export function App() {
                     setRemoteContextMenu({
                       x: event.clientX,
                       y: event.clientY,
-                      remote: remotes.find((remote) => remote.name === remoteName) ?? {
-                        name: remoteName,
+                      remote: remotes.find((item) => item.name === remote.name) ?? {
+                        name: remote.name,
                         url: "",
                       },
                     });
@@ -1505,10 +1732,14 @@ export function App() {
             </SidebarGroup>
             <SidebarGroup
               label={t("Tags")}
-              count={activeSidebar?.tags.total ?? 0}
+              count={
+                sidebarFilterQuery
+                  ? filteredLocalTags.length
+                  : activeSidebar?.tags.total ?? 0
+              }
               onClearSelection={tagSelection.clear}
             >
-              {activeSidebar?.tags.items.map((tag) => (
+              {filteredLocalTags.map((tag) => (
                 <div
                   key={tag}
                   className={`tag-item-row tree-leaf-row ${tagSelection.selected.has(`local:${tag}`) ? "selected" : ""}`}
@@ -1560,14 +1791,17 @@ export function App() {
               ))}
             </SidebarGroup>
             <StashControls
-              stashes={activeSidebar?.stashes ?? []}
+              stashes={filteredStashes}
               onApply={setStashDialog}
               onContextMenu={(stash, x, y) =>
                 setStashContextMenu({ stash, x, y })
               }
             />
-            <SidebarGroup label={t("Worktrees")} count={activeSidebar?.worktrees.length}>
-              {activeSidebar?.worktrees.map((worktree) => (
+            <SidebarGroup
+              label={t("Worktrees")}
+              count={filteredWorktrees.length}
+            >
+              {filteredWorktrees.map((worktree) => (
                 <button
                   type="button"
                   key={worktree.id}
@@ -1618,13 +1852,13 @@ export function App() {
                     <span className="refreshing" role="status">
                       {operationTerm(remoteOperations[activeTab.repoId].kind)} · {remoteOperations[activeTab.repoId].message ?? operationTerm(remoteOperations[activeTab.repoId].state)}
                     </span>
-                    <button type="button" onClick={() => cancelOperation(remoteOperations[activeTab.repoId].operationId).catch((reason: unknown) => setError(normalizeAppError(reason)))}>{t("Cancel")}</button>
+                    <button className="control-button control-button--secondary" type="button" onClick={() => cancelOperation(remoteOperations[activeTab.repoId].operationId).catch((reason: unknown) => setError(normalizeAppError(reason)))}>{t("Cancel")}</button>
                   </>
                 ) : (
                   <>
-                    <button type="button" disabled={!activeTab} onClick={() => setRemoteDialog("fetch")}>{t("Fetch")}</button>
-                    <button type="button" disabled={!activeTab} onClick={() => setRemoteDialog("pull")}>{t("Pull")}{activeSnapshot?.behind ? ` ${activeSnapshot.behind}` : ""}</button>
-                    <button type="button" disabled={!activeTab} onClick={() => setRemoteDialog("push")}>{t("Push")}{activeSnapshot?.ahead ? ` ${activeSnapshot.ahead}` : ""}</button>
+                    <button className="control-button control-button--secondary" type="button" disabled={!activeTab} onClick={() => setRemoteDialog("fetch")}>{t("Fetch")}</button>
+                    <button className="control-button control-button--secondary" type="button" disabled={!activeTab} onClick={() => setRemoteDialog("pull")}>{t("Pull")}{activeSnapshot?.behind ? ` ${activeSnapshot.behind}` : ""}</button>
+                    <button className="control-button control-button--secondary" type="button" disabled={!activeTab} onClick={() => setRemoteDialog("push")}>{t("Push")}{activeSnapshot?.ahead ? ` ${activeSnapshot.ahead}` : ""}</button>
                   </>
                 )}
             </div>}
@@ -1632,19 +1866,19 @@ export function App() {
           {showClone && (
             <form className="clone-bar" onSubmit={(event) => { event.preventDefault(); void handleClone(); }}>
               <label htmlFor="clone-url">{t("Repository URL")}</label>
-              <input id="clone-url" value={cloneUrl} onChange={(event) => setCloneUrl(event.target.value)} placeholder="https://host/owner/repository.git or git@host:owner/repository.git" />
+              <input className="control-input" id="clone-url" value={cloneUrl} onChange={(event) => setCloneUrl(event.target.value)} placeholder="https://host/owner/repository.git or git@host:owner/repository.git" />
               {cloneOperation && ["queued", "running"].includes(cloneOperation.state) ? (
                 <>
                   <span role="status">{cloneOperation.message ?? t("Cloning…")}</span>
-                  <button type="button" onClick={() => cancelOperation(cloneOperation.operationId)}>{t("Cancel")}</button>
+                  <button className="control-button control-button--secondary" type="button" onClick={() => cancelOperation(cloneOperation.operationId)}>{t("Cancel")}</button>
                 </>
               ) : (
-                <button type="submit" disabled={!cloneUrl.trim()}>{t("Choose destination and clone")}</button>
+                <button className="control-button control-button--primary" type="submit" disabled={!cloneUrl.trim()}>{t("Choose destination and clone")}</button>
               )}
             </form>
           )}
           {appInfo.status === "error" && <ErrorBanner title={t("Could not reach the GitAcorn core.")} message={appInfo.message} />}
-          {error && <ErrorBanner title={t("Repository session needs attention.")} message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? t("Choose another folder") : undefined} onAction={handleOpenRepository} />}
+          {appInfo.status !== "error" && error && <ErrorBanner title={t("Repository session needs attention.")} message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? t("Choose another folder") : undefined} onAction={handleOpenRepository} />}
           {alphaFeaturesEnabled && showOperationCenter ? (
             <OperationsView onError={reportError} />
           ) : activeTab?.unavailable ? (
@@ -3479,12 +3713,42 @@ function OperationsView({ onError }: { onError: (error: unknown) => void }) {
 }
 
 function ErrorBanner({ title, message, detail, actionLabel, onAction }: { title: string; message: string; detail?: string; actionLabel?: string; onAction?: () => void }) {
-  return <div className="error-banner" role="alert"><div><strong>{title}</strong><span>{message}</span>{detail && <small>{detail}</small>}</div>{actionLabel && <button type="button" onClick={onAction}>{actionLabel}</button>}</div>;
+  return (
+    <div className="error-banner" role="alert">
+      <div>
+        <strong>{title}</strong>
+        <span>{message}</span>
+        {detail && <small>{detail}</small>}
+      </div>
+      {actionLabel && (
+        <button
+          className="control-button control-button--danger"
+          type="button"
+          onClick={onAction}
+        >
+          {actionLabel}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function UnavailableRepository({ tab, onLocate }: { tab: SessionTabDto; onLocate: () => void }) {
   const name = repositoryName(tab.worktreePath);
-  return <div className="welcome-panel"><p className="eyebrow">{t("Repository unavailable")}</p><h1>{t("{name} moved or was deleted.", { name })}</h1><p>{tab.worktreePath}</p><button type="button" onClick={onLocate}>{t("Locate repository")}</button></div>;
+  return (
+    <div className="welcome-panel">
+      <p className="eyebrow">{t("Repository unavailable")}</p>
+      <h1>{t("{name} moved or was deleted.", { name })}</h1>
+      <p>{tab.worktreePath}</p>
+      <button
+        className="control-button control-button--primary"
+        type="button"
+        onClick={onLocate}
+      >
+        {t("Locate repository")}
+      </button>
+    </div>
+  );
 }
 
 const commitPanelMinHeight = 240;
@@ -3534,6 +3798,11 @@ function ChangesView({
   const selected = snapshot.changes.find((change) => change.path === selectedPath);
   const [diff, setDiff] = useState<DiffDto>();
   const [diffLoading, setDiffLoading] = useState(false);
+  const [showFileSearch, setShowFileSearch] = useState(false);
+  const [fileFilter, setFileFilter] = useState("");
+  const [showDiffSearch, setShowDiffSearch] = useState(false);
+  const [diffSearchQuery, setDiffSearchQuery] = useState("");
+  const [diffSearchMatchIndex, setDiffSearchMatchIndex] = useState(0);
   const [selectedLines, setSelectedLines] = useState<Set<string>>(new Set());
   const [operation, setOperation] = useState<string>();
   const mutationBlocked = Boolean(operation) || refreshing;
@@ -3568,6 +3837,8 @@ function ChangesView({
   const commitPanelHeightRef = useRef(commitPanelHeight);
   const summaryRef = useRef<HTMLTextAreaElement>(null);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const fileSearchInputRef = useRef<HTMLInputElement>(null);
+  const diffSearchInputRef = useRef<HTMLInputElement>(null);
   const [livePanelWidth, setLivePanelWidth] = useState(panelWidth);
   const livePanelWidthRef = useRef(panelWidth);
   const draggedUnstagedPaths = useRef<string[]>([]);
@@ -3582,11 +3853,69 @@ function ChangesView({
   >(undefined);
   const nativeDropHandled = useRef(false);
   const [activeDropTarget, setActiveDropTarget] = useState<DiffTarget>();
+  const normalizedFileFilter = fileFilter.trim().toLocaleLowerCase();
+  const filteredUnstaged = useMemo(
+    () =>
+      unstaged.filter((change) =>
+        change.path.toLocaleLowerCase().includes(normalizedFileFilter),
+      ),
+    [normalizedFileFilter, unstaged],
+  );
+  const filteredStaged = useMemo(
+    () =>
+      staged.filter((change) =>
+        change.path.toLocaleLowerCase().includes(normalizedFileFilter),
+      ),
+    [normalizedFileFilter, staged],
+  );
+  const normalizedDiffSearch = diffSearchQuery.toLocaleLowerCase();
+  const diffSearchMatches = useMemo(
+    () =>
+      normalizedDiffSearch
+        ? (diff?.hunks.flatMap((hunk) =>
+            hunk.lines
+              .filter((line) =>
+                line.content.toLocaleLowerCase().includes(normalizedDiffSearch),
+              )
+              .map((line) => `${hunk.index}:${line.index}`),
+          ) ?? [])
+        : [],
+    [diff, normalizedDiffSearch],
+  );
+  const activeDiffSearchMatch =
+    diffSearchMatches.length > 0
+      ? diffSearchMatches[
+          Math.min(diffSearchMatchIndex, diffSearchMatches.length - 1)
+        ]
+      : undefined;
 
   useEffect(() => {
     setLivePanelWidth(panelWidth);
     livePanelWidthRef.current = panelWidth;
   }, [panelWidth]);
+
+  useEffect(() => {
+    const openFileSearch = () => setShowFileSearch(true);
+    const openDiffSearch = () => setShowDiffSearch(true);
+    window.addEventListener(openChangesFileSearchEvent, openFileSearch);
+    window.addEventListener(openChangesDiffSearchEvent, openDiffSearch);
+    return () => {
+      window.removeEventListener(openChangesFileSearchEvent, openFileSearch);
+      window.removeEventListener(openChangesDiffSearchEvent, openDiffSearch);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (showFileSearch) fileSearchInputRef.current?.focus();
+  }, [showFileSearch]);
+
+  useEffect(() => {
+    if (showDiffSearch) diffSearchInputRef.current?.focus();
+  }, [showDiffSearch]);
+
+  useEffect(() => {
+    setDiffSearchMatchIndex(0);
+  }, [diffSearchQuery, selectedPath, selectedTarget]);
 
   useEffect(() => {
     if (!changeContextMenu) return;
@@ -4114,17 +4443,81 @@ function ChangesView({
     }
   };
 
+  const closeFileSearch = () => {
+    setShowFileSearch(false);
+    setFileFilter("");
+  };
+
+  const closeDiffSearch = () => {
+    setShowDiffSearch(false);
+    setDiffSearchQuery("");
+    setDiffSearchMatchIndex(0);
+  };
+
+  const moveDiffSearchMatch = (direction: -1 | 1) => {
+    if (diffSearchMatches.length === 0) return;
+    setDiffSearchMatchIndex(
+      (current) =>
+        (current + direction + diffSearchMatches.length) %
+        diffSearchMatches.length,
+    );
+  };
+
+  const handleFileSearchEscape = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape" && showFileSearch) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeFileSearch();
+    }
+  };
+
+  const handleDiffSearchEscape = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape" && showDiffSearch) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeDiffSearch();
+    }
+  };
+
   return (
     <div
       className="changes-layout"
       style={{ "--file-panel-width": `${livePanelWidth}px` } as CSSProperties}
     >
-      <section className="file-panel" aria-label={t("Changed files")}>
+      <section
+        className="file-panel"
+        aria-label={t("Changed files")}
+        onKeyDownCapture={handleFileSearchEscape}
+      >
+        {showFileSearch && (
+          <div className="panel-searchbar file-searchbar" role="search">
+            <input
+              ref={fileSearchInputRef}
+              className="control-input"
+              type="search"
+              aria-label={t("Filter changed files")}
+              placeholder={t("Filter by file name or path")}
+              value={fileFilter}
+              onChange={(event) => setFileFilter(event.currentTarget.value)}
+            />
+            <span className="search-result-count">
+              {filteredUnstaged.length + filteredStaged.length}
+            </span>
+            <button
+              className="search-close-button"
+              type="button"
+              aria-label={t("Close file filter")}
+              onClick={closeFileSearch}
+            >
+              ×
+            </button>
+          </div>
+        )}
         <div style={{ flex: `${stageSplitRatio} 1 0%`, display: "flex", flexDirection: "column", minHeight: 0 }}>
           <ChangeSection
             title={t("Unstaged")}
             target="unstaged"
-            changes={unstaged}
+            changes={filteredUnstaged}
             selectedPath={selectedPath}
             selectedTarget={selectedTarget}
             selection={unstagedSelection}
@@ -4159,7 +4552,7 @@ function ChangesView({
           <ChangeSection
             title={t("Staged")}
             target="staged"
-            changes={staged}
+            changes={filteredStaged}
             selectedPath={selectedPath}
             selectedTarget={selectedTarget}
             selection={stagedSelection}
@@ -4202,7 +4595,10 @@ function ChangesView({
           onKeyDown={handleFilePanelResizerKeyDown}
         />
       </section>
-      <section className="selected-file-panel diff-panel">
+      <section
+        className="selected-file-panel diff-panel"
+        onKeyDownCapture={handleDiffSearchEscape}
+      >
         <div className="diff-content">
           {selected ? (
             <>
@@ -4306,6 +4702,58 @@ function ChangesView({
               </div>
               )}
             </div>
+            {showDiffSearch && (
+              <form
+                className="panel-searchbar diff-searchbar"
+                role="search"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  moveDiffSearchMatch(1);
+                }}
+              >
+                <input
+                  ref={diffSearchInputRef}
+                  className="control-input"
+                  type="search"
+                  aria-label={t("Search file changes")}
+                  placeholder={t("Search changed content")}
+                  value={diffSearchQuery}
+                  onChange={(event) =>
+                    setDiffSearchQuery(event.currentTarget.value)
+                  }
+                />
+                <span className="search-result-count" role="status">
+                  {diffSearchMatches.length === 0
+                    ? "0 / 0"
+                    : `${Math.min(diffSearchMatchIndex + 1, diffSearchMatches.length)} / ${diffSearchMatches.length}`}
+                </span>
+                <button
+                  className="search-navigation-button"
+                  type="button"
+                  aria-label={t("Previous match")}
+                  disabled={diffSearchMatches.length === 0}
+                  onClick={() => moveDiffSearchMatch(-1)}
+                >
+                  ↑
+                </button>
+                <button
+                  className="search-navigation-button"
+                  type="submit"
+                  aria-label={t("Next match")}
+                  disabled={diffSearchMatches.length === 0}
+                >
+                  ↓
+                </button>
+                <button
+                  className="search-close-button"
+                  type="button"
+                  aria-label={t("Close content search")}
+                  onClick={closeDiffSearch}
+                >
+                  ×
+                </button>
+              </form>
+            )}
             {operation && <div className="operation-status" role="status">{operation}</div>}
             {selected.conflict ? (
               <div className="conflict-panel" role="region" aria-label={t("Conflict resolution guidance")}>
@@ -4346,6 +4794,8 @@ function ChangesView({
                 }
                 actionLabel={selectedTarget === "staged" ? t("Unstage hunk") : t("Stage hunk")}
                 actionDisabled={mutationBlocked}
+                searchQuery={diffSearchQuery}
+                activeSearchKey={activeDiffSearchMatch}
               />
             ) : (
               <div className="diff-state">{t("No text diff is available for this side.")}</div>
@@ -4839,6 +5289,8 @@ function DiffRenderer({
   actionLabel,
   actionDisabled,
   readOnly = false,
+  searchQuery = "",
+  activeSearchKey,
 }: {
   diff: DiffDto;
   selectedLines: Set<string>;
@@ -4848,6 +5300,8 @@ function DiffRenderer({
   actionLabel: string;
   actionDisabled: boolean;
   readOnly?: boolean;
+  searchQuery?: string;
+  activeSearchKey?: string;
 }) {
   const selectableKeys = useMemo(
     () =>
@@ -4871,6 +5325,7 @@ function DiffRenderer({
     | undefined
   >(undefined);
   const [dragSelecting, setDragSelecting] = useState(false);
+  const diffScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const finishDragSelection = () => {
@@ -4884,6 +5339,25 @@ function DiffRenderer({
       window.removeEventListener("blur", finishDragSelection);
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeSearchKey) return;
+    const container = diffScrollRef.current;
+    const line = container?.querySelector<HTMLElement>(
+      `[data-diff-key="${activeSearchKey}"]`,
+    );
+    if (line && typeof line.scrollIntoView === "function") {
+      line.scrollIntoView({ block: "center" });
+      return;
+    }
+    const hunkIndex = activeSearchKey.split(":", 1)[0];
+    const hunk = container?.querySelector<HTMLElement>(
+      `[data-hunk-index="${hunkIndex}"]`,
+    );
+    if (hunk && typeof hunk.scrollIntoView === "function") {
+      hunk.scrollIntoView({ block: "center" });
+    }
+  }, [activeSearchKey]);
 
   function selectDragRange(key: string) {
     const drag = dragSelection.current;
@@ -4931,12 +5405,17 @@ function DiffRenderer({
 
   return (
     <div
+      ref={diffScrollRef}
       className={`diff-scroll ${dragSelecting ? "drag-selecting" : ""}`}
       aria-label={t("File diff")}
       title={readOnly ? undefined : t("Click or drag across changed lines to select them.")}
     >
       {diff.hunks.map((hunk) => (
-        <div className="diff-hunk" key={hunk.index}>
+        <div
+          className="diff-hunk"
+          key={hunk.index}
+          data-hunk-index={hunk.index}
+        >
           <div className="diff-hunk-header">
             <code>{hunk.header}</code>
             {!readOnly && (
@@ -4957,6 +5436,8 @@ function DiffRenderer({
             onBeginSelection={beginDragSelection}
             onExtendSelection={extendDragSelection}
             readOnly={readOnly}
+            searchQuery={searchQuery}
+            activeSearchKey={activeSearchKey}
           />
         </div>
       ))}
@@ -5038,6 +5519,8 @@ function VirtualDiffLines({
   onBeginSelection,
   onExtendSelection,
   readOnly = false,
+  searchQuery = "",
+  activeSearchKey,
 }: {
   hunkIndex: number;
   lines: DiffDto["hunks"][number]["lines"];
@@ -5052,19 +5535,51 @@ function VirtualDiffLines({
     event: ReactMouseEvent<HTMLButtonElement>,
   ) => void;
   readOnly?: boolean;
+  searchQuery?: string;
+  activeSearchKey?: string;
 }) {
   const rowHeight = 23;
   const [scrollTop, setScrollTop] = useState(0);
+  const virtualListRef = useRef<HTMLDivElement>(null);
   const virtual = lines.length > 300;
+  const normalizedSearch = searchQuery.toLocaleLowerCase();
+  const activeLineIndex = activeSearchKey
+    ? lines.findIndex(
+        (line) => `${hunkIndex}:${line.index}` === activeSearchKey,
+      )
+    : -1;
+
+  useEffect(() => {
+    if (!virtual || activeLineIndex < 0) return;
+    const nextScrollTop = Math.max(0, activeLineIndex * rowHeight - rowHeight * 8);
+    setScrollTop(nextScrollTop);
+    if (virtualListRef.current) {
+      virtualListRef.current.scrollTop = nextScrollTop;
+    }
+  }, [activeLineIndex, virtual]);
+
   const start = virtual ? Math.max(0, Math.floor(scrollTop / rowHeight) - 8) : 0;
   const end = virtual ? Math.min(lines.length, start + 80) : lines.length;
   const content = lines.slice(start, end).map((line) => {
     const key = `${hunkIndex}:${line.index}`;
+    const searchMatch =
+      Boolean(normalizedSearch) &&
+      line.content.toLocaleLowerCase().includes(normalizedSearch);
+    const activeSearchMatch = key === activeSearchKey;
     return (
       <button
         type="button"
         key={key}
-        className={`diff-line ${line.kind} ${selectedLines.has(key) ? "selected" : ""}`}
+        className={[
+          "diff-line",
+          line.kind,
+          selectedLines.has(key) ? "selected" : "",
+          searchMatch ? "search-match" : "",
+          activeSearchMatch ? "active-search-match" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        data-diff-key={key}
         disabled={readOnly || !line.selectable}
         aria-pressed={!readOnly && line.selectable ? selectedLines.has(key) : undefined}
         onMouseDown={(event) =>
@@ -5090,7 +5605,11 @@ function VirtualDiffLines({
   });
   if (!virtual) return <div className="diff-lines">{content}</div>;
   return (
-    <div className="diff-lines virtual-diff" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
+    <div
+      ref={virtualListRef}
+      className="diff-lines virtual-diff"
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+    >
       <div className="virtual-diff-space" style={{ height: lines.length * rowHeight }}>
         <div
           className="virtual-diff-window"
@@ -5134,7 +5653,12 @@ function ChangesEmpty({ onOpen, opening }: { onOpen: () => void; opening: boolea
             "Open a local repository to inspect its real staged, unstaged, and untracked changes.",
           )}
         </p>
-        <button type="button" onClick={onOpen} disabled={opening}>
+        <button
+          className="control-button control-button--primary"
+          type="button"
+          onClick={onOpen}
+          disabled={opening}
+        >
           {opening ? t("Opening…") : t("Open a repository")}
         </button>
         <small>{t("Git 2.40.0 or newer is required.")}</small>
@@ -5160,21 +5684,32 @@ function HistoryView({
 }) {
   const savedFilter = parseHistoryFilter(tab.historyFilter);
   const [commits, setCommits] = useState<CommitDto[]>([]);
-  const [references, setReferences] = useState<ReferenceDto[]>([]);
-  const [reference, setReference] = useState(savedFilter.reference);
   const [query, setQuery] = useState(savedFilter.query);
   const [draftQuery, setDraftQuery] = useState(savedFilter.query);
+  const [showHistorySearch, setShowHistorySearch] = useState(false);
   const [nextCursor, setNextCursor] = useState<string>();
   const [selectedOid, setSelectedOid] = useState(tab.selectedCommit);
   const [loading, setLoading] = useState(true);
   const [commitFiles, setCommitFiles] = useState<CommitFileDto[]>([]);
+  const [showCommitFileSearch, setShowCommitFileSearch] = useState(false);
+  const [commitFileFilter, setCommitFileFilter] = useState("");
   const [selectedFile, setSelectedFile] = useState<string>();
   const [commitFilesExpanded, setCommitFilesExpanded] = useState(true);
   const [commitDiff, setCommitDiff] = useState<DiffDto>();
   const [loadingCommitFiles, setLoadingCommitFiles] = useState(false);
   const [loadingCommitDiff, setLoadingCommitDiff] = useState(false);
   const selectedRowRef = useRef<HTMLButtonElement | null>(null);
+  const historySearchInputRef = useRef<HTMLInputElement>(null);
+  const commitFileSearchInputRef = useRef<HTMLInputElement>(null);
   const selected = commits.find((commit) => commit.oid === selectedOid) ?? commits[0];
+  const commitFileFilterQuery = commitFileFilter.trim().toLocaleLowerCase();
+  const filteredCommitFiles = useMemo(
+    () =>
+      commitFiles.filter((file) =>
+        file.path.toLocaleLowerCase().includes(commitFileFilterQuery),
+      ),
+    [commitFileFilterQuery, commitFiles],
+  );
   const graph = useMemo(
     () =>
       layoutCommitGraph(
@@ -5206,14 +5741,43 @@ function HistoryView({
 
   useEffect(() => {
     const parsed = parseHistoryFilter(tab.historyFilter);
-    setReference(parsed.reference);
     setQuery(parsed.query);
     setDraftQuery(parsed.query);
   }, [tab.historyFilter]);
 
   useEffect(() => {
+    if (showHistorySearch) {
+      historySearchInputRef.current?.focus();
+    }
+  }, [showHistorySearch]);
+
+  useEffect(() => {
+    const openSearch = () => setShowHistorySearch(true);
+    window.addEventListener(openHistorySearchEvent, openSearch);
+    return () => window.removeEventListener(openHistorySearchEvent, openSearch);
+  }, []);
+
+  useEffect(() => {
+    const openSearch = () => {
+      setShowCommitFileSearch(true);
+      setCommitFilesExpanded(true);
+    };
+    window.addEventListener(openHistoryFileSearchEvent, openSearch);
+    return () =>
+      window.removeEventListener(openHistoryFileSearchEvent, openSearch);
+  }, []);
+
+  useEffect(() => {
+    if (showCommitFileSearch) {
+      commitFileSearchInputRef.current?.focus();
+    }
+  }, [showCommitFileSearch]);
+
+  useEffect(() => {
     let active = true;
     setCommitFiles([]);
+    setShowCommitFileSearch(false);
+    setCommitFileFilter("");
     setSelectedFile(undefined);
     setCommitFilesExpanded(true);
     setCommitDiff(undefined);
@@ -5248,20 +5812,16 @@ function HistoryView({
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      getHistoryPage(
-        snapshot.repository.id,
-        undefined,
-        reference || undefined,
-        query || undefined,
-      ),
-      getReferences(snapshot.repository.id),
-    ])
-      .then(([page, refs]) => {
+    getHistoryPage(
+      snapshot.repository.id,
+      undefined,
+      undefined,
+      query || undefined,
+    )
+      .then((page) => {
         if (!active) return;
         setCommits(page.commits);
         setNextCursor(page.nextCursor);
-        setReferences(refs);
         const preferredOid = tab.selectedCommit || selectedOid;
         const matchedOid = page.commits.find((commit) => commit.oid === preferredOid)?.oid;
         const oid = matchedOid ?? preferredOid ?? page.commits[0]?.oid;
@@ -5278,7 +5838,6 @@ function HistoryView({
   }, [
     snapshot.repository.id,
     snapshot.head.oid,
-    reference,
     query,
     tab.selectedCommit,
   ]);
@@ -5291,7 +5850,7 @@ function HistoryView({
       const page = await getHistoryPage(
         snapshot.repository.id,
         cursor,
-        reference || undefined,
+        undefined,
         query || undefined,
       );
       setCommits((current) => {
@@ -5309,50 +5868,92 @@ function HistoryView({
     }
   }
 
-  function persistFilter(nextReference: string, nextQuery: string) {
+  function persistFilter(nextQuery: string) {
     onPersist({
       historyCursor: undefined,
-      historyFilter: JSON.stringify({ reference: nextReference, query: nextQuery }),
+      historyFilter: JSON.stringify({ query: nextQuery }),
     });
+  }
+
+  function closeHistorySearch() {
+    setShowHistorySearch(false);
+    setDraftQuery("");
+    if (query) {
+      setQuery("");
+      persistFilter("");
+    }
+  }
+
+  function closeCommitFileSearch() {
+    setShowCommitFileSearch(false);
+    setCommitFileFilter("");
+  }
+
+  function handleHistoryKeyDownCapture(
+    event: ReactKeyboardEvent<HTMLElement>,
+  ) {
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      event.key.toLocaleLowerCase() === "f"
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      setShowHistorySearch(true);
+      window.setTimeout(() => historySearchInputRef.current?.select(), 0);
+      return;
+    }
+    if (event.key === "Escape" && showHistorySearch) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeHistorySearch();
+    }
   }
 
   const hasConflicts = snapshot.changes.some((change) => change.conflict);
 
   return (
     <div className="history-view">
-      <section className="history-list-panel" aria-label={t("Commit history")}>
-        <form
-          className="history-filterbar"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setQuery(draftQuery.trim());
-            persistFilter(reference, draftQuery.trim());
-          }}
-        >
-          <select
-            aria-label={t("Branch or tag reference")}
-            value={reference}
-            onChange={(event) => {
-              const value = event.currentTarget.value;
-              setReference(value);
-              persistFilter(value, query);
+      <section
+        className="history-list-panel"
+        aria-label={t("Commit history")}
+        onKeyDownCapture={handleHistoryKeyDownCapture}
+      >
+        {showHistorySearch && (
+          <form
+            className="history-filterbar"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const nextQuery = draftQuery.trim();
+              setQuery(nextQuery);
+              persistFilter(nextQuery);
             }}
           >
-            <option value="">{t("All branches and tags")}</option>
-            {references.map((item) => (
-              <option key={item.fullName} value={item.fullName}>
-                {item.kind === "tag" ? t("tag: ") : ""}{item.shortName}
-              </option>
-            ))}
-          </select>
-          <input
-            aria-label={t("Search commit messages")}
-            value={draftQuery}
-            onChange={(event) => setDraftQuery(event.currentTarget.value)}
-            placeholder={t("Search subject or body")}
-          />
-          <button type="submit">{t("Search")}</button>
-        </form>
+            <input
+              ref={historySearchInputRef}
+              className="control-input"
+              type="search"
+              aria-label={t("Search commit messages")}
+              value={draftQuery}
+              onChange={(event) => setDraftQuery(event.currentTarget.value)}
+              placeholder={t("Search subject or body")}
+            />
+            <button
+              className="control-button control-button--primary history-search-button"
+              type="submit"
+            >
+              {t("Search")}
+            </button>
+            <button
+              className="search-close-button"
+              type="button"
+              aria-label={t("Close history search")}
+              onClick={closeHistorySearch}
+            >
+              ×
+            </button>
+          </form>
+        )}
         {loading && commits.length === 0 ? (
           <div className="history-state" role="status">{t("Loading history…")}</div>
         ) : commits.length === 0 ? (
@@ -5425,7 +6026,17 @@ function HistoryView({
                 {selected.references.map((item) => <span key={item}>{shortRef(item)}</span>)}
               </div>
             </div>
-            <section className="commit-files" aria-label={t("Files changed in commit")}>
+            <section
+              className="commit-files"
+              aria-label={t("Files changed in commit")}
+              onKeyDownCapture={(event) => {
+                if (event.key === "Escape" && showCommitFileSearch) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  closeCommitFileSearch();
+                }
+              }}
+            >
               <button
                 type="button"
                 className="commit-files-toggle"
@@ -5439,15 +6050,46 @@ function HistoryView({
                   ›
                 </span>
                 <strong>{t("Changed files")}</strong>
-                <small>{commitFiles.length}</small>
+                <small>
+                  {commitFileFilterQuery
+                    ? `${filteredCommitFiles.length}/${commitFiles.length}`
+                    : commitFiles.length}
+                </small>
               </button>
+              {showCommitFileSearch && (
+                <div className="panel-searchbar commit-file-searchbar" role="search">
+                  <input
+                    ref={commitFileSearchInputRef}
+                    className="control-input"
+                    type="search"
+                    aria-label={t("Filter commit changed files")}
+                    placeholder={t("Filter by file name or path")}
+                    value={commitFileFilter}
+                    onChange={(event) =>
+                      setCommitFileFilter(event.currentTarget.value)
+                    }
+                  />
+                  <button
+                    className="search-close-button"
+                    type="button"
+                    aria-label={t("Close commit file filter")}
+                    onClick={closeCommitFileSearch}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
               {loadingCommitFiles ? (
                 <div className="history-state" role="status">{t("Loading changed files…")}</div>
               ) : commitFiles.length === 0 ? (
                 <div className="history-state">{t("No changed files.")}</div>
+              ) : filteredCommitFiles.length === 0 ? (
+                <div className="history-state">
+                  {t("No changed files match this filter.")}
+                </div>
               ) : commitFilesExpanded ? (
                 <div className="commit-file-list">
-                  {commitFiles.map((file) => {
+                  {filteredCommitFiles.map((file) => {
                     const expanded = selectedFile === file.path;
                     return (
                       <div className="commit-file-entry" key={file.path}>
