@@ -33,6 +33,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::git_identity_get,
+            commands::git_identity_update_global,
+            commands::git_identity_update_repository,
             commands::remote_sync,
             commands::repository_clone,
             commands::operation_cancel,

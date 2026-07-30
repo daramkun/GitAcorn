@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 
 use app_core::{
     AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
-    GitReference, GitRemote, HistoryFilter, InteractiveRebasePreview, InteractiveRebaseRequest,
-    PatchSelection, RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler,
-    RepositoryService, RepositorySidebar, StashRequest,
+    GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
+    InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection, RemoteProgress,
+    RemoteRequest, RemoteTagSummary, RepositoryScheduler, RepositoryService, RepositorySidebar,
+    StashRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -42,12 +43,19 @@ pub struct SessionTabUpdate {
     pub history_filter: Option<String>,
 }
 
+pub struct RepositoryIdentityState {
+    pub repo_id: String,
+    pub repository_name: String,
+    pub settings: GitIdentitySettings,
+}
+
 pub struct ApplicationState {
     service: RepositoryService,
     scheduler: RepositoryScheduler,
     repositories: Mutex<HashMap<RepoId, OpenRepository>>,
     watchers: Mutex<HashMap<WorktreeId, RecommendedWatcher>>,
     operations: Mutex<HashMap<Uuid, CancellationToken>>,
+    identity_lock: Mutex<()>,
     session: SessionStore,
 }
 
@@ -59,6 +67,7 @@ impl ApplicationState {
             repositories: Mutex::default(),
             watchers: Mutex::default(),
             operations: Mutex::default(),
+            identity_lock: Mutex::default(),
             session,
         }
     }
@@ -217,6 +226,58 @@ impl ApplicationState {
         let descriptor = self.descriptor(repo_id)?;
         self.scheduler
             .read(repo_id, || self.service.remotes(&descriptor))
+    }
+
+    pub fn global_identity(&self) -> Result<GitIdentity, AppError> {
+        let _guard = self
+            .identity_lock
+            .lock()
+            .expect("Git identity lock poisoned");
+        self.service.global_identity()
+    }
+
+    pub fn repository_identity(&self, repo_id: &str) -> Result<RepositoryIdentityState, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        let settings = self
+            .scheduler
+            .read(repo_id, || self.service.repository_identity(&descriptor))?;
+        Ok(RepositoryIdentityState {
+            repo_id: repo_id.to_string(),
+            repository_name: descriptor.name,
+            settings,
+        })
+    }
+
+    pub fn update_global_identity(
+        &self,
+        name: Option<&str>,
+        email: Option<&str>,
+    ) -> Result<GitIdentity, AppError> {
+        let _guard = self
+            .identity_lock
+            .lock()
+            .expect("Git identity lock poisoned");
+        self.service.update_global_identity(name, email)
+    }
+
+    pub fn update_repository_identity(
+        &self,
+        repo_id: &str,
+        name: Option<&str>,
+        email: Option<&str>,
+    ) -> Result<RepositoryIdentityState, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        let settings = self.scheduler.write(repo_id, || {
+            self.service
+                .update_repository_identity(&descriptor, name, email)
+        })?;
+        Ok(RepositoryIdentityState {
+            repo_id: repo_id.to_string(),
+            repository_name: descriptor.name,
+            settings,
+        })
     }
 
     pub fn add_remote(

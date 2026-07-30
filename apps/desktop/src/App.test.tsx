@@ -32,6 +32,7 @@ import {
   getCommitDiff,
   getCommitFiles,
   getHistoryPage,
+  getGitIdentity,
   getOperationHistory,
   getRemotes,
   getReferences,
@@ -52,6 +53,8 @@ import {
   startInteractiveRebase,
   startRemoteOperation,
   unstagePaths,
+  updateGlobalGitIdentity,
+  updateRepositoryGitIdentity,
   updateSessionTab,
   updateRemote,
   type RepositorySnapshotDto,
@@ -95,6 +98,7 @@ vi.mock("./repository", () => ({
   getCommitDiff: vi.fn(),
   getCommitFiles: vi.fn(),
   getHistoryPage: vi.fn(),
+  getGitIdentity: vi.fn(),
   getDiagnostics: vi.fn(),
   getOperationHistory: vi.fn(),
   getRemotes: vi.fn(),
@@ -104,6 +108,8 @@ vi.mock("./repository", () => ({
   reorderSessionTabs: vi.fn(),
   removeRemote: vi.fn(),
   resolveConflict: vi.fn(),
+  updateGlobalGitIdentity: vi.fn(),
+  updateRepositoryGitIdentity: vi.fn(),
   updateSessionTab: vi.fn(),
   updateRemote: vi.fn(),
   getRepositorySnapshot: vi.fn(),
@@ -151,6 +157,7 @@ const mockedGetDiff = vi.mocked(getDiff);
 const mockedGetCommitDiff = vi.mocked(getCommitDiff);
 const mockedGetCommitFiles = vi.mocked(getCommitFiles);
 const mockedGetHistory = vi.mocked(getHistoryPage);
+const mockedGetGitIdentity = vi.mocked(getGitIdentity);
 const mockedGetReferences = vi.mocked(getReferences);
 const mockedGetRemoteTags = vi.mocked(getRemoteTags);
 const mockedGetRemotes = vi.mocked(getRemotes);
@@ -176,6 +183,10 @@ const mockedRenameBranch = vi.mocked(renameBranch);
 const mockedDeleteTag = vi.mocked(deleteTag);
 const mockedMergeBranch = vi.mocked(mergeBranch);
 const mockedResolveConflict = vi.mocked(resolveConflict);
+const mockedUpdateGlobalGitIdentity = vi.mocked(updateGlobalGitIdentity);
+const mockedUpdateRepositoryGitIdentity = vi.mocked(
+  updateRepositoryGitIdentity,
+);
 const mockedGetOperationHistory = vi.mocked(getOperationHistory);
 const mockedListenForChanges = vi.mocked(listenForRepositoryChanges);
 
@@ -259,6 +270,17 @@ describe("App", () => {
     });
     mockedReorderTabs.mockResolvedValue();
     mockedUpdateTab.mockResolvedValue();
+    mockedGetGitIdentity.mockResolvedValue({
+      schemaVersion: 1,
+      global: {},
+    });
+    mockedUpdateGlobalGitIdentity.mockResolvedValue({});
+    mockedUpdateRepositoryGitIdentity.mockResolvedValue({
+      repoId: snapshot.repository.id,
+      repositoryName: snapshot.repository.name,
+      local: {},
+      effective: {},
+    });
     mockedGetSnapshot.mockResolvedValue(snapshot);
     mockedGetDiff.mockResolvedValue({
       schemaVersion: 1,
@@ -2811,7 +2833,9 @@ describe("App", () => {
 
     render(<App />);
 
-    const settingsBtn = screen.getByRole("button", { name: /settings|설정/i });
+    const settingsBtn = screen.getByRole("button", {
+      name: /^Settings$|^설정$/i,
+    });
     fireEvent.click(settingsBtn);
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -2848,6 +2872,116 @@ describe("App", () => {
     fireEvent.click(closeBtn);
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("updates global and repository Git identity from separate settings menus", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetGitIdentity.mockResolvedValue({
+      schemaVersion: 1,
+      global: {
+        name: "Ada Lovelace",
+        email: "ada@example.com",
+      },
+      repository: {
+        repoId: snapshot.repository.id,
+        repositoryName: snapshot.repository.name,
+        local: {
+          name: "Grace Hopper",
+        },
+        effective: {
+          name: "Grace Hopper",
+          email: "ada@example.com",
+        },
+      },
+    });
+
+    render(<App />);
+    await screen.findByText(snapshot.repository.name);
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Settings$|^설정$/i }),
+    );
+
+    const globalForm = await screen.findByRole("form", {
+      name: /Global Git identity|글로벌 Git 작성자 정보/i,
+    });
+    const globalFields = within(globalForm).getAllByRole("textbox");
+    expect(globalFields[0]).toHaveValue("Ada Lovelace");
+    expect(globalFields[1]).toHaveValue("ada@example.com");
+    fireEvent.change(globalFields[0], { target: { value: "Ada Byron" } });
+    fireEvent.click(
+      within(globalForm).getByRole("button", {
+        name: /Save global identity|글로벌 작성자 저장/i,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedUpdateGlobalGitIdentity).toHaveBeenCalledWith({
+        name: "Ada Byron",
+        email: "ada@example.com",
+      }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Close settings|설정 닫기/i,
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Repository settings|저장소 설정/i,
+      }),
+    );
+
+    const repositoryForm = await screen.findByRole("form", {
+      name: /Repository Git identity|저장소 Git 작성자 정보/i,
+    });
+    const repositoryFields = within(repositoryForm).getAllByRole("textbox");
+    expect(repositoryFields[0]).toBeEnabled();
+    expect(repositoryFields[1]).toBeDisabled();
+    fireEvent.click(
+      within(repositoryForm).getByRole("checkbox", {
+        name: /Override email|이 저장소에서 이메일 재정의/i,
+      }),
+    );
+    fireEvent.change(repositoryFields[1], {
+      target: { value: "grace@example.com" },
+    });
+    fireEvent.click(
+      within(repositoryForm).getByRole("button", {
+        name: /Save repository identity|저장소 작성자 저장/i,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedUpdateRepositoryGitIdentity).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        {
+          name: "Grace Hopper",
+          email: "grace@example.com",
+        },
+      ),
+    );
+  });
+
+  it("disables the repository settings menu when no repository is open", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      schemaVersion: 1,
+      tabs: [],
+    });
+
+    render(<App />);
+    const repositorySettings = screen.getByRole("button", {
+      name: /Repository settings|저장소 설정/i,
+    });
+    expect(repositorySettings).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Settings$|^설정$/i }),
+    );
+    expect(
+      screen.queryByRole("form", {
+        name: /Repository Git identity|저장소 Git 작성자 정보/i,
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows Gravatar images in commit history only when enabled", async () => {

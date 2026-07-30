@@ -1,6 +1,6 @@
 use app_core::{
-    AppErrorDto, BranchRequest, CloneRequest, CommitFile, CommitRequest, GitReference, GitRemote,
-    InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
+    AppErrorDto, BranchRequest, CloneRequest, CommitFile, CommitRequest, GitIdentity, GitReference,
+    GitRemote, InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
     InteractiveRebaseRequest, PatchSelection, ReferenceKind, RemoteOperationKind, RemoteRequest,
     RemoteTagSummary, RepositorySidebar,
 };
@@ -11,7 +11,58 @@ use git_domain::{
 use persistence::OperationRecord;
 use serde::{Deserialize, Serialize};
 
-use crate::state::SessionTabState;
+use crate::state::{RepositoryIdentityState, SessionTabState};
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIdentityUpdateDto {
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIdentityDto {
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
+impl From<GitIdentity> for GitIdentityDto {
+    fn from(identity: GitIdentity) -> Self {
+        Self {
+            name: identity.name,
+            email: identity.email,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryGitIdentityDto {
+    pub repo_id: String,
+    pub repository_name: String,
+    pub local: GitIdentityDto,
+    pub effective: GitIdentityDto,
+}
+
+impl From<RepositoryIdentityState> for RepositoryGitIdentityDto {
+    fn from(state: RepositoryIdentityState) -> Self {
+        Self {
+            repo_id: state.repo_id,
+            repository_name: state.repository_name,
+            local: state.settings.local.into(),
+            effective: state.settings.effective.into(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIdentitySettingsDto {
+    pub schema_version: u16,
+    pub global: GitIdentityDto,
+    pub repository: Option<RepositoryGitIdentityDto>,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

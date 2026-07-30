@@ -170,6 +170,24 @@ export type GitRemoteDto = {
   url: string;
 };
 
+export type GitIdentityDto = {
+  name?: string;
+  email?: string;
+};
+
+export type RepositoryGitIdentityDto = {
+  repoId: string;
+  repositoryName: string;
+  local: GitIdentityDto;
+  effective: GitIdentityDto;
+};
+
+export type GitIdentitySettingsDto = {
+  schemaVersion: 1;
+  global: GitIdentityDto;
+  repository?: RepositoryGitIdentityDto;
+};
+
 export type RemoteReferenceDeleteTarget = {
   remote: string;
   name: string;
@@ -368,6 +386,26 @@ export function getRemoteTags(
 
 export function getRemotes(repoId: string): Promise<GitRemoteDto[]> {
   return invoke<GitRemoteDto[]>("remotes_list", { repoId });
+}
+
+export function getGitIdentity(repoId?: string): Promise<GitIdentitySettingsDto> {
+  return invoke<GitIdentitySettingsDto>("git_identity_get", { repoId });
+}
+
+export function updateGlobalGitIdentity(
+  request: GitIdentityDto,
+): Promise<GitIdentityDto> {
+  return invoke<GitIdentityDto>("git_identity_update_global", { request });
+}
+
+export function updateRepositoryGitIdentity(
+  repoId: string,
+  request: GitIdentityDto,
+): Promise<RepositoryGitIdentityDto> {
+  return invoke<RepositoryGitIdentityDto>("git_identity_update_repository", {
+    repoId,
+    request,
+  });
 }
 
 export function addRemote(

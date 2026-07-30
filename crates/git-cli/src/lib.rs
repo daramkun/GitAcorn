@@ -73,6 +73,7 @@ pub enum GitExecutionError {
 #[derive(Debug, Clone)]
 pub struct GitExecutor {
     executable: OsString,
+    environment: BTreeMap<OsString, OsString>,
 }
 
 impl Default for GitExecutor {
@@ -85,7 +86,17 @@ impl GitExecutor {
     pub fn new(executable: impl Into<OsString>) -> Self {
         Self {
             executable: executable.into(),
+            environment: BTreeMap::new(),
         }
+    }
+
+    pub fn with_environment(
+        mut self,
+        key: impl Into<OsString>,
+        value: impl Into<OsString>,
+    ) -> Self {
+        self.environment.insert(key.into(), value.into());
+        self
     }
 
     pub fn execute(
@@ -118,7 +129,7 @@ impl GitExecutor {
         if let Some(directory) = request.working_directory {
             command.current_dir(directory);
         }
-        for (key, value) in request.environment {
+        for (key, value) in self.environment.iter().chain(&request.environment) {
             command.env(key, value);
         }
         hide_console_window(&mut command);

@@ -59,6 +59,19 @@ pub struct GitRemote {
     pub url: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitIdentity {
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitIdentitySettings {
+    pub global: GitIdentity,
+    pub local: GitIdentity,
+    pub effective: GitIdentity,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceKind {
     LocalBranch,
@@ -210,6 +223,51 @@ impl RepositoryService {
     pub fn detect_git(&self) -> Result<GitVersion, AppError> {
         let output = self.run(GitRequest::new(["--version"]))?;
         ensure_success(output).and_then(|output| parse_git_version(&output.stdout))
+    }
+
+    pub fn global_identity(&self) -> Result<GitIdentity, AppError> {
+        Ok(GitIdentity {
+            name: self.config_value(None, "--global", "user.name")?,
+            email: self.config_value(None, "--global", "user.email")?,
+        })
+    }
+
+    pub fn repository_identity(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<GitIdentitySettings, AppError> {
+        Ok(GitIdentitySettings {
+            global: self.global_identity()?,
+            local: GitIdentity {
+                name: self.config_value(Some(repository), "--local", "user.name")?,
+                email: self.config_value(Some(repository), "--local", "user.email")?,
+            },
+            effective: GitIdentity {
+                name: self.config_value(Some(repository), "--get", "user.name")?,
+                email: self.config_value(Some(repository), "--get", "user.email")?,
+            },
+        })
+    }
+
+    pub fn update_global_identity(
+        &self,
+        name: Option<&str>,
+        email: Option<&str>,
+    ) -> Result<GitIdentity, AppError> {
+        self.update_config_value(None, "--global", "user.name", name)?;
+        self.update_config_value(None, "--global", "user.email", email)?;
+        self.global_identity()
+    }
+
+    pub fn update_repository_identity(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: Option<&str>,
+        email: Option<&str>,
+    ) -> Result<GitIdentitySettings, AppError> {
+        self.update_config_value(Some(repository), "--local", "user.name", name)?;
+        self.update_config_value(Some(repository), "--local", "user.email", email)?;
+        self.repository_identity(repository)
     }
 
     pub fn discover(&self, selected_path: &Path) -> Result<RepositoryDescriptor, AppError> {
@@ -1491,6 +1549,63 @@ impl RepositoryService {
             .map_err(map_execution_error)
     }
 
+    fn config_value(
+        &self,
+        repository: Option<&RepositoryDescriptor>,
+        scope_or_action: &str,
+        key: &str,
+    ) -> Result<Option<String>, AppError> {
+        let mut args = vec![OsString::from("config")];
+        if scope_or_action == "--get" {
+            args.push(OsString::from("--get"));
+        } else {
+            args.push(OsString::from(scope_or_action));
+            args.push(OsString::from("--get"));
+        }
+        args.push(OsString::from(key));
+        let mut request = GitRequest::new(args);
+        request.working_directory = repository.map(|value| value.worktree_path.clone());
+        let output = self.run(request)?;
+        if output.exit_code == 1 {
+            return Ok(None);
+        }
+        let output = ensure_success(output)?;
+        let value = String::from_utf8(output.stdout)
+            .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
+        Ok(Some(value.trim_end_matches(['\r', '\n']).to_owned()))
+    }
+
+    fn update_config_value(
+        &self,
+        repository: Option<&RepositoryDescriptor>,
+        scope: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(), AppError> {
+        let value = validate_identity_value(value)?;
+        let removing = value.is_none();
+        let mut args = vec![
+            OsString::from("config"),
+            OsString::from(scope),
+            OsString::from(if value.is_some() {
+                "--replace-all"
+            } else {
+                "--unset-all"
+            }),
+            OsString::from(key),
+        ];
+        if let Some(value) = value {
+            args.push(OsString::from(value));
+        }
+        let mut request = GitRequest::new(args);
+        request.working_directory = repository.map(|value| value.worktree_path.clone());
+        let output = self.run(request)?;
+        if removing && matches!(output.exit_code, 1 | 5) {
+            return Ok(());
+        }
+        ensure_success(output).map(|_| ())
+    }
+
     fn git_bytes<I, S>(
         &self,
         repository: &RepositoryDescriptor,
@@ -2004,6 +2119,22 @@ fn validate_rebase_plan(
 
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
+fn validate_identity_value(value: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.contains(['\0', '\r', '\n']) {
+        return Err(AppError::InvalidRequest(
+            "Git identity values cannot contain line breaks".to_owned(),
+        ));
+    }
+    Ok(Some(value.to_owned()))
 }
 
 fn ensure_success(output: GitOutput) -> Result<GitOutput, AppError> {

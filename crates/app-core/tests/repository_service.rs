@@ -3,6 +3,7 @@ use app_core::{
     InteractiveRebaseItem, InteractiveRebaseRequest, PatchSelection, ReferenceKind,
     RepositoryService,
 };
+use git_cli::GitExecutor;
 use git_domain::{DiffLineKind, HeadState, RepositoryOperation};
 use std::fs;
 use std::io::Write;
@@ -42,6 +43,81 @@ fn commit_independent_file(fixture: &TestRepository, path: &str, subject: &str) 
         .expect("commit oid")
         .trim()
         .to_owned()
+}
+
+#[test]
+fn reads_and_updates_global_and_repository_git_identity() {
+    let fixture = TestRepository::init();
+    let global_directory = tempfile::tempdir().expect("global Git config directory");
+    let global_config = global_directory.path().join("gitconfig");
+    let service = RepositoryService::new(
+        GitExecutor::default().with_environment("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
+    );
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    assert_eq!(
+        service
+            .global_identity()
+            .expect("empty global identity")
+            .name,
+        None
+    );
+    service
+        .update_global_identity(Some(" Ada Lovelace "), Some("ada@example.com"))
+        .expect("update global identity");
+
+    let configured = service
+        .repository_identity(&repository)
+        .expect("repository identity");
+    assert_eq!(configured.global.name.as_deref(), Some("Ada Lovelace"));
+    assert_eq!(configured.global.email.as_deref(), Some("ada@example.com"));
+    assert_eq!(configured.local.name.as_deref(), Some("GitAcorn Test"));
+    assert_eq!(
+        configured.local.email.as_deref(),
+        Some("test@gitacorn.local")
+    );
+
+    let partially_overridden = service
+        .update_repository_identity(&repository, Some("Grace Hopper"), None)
+        .expect("update repository identity");
+    assert_eq!(
+        partially_overridden.local.name.as_deref(),
+        Some("Grace Hopper")
+    );
+    assert_eq!(partially_overridden.local.email, None);
+    assert_eq!(
+        partially_overridden.effective.name.as_deref(),
+        Some("Grace Hopper")
+    );
+    assert_eq!(
+        partially_overridden.effective.email.as_deref(),
+        Some("ada@example.com")
+    );
+
+    let inherited = service
+        .update_repository_identity(&repository, None, None)
+        .expect("remove repository identity");
+    assert_eq!(inherited.local.name, None);
+    assert_eq!(inherited.local.email, None);
+    assert_eq!(inherited.effective.name.as_deref(), Some("Ada Lovelace"));
+    assert_eq!(
+        inherited.effective.email.as_deref(),
+        Some("ada@example.com")
+    );
+}
+
+#[test]
+fn rejects_multiline_git_identity_values() {
+    let global_directory = tempfile::tempdir().expect("global Git config directory");
+    let service = RepositoryService::new(GitExecutor::default().with_environment(
+        "GIT_CONFIG_GLOBAL",
+        global_directory.path().join("gitconfig").as_os_str(),
+    ));
+
+    let error = service
+        .update_global_identity(Some("Ada\nLovelace"), None)
+        .expect_err("multiline identity must fail");
+    assert!(matches!(error, app_core::AppError::InvalidRequest(_)));
 }
 
 #[test]

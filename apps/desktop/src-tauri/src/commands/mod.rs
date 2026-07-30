@@ -9,10 +9,11 @@ use uuid::Uuid;
 
 use crate::dto::{
     AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto, CommitRequestDto,
-    DiffDto, GitRemoteDto, HistoryPageDto, InteractiveRebasePreviewDto,
-    InteractiveRebaseRequestDto, OperationEventDto, OperationRecordDto, OperationStartedDto,
-    PatchSelectionDto, ReferenceDto, RemoteMutationRequestDto, RemoteReferenceDeleteDto,
-    RemoteRequestDto, RemoteTagDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
+    DiffDto, GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto,
+    HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, OperationEventDto,
+    OperationRecordDto, OperationStartedDto, PatchSelectionDto, ReferenceDto,
+    RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
+    RepositoryGitIdentityDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
     SessionTabUpdateDto, StashRequestDto,
 };
 use crate::state::{ApplicationState, SessionTabUpdate};
@@ -20,6 +21,52 @@ use crate::state::{ApplicationState, SessionTabUpdate};
 #[tauri::command]
 pub fn app_info() -> AppInfoDto {
     AppInfoDto::current()
+}
+
+#[tauri::command]
+pub fn git_identity_get(
+    repo_id: Option<String>,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<GitIdentitySettingsDto> {
+    let repository = repo_id
+        .as_deref()
+        .map(|repo_id| state.repository_identity(repo_id))
+        .transpose()
+        .map_err(|error| AppErrorDto::from(&error))?;
+    let global = match &repository {
+        Some(repository) => repository.settings.global.clone(),
+        None => state
+            .global_identity()
+            .map_err(|error| AppErrorDto::from(&error))?,
+    };
+    Ok(GitIdentitySettingsDto {
+        schema_version: 1,
+        global: global.into(),
+        repository: repository.map(RepositoryGitIdentityDto::from),
+    })
+}
+
+#[tauri::command]
+pub fn git_identity_update_global(
+    request: GitIdentityUpdateDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<GitIdentityDto> {
+    state
+        .update_global_identity(request.name.as_deref(), request.email.as_deref())
+        .map(GitIdentityDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn git_identity_update_repository(
+    repo_id: String,
+    request: GitIdentityUpdateDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositoryGitIdentityDto> {
+    state
+        .update_repository_identity(&repo_id, request.name.as_deref(), request.email.as_deref())
+        .map(RepositoryGitIdentityDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
 }
 
 #[tauri::command]

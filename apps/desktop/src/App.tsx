@@ -7,6 +7,7 @@ import {
   useState,
   type CSSProperties,
   type DragEvent as ReactDragEvent,
+  type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -49,6 +50,7 @@ import {
   getCommitDiff,
   getCommitFiles,
   getHistoryPage,
+  getGitIdentity,
   getDiagnostics,
   getOperationHistory,
   getRemotes,
@@ -74,6 +76,8 @@ import {
   unstagePaths,
   updateSessionTab,
   updateRemote,
+  updateGlobalGitIdentity,
+  updateRepositoryGitIdentity,
   type AppErrorDto,
   type CommitDto,
   type CommitFileDto,
@@ -81,6 +85,8 @@ import {
   type DiffTarget,
   type FileChangeDto,
   type GitRemoteDto,
+  type GitIdentitySettingsDto,
+  type RepositoryGitIdentityDto,
   type InteractiveRebaseAction,
   type InteractiveRebasePreviewDto,
   type OperationEventDto,
@@ -406,6 +412,19 @@ export function App() {
   const [showClone, setShowClone] = useState(false);
   const [cloneOperation, setCloneOperation] = useState<OperationEventDto>();
   const [showSettings, setShowSettings] = useState(false);
+  const [showRepositorySettings, setShowRepositorySettings] = useState(false);
+  const [globalIdentityName, setGlobalIdentityName] = useState("");
+  const [globalIdentityEmail, setGlobalIdentityEmail] = useState("");
+  const [repositoryIdentity, setRepositoryIdentity] =
+    useState<RepositoryGitIdentityDto>();
+  const [repositoryIdentityName, setRepositoryIdentityName] = useState("");
+  const [repositoryIdentityEmail, setRepositoryIdentityEmail] = useState("");
+  const [overrideRepositoryName, setOverrideRepositoryName] = useState(false);
+  const [overrideRepositoryEmail, setOverrideRepositoryEmail] = useState(false);
+  const [identityLoading, setIdentityLoading] = useState(false);
+  const [identitySaving, setIdentitySaving] = useState<"global" | "repository">();
+  const [identityMessage, setIdentityMessage] = useState("");
+  const [identityError, setIdentityError] = useState("");
   const [showOperationCenter, setShowOperationCenter] = useState(false);
   const [showSidebarSearch, setShowSidebarSearch] = useState(false);
   const [sidebarFilter, setSidebarFilter] = useState("");
@@ -495,6 +514,7 @@ export function App() {
         else if (stashContextMenu) setStashContextMenu(undefined);
         else if (referenceContextMenu) setReferenceContextMenu(undefined);
         else if (remoteContextMenu) setRemoteContextMenu(undefined);
+        else if (showRepositorySettings) setShowRepositorySettings(false);
         else if (showSettings) setShowSettings(false);
         else if (showOperationCenter) setShowOperationCenter(false);
       }
@@ -511,6 +531,7 @@ export function App() {
     remoteContextMenu,
     remoteDialog,
     remoteEditor,
+    showRepositorySettings,
     showSettings,
     showOperationCenter,
   ]);
@@ -524,6 +545,103 @@ export function App() {
   const activeRepositoryReady = Boolean(activeSnapshot);
   const page: Page = activeTab?.page === "history" ? "history" : "changes";
   const activeSidebar = activeTab ? sidebars[activeTab.repoId] : undefined;
+
+  const applyGitIdentity = useCallback((settings: GitIdentitySettingsDto) => {
+    setGlobalIdentityName(settings.global.name ?? "");
+    setGlobalIdentityEmail(settings.global.email ?? "");
+    setRepositoryIdentity(settings.repository);
+    setOverrideRepositoryName(Boolean(settings.repository?.local.name));
+    setOverrideRepositoryEmail(Boolean(settings.repository?.local.email));
+    setRepositoryIdentityName(
+      settings.repository?.local.name ?? settings.repository?.effective.name ?? "",
+    );
+    setRepositoryIdentityEmail(
+      settings.repository?.local.email ?? settings.repository?.effective.email ?? "",
+    );
+  }, []);
+
+  const identityRepoId = showRepositorySettings ? activeRepoId : undefined;
+
+  const reloadGitIdentity = useCallback(async () => {
+    const settings = await getGitIdentity(identityRepoId);
+    applyGitIdentity(settings);
+  }, [applyGitIdentity, identityRepoId]);
+
+  useEffect(() => {
+    if (!showSettings && !showRepositorySettings) return;
+    let active = true;
+    setIdentityLoading(true);
+    setIdentityError("");
+    setIdentityMessage("");
+    getGitIdentity(identityRepoId)
+      .then((settings) => {
+        if (active) applyGitIdentity(settings);
+      })
+      .catch((reason: unknown) => {
+        if (active) setIdentityError(normalizeAppError(reason).message);
+      })
+      .finally(() => {
+        if (active) setIdentityLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    applyGitIdentity,
+    identityRepoId,
+    showRepositorySettings,
+    showSettings,
+  ]);
+
+  const handleSaveGlobalIdentity = async (event: FormEvent) => {
+    event.preventDefault();
+    setIdentitySaving("global");
+    setIdentityError("");
+    setIdentityMessage("");
+    try {
+      await updateGlobalGitIdentity({
+        name: globalIdentityName.trim() || undefined,
+        email: globalIdentityEmail.trim() || undefined,
+      });
+      await reloadGitIdentity();
+      setIdentityMessage(t("Global Git identity saved."));
+    } catch (reason) {
+      setIdentityError(normalizeAppError(reason).message);
+    } finally {
+      setIdentitySaving(undefined);
+    }
+  };
+
+  const handleSaveRepositoryIdentity = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!activeRepoId) return;
+    if (
+      (overrideRepositoryName && !repositoryIdentityName.trim()) ||
+      (overrideRepositoryEmail && !repositoryIdentityEmail.trim())
+    ) {
+      setIdentityError(t("Enabled repository overrides cannot be empty."));
+      return;
+    }
+    setIdentitySaving("repository");
+    setIdentityError("");
+    setIdentityMessage("");
+    try {
+      await updateRepositoryGitIdentity(activeRepoId, {
+        name: overrideRepositoryName
+          ? repositoryIdentityName.trim()
+          : undefined,
+        email: overrideRepositoryEmail
+          ? repositoryIdentityEmail.trim()
+          : undefined,
+      });
+      await reloadGitIdentity();
+      setIdentityMessage(t("Repository Git identity saved."));
+    } catch (reason) {
+      setIdentityError(normalizeAppError(reason).message);
+    } finally {
+      setIdentitySaving(undefined);
+    }
+  };
 
   useEffect(() => {
     const findScopeFor = (target: EventTarget | null): FindScope | undefined => {
@@ -1530,6 +1648,23 @@ export function App() {
         <button
           className="titlebar-settings-button"
           type="button"
+          aria-label={t("Repository settings")}
+          title={
+            activeSnapshot
+              ? t("Repository settings for {name}", {
+                  name: activeSnapshot.repository.name,
+                })
+              : t("Open a repository to use repository settings")
+          }
+          disabled={!activeSnapshot}
+          onClick={() => setShowRepositorySettings(true)}
+        >
+          <span aria-hidden="true">🗂️</span>
+          <span>{t("Repository settings")}</span>
+        </button>
+        <button
+          className="titlebar-settings-button"
+          type="button"
           aria-label={t("Settings")}
           title={t("Settings")}
           onClick={() => setShowSettings(true)}
@@ -2000,7 +2135,7 @@ export function App() {
           role="presentation"
         >
           <div
-            className="settings-modal"
+            className="settings-modal git-settings-modal"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -2018,6 +2153,75 @@ export function App() {
               </button>
             </div>
             <div className="settings-modal-body">
+              <div className="settings-section git-identity-settings">
+                <h3>{t("Git author identity")}</h3>
+                <p className="settings-section-desc">
+                  {t("Configure the name and email Git uses for new commits.")}
+                </p>
+                {identityLoading ? (
+                  <p className="identity-state">{t("Loading Git identity…")}</p>
+                ) : (
+                  <>
+                    <form
+                      className="identity-card"
+                      aria-label={t("Global Git identity")}
+                      onSubmit={handleSaveGlobalIdentity}
+                    >
+                      <div className="identity-card-heading">
+                        <div>
+                          <strong>{t("Global")}</strong>
+                          <small>{t("Used when a repository has no override.")}</small>
+                        </div>
+                        <span className="identity-scope-badge">--global</span>
+                      </div>
+                      <label>
+                        <span>{t("User name")}</span>
+                        <input
+                          value={globalIdentityName}
+                          onChange={(event) =>
+                            setGlobalIdentityName(event.target.value)
+                          }
+                          autoComplete="name"
+                          placeholder={t("Not configured")}
+                        />
+                      </label>
+                      <label>
+                        <span>{t("Email")}</span>
+                        <input
+                          type="email"
+                          value={globalIdentityEmail}
+                          onChange={(event) =>
+                            setGlobalIdentityEmail(event.target.value)
+                          }
+                          autoComplete="email"
+                          placeholder={t("Not configured")}
+                        />
+                      </label>
+                      <div className="identity-card-actions">
+                        <small>{t("Leave a field empty to remove its global value.")}</small>
+                        <button
+                          type="submit"
+                          disabled={Boolean(identitySaving)}
+                        >
+                          {identitySaving === "global"
+                            ? t("Saving…")
+                            : t("Save global identity")}
+                        </button>
+                      </div>
+                    </form>
+                  </>
+                )}
+                {identityError && (
+                  <p className="identity-feedback error" role="alert">
+                    {identityError}
+                  </p>
+                )}
+                {identityMessage && (
+                  <p className="identity-feedback success" role="status">
+                    {identityMessage}
+                  </p>
+                )}
+              </div>
               <div className="settings-section">
                 <h3>{t("Appearance")}</h3>
                 <p className="settings-section-desc">{t("Select theme mode")}</p>
@@ -2064,6 +2268,166 @@ export function App() {
                     onChange={(event) => setShowGravatars(event.target.checked)}
                   />
                 </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {showRepositorySettings && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowRepositorySettings(false)}
+          role="presentation"
+        >
+          <div
+            className="settings-modal repository-settings-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="repository-settings-title"
+          >
+            <div className="settings-modal-header">
+              <div>
+                <h2 id="repository-settings-title">
+                  {t("Repository settings")}
+                </h2>
+                {repositoryIdentity && (
+                  <small>{repositoryIdentity.repositoryName}</small>
+                )}
+              </div>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close repository settings")}
+                onClick={() => setShowRepositorySettings(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body">
+              <div className="settings-section git-identity-settings">
+                <h3>{t("Git author identity")}</h3>
+                <p className="settings-section-desc">
+                  {t("Override the global Git identity for this repository.")}
+                </p>
+                {identityLoading ? (
+                  <p className="identity-state">{t("Loading Git identity…")}</p>
+                ) : repositoryIdentity ? (
+                  <form
+                    className="identity-card"
+                    aria-label={t("Repository Git identity")}
+                    onSubmit={handleSaveRepositoryIdentity}
+                  >
+                    <div className="identity-card-heading">
+                      <div>
+                        <strong>{t("Current repository")}</strong>
+                        <small>{repositoryIdentity.repositoryName}</small>
+                      </div>
+                      <span className="identity-scope-badge">--local</span>
+                    </div>
+                    <label>
+                      <span className="identity-field-heading">
+                        <span>{t("User name")}</span>
+                        <span className="identity-override-toggle">
+                          <input
+                            type="checkbox"
+                            checked={overrideRepositoryName}
+                            aria-label={t("Override name for this repository")}
+                            onChange={(event) => {
+                              const checked = event.target.checked;
+                              setOverrideRepositoryName(checked);
+                              if (
+                                checked &&
+                                !repositoryIdentityName.trim()
+                              ) {
+                                setRepositoryIdentityName(
+                                  repositoryIdentity.effective.name ??
+                                    globalIdentityName,
+                                );
+                              }
+                            }}
+                          />
+                          {t("Override")}
+                        </span>
+                      </span>
+                      <input
+                        value={repositoryIdentityName}
+                        disabled={!overrideRepositoryName}
+                        onChange={(event) =>
+                          setRepositoryIdentityName(event.target.value)
+                        }
+                        autoComplete="name"
+                        placeholder={t("Inherited from Git configuration")}
+                      />
+                    </label>
+                    <label>
+                      <span className="identity-field-heading">
+                        <span>{t("Email")}</span>
+                        <span className="identity-override-toggle">
+                          <input
+                            type="checkbox"
+                            checked={overrideRepositoryEmail}
+                            aria-label={t("Override email for this repository")}
+                            onChange={(event) => {
+                              const checked = event.target.checked;
+                              setOverrideRepositoryEmail(checked);
+                              if (
+                                checked &&
+                                !repositoryIdentityEmail.trim()
+                              ) {
+                                setRepositoryIdentityEmail(
+                                  repositoryIdentity.effective.email ??
+                                    globalIdentityEmail,
+                                );
+                              }
+                            }}
+                          />
+                          {t("Override")}
+                        </span>
+                      </span>
+                      <input
+                        type="email"
+                        value={repositoryIdentityEmail}
+                        disabled={!overrideRepositoryEmail}
+                        onChange={(event) =>
+                          setRepositoryIdentityEmail(event.target.value)
+                        }
+                        autoComplete="email"
+                        placeholder={t("Inherited from Git configuration")}
+                      />
+                    </label>
+                    <div className="identity-card-actions">
+                      <small>
+                        {t("Turn off an override to use the inherited value.")}
+                      </small>
+                      <button
+                        type="submit"
+                        disabled={Boolean(identitySaving)}
+                      >
+                        {identitySaving === "repository"
+                          ? t("Saving…")
+                          : t("Save repository identity")}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="identity-empty">
+                    <strong>{t("Repository unavailable")}</strong>
+                    <small>
+                      {t("The selected repository is no longer open.")}
+                    </small>
+                  </div>
+                )}
+                {identityError && (
+                  <p className="identity-feedback error" role="alert">
+                    {identityError}
+                  </p>
+                )}
+                {identityMessage && (
+                  <p className="identity-feedback success" role="status">
+                    {identityMessage}
+                  </p>
+                )}
               </div>
             </div>
           </div>

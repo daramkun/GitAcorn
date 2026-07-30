@@ -2595,10 +2595,15 @@ button:disabled {
   transition: all 0.15s ease;
 }
 
-.titlebar-settings-button:hover {
+.titlebar-settings-button:hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--surface-raised);
   color: var(--text);
+}
+
+.titlebar-settings-button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .modal-overlay {
@@ -2674,6 +2679,19 @@ button:disabled {
 
 .settings-modal-body {
   padding: 20px;
+}
+
+.git-settings-modal {
+  width: 560px;
+}
+
+.repository-settings-modal {
+  width: 500px;
+}
+
+.git-settings-modal .settings-modal-body {
+  max-height: min(680px, 78vh);
+  overflow-y: auto;
 }
 
 .remote-manager-modal {
@@ -2828,6 +2846,171 @@ button:disabled {
   margin: 0 0 14px;
   font-size: 11px;
   color: var(--muted);
+}
+
+.git-identity-settings {
+  display: grid;
+  gap: 10px;
+}
+
+.git-identity-settings > .settings-section-desc {
+  margin-bottom: 2px;
+}
+
+.identity-card,
+.identity-empty {
+  display: grid;
+  gap: 11px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.identity-card-heading,
+.identity-card-actions,
+.identity-field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.identity-card-heading > div,
+.identity-empty {
+  min-width: 0;
+}
+
+.identity-card-heading > div,
+.identity-empty {
+  color: var(--text);
+}
+
+.identity-card-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.identity-card-heading strong,
+.identity-empty strong {
+  font-size: 12px;
+}
+
+.identity-card-heading small,
+.identity-card-actions small,
+.identity-empty small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.identity-scope-badge {
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.identity-card > label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.identity-card input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.identity-card input:not([type="checkbox"]):focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.identity-card input:not([type="checkbox"]):disabled {
+  color: var(--muted);
+  opacity: 0.72;
+}
+
+.identity-override-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.identity-override-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.identity-card-actions {
+  align-items: flex-end;
+}
+
+.identity-card-actions small {
+  max-width: 270px;
+}
+
+.identity-card-actions button {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.identity-card-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.identity-empty {
+  gap: 4px;
+}
+
+.identity-state,
+.identity-feedback {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.identity-state {
+  color: var(--muted);
+  background: var(--surface-raised);
+}
+
+.identity-feedback.error {
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.identity-feedback.success {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 .theme-options {
