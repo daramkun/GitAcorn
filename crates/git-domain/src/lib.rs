@@ -93,6 +93,14 @@ pub struct RepositorySnapshot {
     pub revision: u64,
     pub repository: RepositoryDescriptor,
     pub status: StatusSnapshot,
+    pub operation: Option<RepositoryOperation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepositoryOperation {
+    Rebase,
+    RebaseEdit,
+    AutostashConflict,
 }
 
 #[cfg(test)]

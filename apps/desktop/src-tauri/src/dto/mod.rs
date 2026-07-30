@@ -1,11 +1,12 @@
 use app_core::{
     AppErrorDto, BranchRequest, CloneRequest, CommitFile, CommitRequest, GitReference, GitRemote,
-    PatchSelection, ReferenceKind, RemoteOperationKind, RemoteRequest, RemoteTagSummary,
-    RepositorySidebar,
+    InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
+    InteractiveRebaseRequest, PatchSelection, ReferenceKind, RemoteOperationKind, RemoteRequest,
+    RemoteTagSummary, RepositorySidebar,
 };
 use git_domain::{
     CommitSummary, DiffDocument, DiffLineKind, FileChange, HeadState, HistoryPage,
-    RepositorySnapshot,
+    RepositoryOperation, RepositorySnapshot,
 };
 use persistence::OperationRecord;
 use serde::{Deserialize, Serialize};
@@ -203,6 +204,101 @@ pub struct RepositorySnapshotDto {
     pub behind: u64,
     pub stash_count: u64,
     pub changes: Vec<FileChangeDto>,
+    pub operation: Option<&'static str>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveRebaseRequestDto {
+    pub base_oid: String,
+    pub expected_head_oid: String,
+    pub items: Vec<InteractiveRebaseItemDto>,
+    #[serde(default)]
+    pub auto_stash: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveRebaseItemDto {
+    pub oid: String,
+    pub action: String,
+    pub summary: Option<String>,
+    pub description: Option<String>,
+}
+
+impl TryFrom<InteractiveRebaseRequestDto> for InteractiveRebaseRequest {
+    type Error = app_core::AppError;
+
+    fn try_from(request: InteractiveRebaseRequestDto) -> Result<Self, Self::Error> {
+        let items = request
+            .items
+            .into_iter()
+            .map(|item| {
+                let action = match item.action.as_str() {
+                    "pick" => InteractiveRebaseAction::Pick,
+                    "reword" => InteractiveRebaseAction::Reword,
+                    "edit" => InteractiveRebaseAction::Edit,
+                    "squash" => InteractiveRebaseAction::Squash,
+                    "fixup" => InteractiveRebaseAction::Fixup,
+                    "drop" => InteractiveRebaseAction::Drop,
+                    _ => {
+                        return Err(app_core::AppError::InvalidRequest(
+                            "Rebase action must be pick, reword, edit, squash, fixup, or drop"
+                                .to_owned(),
+                        ));
+                    }
+                };
+                Ok(InteractiveRebaseItem {
+                    oid: item.oid,
+                    action,
+                    summary: item.summary,
+                    description: item.description,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            base_oid: request.base_oid,
+            expected_head_oid: request.expected_head_oid,
+            items,
+            auto_stash: request.auto_stash,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveRebasePreviewDto {
+    pub schema_version: u16,
+    pub base_oid: String,
+    pub head_oid: String,
+    pub branch: String,
+    pub commits: Vec<InteractiveRebaseCommitDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveRebaseCommitDto {
+    pub oid: String,
+    pub subject: String,
+}
+
+impl From<InteractiveRebasePreview> for InteractiveRebasePreviewDto {
+    fn from(preview: InteractiveRebasePreview) -> Self {
+        Self {
+            schema_version: 1,
+            base_oid: preview.base_oid,
+            head_oid: preview.head_oid,
+            branch: preview.branch,
+            commits: preview
+                .commits
+                .into_iter()
+                .map(|commit| InteractiveRebaseCommitDto {
+                    oid: commit.oid,
+                    subject: commit.subject,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -297,6 +393,11 @@ impl From<RepositorySnapshot> for RepositorySnapshotDto {
             ahead: snapshot.status.ahead,
             behind: snapshot.status.behind,
             stash_count: snapshot.status.stash_count,
+            operation: snapshot.operation.map(|operation| match operation {
+                RepositoryOperation::Rebase => "rebase",
+                RepositoryOperation::RebaseEdit => "rebaseEdit",
+                RepositoryOperation::AutostashConflict => "autostashConflict",
+            }),
             changes: snapshot
                 .status
                 .changes

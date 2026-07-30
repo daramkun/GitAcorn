@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use app_core::{
     AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
-    GitReference, GitRemote, HistoryFilter, PatchSelection, RemoteProgress, RemoteRequest,
-    RemoteTagSummary, RepositoryScheduler, RepositoryService, RepositorySidebar, StashRequest,
+    GitReference, GitRemote, HistoryFilter, InteractiveRebasePreview, InteractiveRebaseRequest,
+    PatchSelection, RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler,
+    RepositoryService, RepositorySidebar, StashRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -421,6 +422,69 @@ impl ApplicationState {
     ) -> Result<RepositorySnapshot, AppError> {
         self.mutate(repo_id, revision, |service, repository| {
             service.rebase_onto(repository, reference)
+        })
+    }
+
+    pub fn interactive_rebase_preview(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        base_oid: &str,
+    ) -> Result<InteractiveRebasePreview, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.read(repo_id, || {
+            let repositories = self
+                .repositories
+                .lock()
+                .expect("repository registry lock poisoned");
+            let repository = repositories
+                .get(&repo_id)
+                .ok_or(AppError::RepositoryNotOpen)?;
+            ensure_revision(revision, repository.revision)?;
+            self.service
+                .interactive_rebase_preview(&repository.descriptor, base_oid)
+        })
+    }
+
+    pub fn start_interactive_rebase(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        request: &InteractiveRebaseRequest,
+        sequence_editor_executable: &Path,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.start_interactive_rebase(repository, request, sequence_editor_executable)
+        })
+    }
+
+    pub fn continue_rebase(
+        &self,
+        repo_id: &str,
+        revision: u64,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.continue_rebase(repository)
+        })
+    }
+
+    pub fn skip_rebase(
+        &self,
+        repo_id: &str,
+        revision: u64,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.skip_rebase(repository)
+        })
+    }
+
+    pub fn abort_rebase(
+        &self,
+        repo_id: &str,
+        revision: u64,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.abort_rebase(repository)
         })
     }
 

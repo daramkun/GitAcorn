@@ -9,6 +9,7 @@ import {
   toggleMaximizeAppWindow,
 } from "./windowControls";
 import {
+  abortRebase,
   applyPatchSelection,
   applyStash,
   addRemote,
@@ -21,6 +22,7 @@ import {
   createCommit,
   createStash,
   createTag,
+  continueRebase,
   deleteBranch,
   deleteTag,
   discardPath,
@@ -39,12 +41,15 @@ import {
   listenForRepositoryChanges,
   mergeBranch,
   openRepository,
+  previewInteractiveRebase,
   renameBranch,
   reorderSessionTabs,
   removeRemote,
   resolveConflict,
   restoreSession,
+  skipRebase,
   stagePaths,
+  startInteractiveRebase,
   startRemoteOperation,
   unstagePaths,
   updateSessionTab,
@@ -64,6 +69,7 @@ vi.mock("./windowControls", () => ({
 }));
 
 vi.mock("./repository", () => ({
+  abortRebase: vi.fn(),
   applyPatchSelection: vi.fn(),
   addRemote: vi.fn(),
   abortMerge: vi.fn(),
@@ -79,6 +85,7 @@ vi.mock("./repository", () => ({
   createCommit: vi.fn(),
   createStash: vi.fn(),
   createTag: vi.fn(),
+  continueRebase: vi.fn(),
   deleteBranch: vi.fn(),
   deleteTag: vi.fn(),
   discardPath: vi.fn(),
@@ -105,8 +112,11 @@ vi.mock("./repository", () => ({
   unstagePaths: vi.fn(),
   listenForRepositoryChanges: vi.fn(),
   mergeBranch: vi.fn(),
+  previewInteractiveRebase: vi.fn(),
   rebaseBranch: vi.fn(),
   renameBranch: vi.fn(),
+  skipRebase: vi.fn(),
+  startInteractiveRebase: vi.fn(),
   normalizeAppError: (error: unknown) => {
     const value = error as { code?: string; message?: string; details?: string };
     return {
@@ -125,6 +135,7 @@ const mockedMinimizeAppWindow = vi.mocked(minimizeAppWindow);
 const mockedToggleMaximizeAppWindow = vi.mocked(toggleMaximizeAppWindow);
 const mockedChooseRepository = vi.mocked(chooseRepositoryDirectory);
 const mockedOpenRepository = vi.mocked(openRepository);
+const mockedPreviewInteractiveRebase = vi.mocked(previewInteractiveRebase);
 const mockedRestoreSession = vi.mocked(restoreSession);
 const mockedActivateTab = vi.mocked(activateSessionTab);
 const mockedActivateWorktree = vi.mocked(activateWorktree);
@@ -147,7 +158,11 @@ const mockedAddRemote = vi.mocked(addRemote);
 const mockedUpdateRemote = vi.mocked(updateRemote);
 const mockedRemoveRemote = vi.mocked(removeRemote);
 const mockedStagePaths = vi.mocked(stagePaths);
+const mockedStartInteractiveRebase = vi.mocked(startInteractiveRebase);
 const mockedStartRemoteOperation = vi.mocked(startRemoteOperation);
+const mockedAbortRebase = vi.mocked(abortRebase);
+const mockedContinueRebase = vi.mocked(continueRebase);
+const mockedSkipRebase = vi.mocked(skipRebase);
 const mockedUnstagePaths = vi.mocked(unstagePaths);
 const mockedApplyPatch = vi.mocked(applyPatchSelection);
 const mockedDiscardPath = vi.mocked(discardPath);
@@ -217,6 +232,7 @@ const sessionWithSnapshot: SessionDto = {
 
 describe("App", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     mockedCloseAppWindow.mockResolvedValue();
     mockedMinimizeAppWindow.mockResolvedValue();
     mockedToggleMaximizeAppWindow.mockResolvedValue();
@@ -308,6 +324,10 @@ describe("App", () => {
     mockedUpdateRemote.mockResolvedValue({ ...snapshot, revision: 2 });
     mockedRemoveRemote.mockResolvedValue({ ...snapshot, revision: 2 });
     mockedStagePaths.mockResolvedValue(snapshot);
+    mockedStartInteractiveRebase.mockResolvedValue(snapshot);
+    mockedAbortRebase.mockResolvedValue(snapshot);
+    mockedContinueRebase.mockResolvedValue(snapshot);
+    mockedSkipRebase.mockResolvedValue(snapshot);
     mockedStartRemoteOperation.mockResolvedValue({
       schemaVersion: 1,
       operationId: "remote-operation",
@@ -438,6 +458,212 @@ describe("App", () => {
       undefined,
       undefined,
     );
+  });
+
+  it("opens and submits an interactive rebase plan from a commit context menu", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    const baseOid = "1".repeat(40);
+    const firstOid = "2".repeat(40);
+    const secondOid = "3".repeat(40);
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: secondOid,
+          parents: [firstOid],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_002,
+          subject: "Second change",
+          body: "",
+          references: ["HEAD -> refs/heads/main"],
+          lane: 0,
+          laneCount: 1,
+        },
+        {
+          oid: firstOid,
+          parents: [baseOid],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_001,
+          subject: "First change",
+          body: "",
+          references: [],
+          lane: 0,
+          laneCount: 1,
+        },
+        {
+          oid: baseOid,
+          parents: [],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          subject: "Base commit",
+          body: "",
+          references: [],
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+    mockedPreviewInteractiveRebase.mockResolvedValue({
+      schemaVersion: 1,
+      baseOid,
+      headOid: snapshot.head.oid!,
+      branch: "main",
+      commits: [
+        { oid: firstOid, subject: "First change" },
+        { oid: secondOid, subject: "Second change" },
+      ],
+    });
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: /Base commit/ }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Interactively rebase commits after this…",
+      }),
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Interactive rebase",
+    });
+    const firstRow = within(dialog).getByRole("listitem", {
+      name: "Drag to reorder First change",
+    });
+    const secondRow = within(dialog).getByRole("listitem", {
+      name: "Drag to reorder Second change",
+    });
+    const dataTransfer = {
+      dropEffect: "none",
+      effectAllowed: "none",
+      setData: vi.fn(),
+      getData: vi.fn(),
+    };
+    fireEvent.dragStart(firstRow, { dataTransfer });
+    fireEvent.dragOver(secondRow, { clientY: 10, dataTransfer });
+    fireEvent.drop(secondRow, { clientY: 10, dataTransfer });
+    const firstAction = within(dialog).getByRole("combobox", {
+      name: "Action for First change",
+    });
+    expect(
+      within(firstAction).getByRole("option", { name: "edit" }),
+    ).toBeInTheDocument();
+    fireEvent.change(firstAction, { target: { value: "reword" } });
+    fireEvent.change(
+      within(dialog).getByRole("textbox", {
+        name: "New summary for First change",
+      }),
+      { target: { value: "Renamed first change" } },
+    );
+    fireEvent.change(
+      within(dialog).getByRole("textbox", {
+        name: "New description for First change",
+      }),
+      { target: { value: "Updated details" } },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Start rebase" }));
+
+    await waitFor(() =>
+      expect(mockedStartInteractiveRebase).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        {
+          baseOid,
+          expectedHeadOid: snapshot.head.oid,
+          items: [
+            { oid: secondOid, action: "pick" },
+            {
+              oid: firstOid,
+              action: "reword",
+              summary: "Renamed first change",
+              description: "Updated details",
+            },
+          ],
+          autoStash: true,
+        },
+      ),
+    );
+  });
+
+  it("clears a previous interactive rebase error when retrying", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    const baseOid = "1".repeat(40);
+    const commitOid = "2".repeat(40);
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: commitOid,
+          parents: [baseOid],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_001,
+          subject: "Change",
+          body: "",
+          references: ["HEAD -> refs/heads/main"],
+          lane: 0,
+          laneCount: 1,
+        },
+        {
+          oid: baseOid,
+          parents: [],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          subject: "Base commit",
+          body: "",
+          references: [],
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+    mockedPreviewInteractiveRebase
+      .mockRejectedValueOnce({
+        code: "unsupported_history",
+        message: "Interactive rebase does not yet support merge commits",
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        baseOid,
+        headOid: snapshot.head.oid!,
+        branch: "main",
+        commits: [{ oid: commitOid, subject: "Change" }],
+      });
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    const baseCommit = await screen.findByRole("button", {
+      name: /Base commit/,
+    });
+
+    fireEvent.contextMenu(baseCommit);
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Interactively rebase commits after this…",
+      }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Interactive rebase does not yet support merge commits",
+    );
+
+    fireEvent.contextMenu(baseCommit);
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Interactively rebase commits after this…",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "Interactive rebase" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("dims commits that are only reachable from remote branches", async () => {

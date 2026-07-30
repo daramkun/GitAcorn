@@ -2839,3 +2839,194 @@ button:disabled {
   color: var(--faint);
   margin-top: 3px;
 }
+
+.rebase-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.rebase-status > div {
+  display: flex;
+  gap: 4px;
+}
+
+.rebase-status > div:first-child {
+  min-width: 0;
+  flex-direction: column;
+}
+
+.rebase-status > div:last-child {
+  flex-shrink: 0;
+}
+
+.rebase-status span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.interactive-rebase-modal {
+  width: min(760px, 92vw);
+}
+
+.settings-modal-header small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.interactive-rebase-body {
+  display: grid;
+  gap: 14px;
+  max-height: min(680px, 78vh);
+  padding: 18px 20px;
+  overflow: auto;
+}
+
+.interactive-rebase-body > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.interactive-rebase-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.interactive-rebase-list li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px 104px 72px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: 0;
+  background: var(--surface-soft);
+  cursor: grab;
+  transition:
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    opacity var(--motion-fast) ease;
+}
+
+.interactive-rebase-list li:hover,
+.interactive-rebase-list li:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.interactive-rebase-list li:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.interactive-rebase-list li:active {
+  cursor: grabbing;
+}
+
+.interactive-rebase-list li.dragging {
+  opacity: 0.42;
+}
+
+.interactive-rebase-list li.drop-before::before,
+.interactive-rebase-list li.drop-after::after {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+  content: "";
+}
+
+.interactive-rebase-list li.drop-before::before {
+  top: -4px;
+}
+
+.interactive-rebase-list li.drop-after::after {
+  bottom: -4px;
+}
+
+.rebase-drag-handle {
+  color: var(--faint);
+  font-size: 15px;
+  line-height: 1;
+  cursor: grab;
+}
+
+.rebase-action-select {
+  width: 100%;
+  min-height: var(--control-height-md);
+  height: var(--control-height-md);
+  padding: 0 var(--space-2);
+  background: var(--surface);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.interactive-rebase-list code {
+  color: var(--faint);
+}
+
+.rebase-commit-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rebase-message-fields {
+  display: grid;
+  grid-column: 2 / -1;
+  gap: var(--space-2);
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+.rebase-message-fields .control-input {
+  width: 100%;
+  font-size: var(--font-size-sm);
+}
+
+.rebase-message-fields textarea.control-input {
+  min-height: 64px;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  resize: vertical;
+}
+
+.rebase-action-note {
+  grid-column: 2 / -1;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.interactive-rebase-body .checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.interactive-rebase-body .checkbox-row input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.interactive-rebase-body .remote-form-actions .control-button,
+.rebase-status .control-button {
+  min-height: var(--control-height-md);
+  font-size: var(--font-size-sm);
+}
+
+.rebase-warning {
+  color: var(--danger);
+}

@@ -9,10 +9,11 @@ use uuid::Uuid;
 
 use crate::dto::{
     AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto, CommitRequestDto,
-    DiffDto, GitRemoteDto, HistoryPageDto, OperationEventDto, OperationRecordDto,
-    OperationStartedDto, PatchSelectionDto, ReferenceDto, RemoteMutationRequestDto,
-    RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto, RepositorySidebarDto,
-    RepositorySnapshotDto, SessionDto, SessionTabUpdateDto, StashRequestDto,
+    DiffDto, GitRemoteDto, HistoryPageDto, InteractiveRebasePreviewDto,
+    InteractiveRebaseRequestDto, OperationEventDto, OperationRecordDto, OperationStartedDto,
+    PatchSelectionDto, ReferenceDto, RemoteMutationRequestDto, RemoteReferenceDeleteDto,
+    RemoteRequestDto, RemoteTagDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
+    SessionTabUpdateDto, StashRequestDto,
 };
 use crate::state::{ApplicationState, SessionTabUpdate};
 
@@ -509,6 +510,76 @@ pub fn branch_rebase(
 ) -> CommandResult<RepositorySnapshotDto> {
     state
         .rebase_onto(&repo_id, revision, &reference)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn interactive_rebase_preview(
+    repo_id: String,
+    revision: u64,
+    base_oid: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<InteractiveRebasePreviewDto> {
+    state
+        .interactive_rebase_preview(&repo_id, revision, &base_oid)
+        .map(InteractiveRebasePreviewDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn interactive_rebase_start(
+    repo_id: String,
+    revision: u64,
+    request: InteractiveRebaseRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let request = request
+        .try_into()
+        .map_err(|error: AppError| AppErrorDto::from(&error))?;
+    let executable = std::env::current_exe().map_err(|error| {
+        AppErrorDto::from(&AppError::InvalidRequest(format!(
+            "Could not locate the GitAcorn executable: {error}"
+        )))
+    })?;
+    state
+        .start_interactive_rebase(&repo_id, revision, &request, &executable)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn rebase_continue(
+    repo_id: String,
+    revision: u64,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .continue_rebase(&repo_id, revision)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn rebase_skip(
+    repo_id: String,
+    revision: u64,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .skip_rebase(&repo_id, revision)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn rebase_abort(
+    repo_id: String,
+    revision: u64,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .abort_rebase(&repo_id, revision)
         .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }

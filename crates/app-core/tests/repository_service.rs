@@ -1,12 +1,48 @@
 use app_core::{
-    BranchRequest, CommitRequest, DiffTarget, HistoryFilter, PatchSelection, ReferenceKind,
+    BranchRequest, CommitRequest, DiffTarget, HistoryFilter, InteractiveRebaseAction,
+    InteractiveRebaseItem, InteractiveRebaseRequest, PatchSelection, ReferenceKind,
     RepositoryService,
 };
-use git_domain::{DiffLineKind, HeadState};
+use git_domain::{DiffLineKind, HeadState, RepositoryOperation};
+use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use test_support::TestRepository;
+
+fn sequence_editor_helper(directory: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let path = directory.join("sequence-editor.cmd");
+        fs::write(&path, "@echo off\r\ncopy /Y \"%~2\" \"%~3\" >nul\r\n")
+            .expect("write sequence editor helper");
+        path
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = directory.join("sequence-editor.sh");
+        fs::write(&path, "#!/bin/sh\ncp \"$2\" \"$3\"\n").expect("write sequence editor helper");
+        let mut permissions = fs::metadata(&path)
+            .expect("read sequence editor metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("make sequence editor executable");
+        path
+    }
+}
+
+fn commit_independent_file(fixture: &TestRepository, path: &str, subject: &str) -> String {
+    fixture.write(path, &format!("{subject}\n"));
+    fixture.git(["add", path]);
+    fixture.git(["commit", "-m", subject]);
+    String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("commit oid")
+        .trim()
+        .to_owned()
+}
 
 #[test]
 fn discovers_repository_and_reads_real_status() {
@@ -248,6 +284,245 @@ fn renames_rebases_and_manages_tags_for_local_branches() {
     service
         .delete_branch(&repository, "feature/renamed")
         .expect("delete merged branch");
+}
+
+#[test]
+fn interactive_rebase_reorders_rewords_edits_and_restores_autostash() {
+    let fixture = TestRepository::init();
+    let base_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("base oid")
+        .trim()
+        .to_owned();
+    let first_oid = commit_independent_file(&fixture, "first.txt", "First");
+    let second_oid = commit_independent_file(&fixture, "second.txt", "Second");
+    let third_oid = commit_independent_file(&fixture, "third.txt", "Third");
+    fixture.write("tracked.txt", "local work\n");
+
+    let helper_directory = tempfile::tempdir().expect("sequence editor directory");
+    let editor = sequence_editor_helper(helper_directory.path());
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let preview = service
+        .interactive_rebase_preview(&repository, &base_oid)
+        .expect("preview interactive rebase");
+    assert_eq!(preview.commits.len(), 3);
+
+    service
+        .start_interactive_rebase(
+            &repository,
+            &InteractiveRebaseRequest {
+                base_oid,
+                expected_head_oid: third_oid.clone(),
+                items: vec![
+                    InteractiveRebaseItem {
+                        oid: third_oid,
+                        action: InteractiveRebaseAction::Pick,
+                        summary: None,
+                        description: None,
+                    },
+                    InteractiveRebaseItem {
+                        oid: first_oid,
+                        action: InteractiveRebaseAction::Reword,
+                        summary: Some("Renamed first".to_owned()),
+                        description: Some("Reworded by GitAcorn".to_owned()),
+                    },
+                    InteractiveRebaseItem {
+                        oid: second_oid,
+                        action: InteractiveRebaseAction::Edit,
+                        summary: None,
+                        description: None,
+                    },
+                ],
+                auto_stash: true,
+            },
+            &editor,
+        )
+        .expect("start interactive rebase");
+
+    let paused = service.snapshot(&repository, 2).expect("paused snapshot");
+    assert_eq!(paused.operation, Some(RepositoryOperation::RebaseEdit));
+    service
+        .commit(
+            &repository,
+            &CommitRequest {
+                summary: "Edited second".to_owned(),
+                description: "Amended during edit".to_owned(),
+                amend: true,
+            },
+        )
+        .expect("amend edit commit");
+    service
+        .continue_rebase(&repository)
+        .expect("continue edited rebase");
+
+    let completed = service
+        .snapshot(&repository, 3)
+        .expect("completed snapshot");
+    assert_eq!(completed.operation, None);
+    assert!(
+        completed
+            .status
+            .changes
+            .iter()
+            .any(|change| change.path == b"tracked.txt"),
+        "autostash did not restore local work"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.path().join("tracked.txt"))
+            .expect("restored tracked file")
+            .replace("\r\n", "\n"),
+        "local work\n"
+    );
+    let subjects =
+        String::from_utf8(fixture.git_output(["log", "--format=%s", "-4"])).expect("log subjects");
+    assert_eq!(
+        subjects.lines().collect::<Vec<_>>(),
+        ["Edited second", "Renamed first", "Third", "initial"]
+    );
+}
+
+#[test]
+fn aborting_an_editing_interactive_rebase_restores_the_original_head() {
+    let fixture = TestRepository::init();
+    let base_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("base oid")
+        .trim()
+        .to_owned();
+    let first_oid = commit_independent_file(&fixture, "first.txt", "First");
+    let second_oid = commit_independent_file(&fixture, "second.txt", "Second");
+    let original_head = second_oid.clone();
+    let helper_directory = tempfile::tempdir().expect("sequence editor directory");
+    let editor = sequence_editor_helper(helper_directory.path());
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .start_interactive_rebase(
+            &repository,
+            &InteractiveRebaseRequest {
+                base_oid,
+                expected_head_oid: original_head.clone(),
+                items: vec![
+                    InteractiveRebaseItem {
+                        oid: first_oid,
+                        action: InteractiveRebaseAction::Edit,
+                        summary: None,
+                        description: None,
+                    },
+                    InteractiveRebaseItem {
+                        oid: second_oid,
+                        action: InteractiveRebaseAction::Pick,
+                        summary: None,
+                        description: None,
+                    },
+                ],
+                auto_stash: false,
+            },
+            &editor,
+        )
+        .expect("pause interactive rebase");
+    assert_eq!(
+        service.snapshot(&repository, 2).expect("paused").operation,
+        Some(RepositoryOperation::RebaseEdit)
+    );
+
+    service.abort_rebase(&repository).expect("abort rebase");
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+            .expect("restored head")
+            .trim(),
+        original_head
+    );
+    assert_eq!(
+        service.snapshot(&repository, 3).expect("aborted").operation,
+        None
+    );
+}
+
+#[test]
+fn conflicting_interactive_rebase_can_be_resolved_and_continued() {
+    let fixture = TestRepository::init();
+    let base_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("base oid")
+        .trim()
+        .to_owned();
+    fixture.write("tracked.txt", "first version\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.git(["commit", "-m", "First version"]);
+    let first_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("first oid")
+        .trim()
+        .to_owned();
+    fixture.write("tracked.txt", "second version\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.git(["commit", "-m", "Second version"]);
+    let second_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("second oid")
+        .trim()
+        .to_owned();
+
+    let helper_directory = tempfile::tempdir().expect("sequence editor directory");
+    let editor = sequence_editor_helper(helper_directory.path());
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    service
+        .start_interactive_rebase(
+            &repository,
+            &InteractiveRebaseRequest {
+                base_oid,
+                expected_head_oid: second_oid.clone(),
+                items: vec![
+                    InteractiveRebaseItem {
+                        oid: second_oid,
+                        action: InteractiveRebaseAction::Pick,
+                        summary: None,
+                        description: None,
+                    },
+                    InteractiveRebaseItem {
+                        oid: first_oid,
+                        action: InteractiveRebaseAction::Pick,
+                        summary: None,
+                        description: None,
+                    },
+                ],
+                auto_stash: false,
+            },
+            &editor,
+        )
+        .expect("start conflicting rebase");
+
+    let mut completed = false;
+    for attempt in 0..3 {
+        let snapshot = service
+            .snapshot(&repository, attempt + 2)
+            .expect("conflict snapshot");
+        if snapshot.operation.is_none() {
+            completed = true;
+            break;
+        }
+        assert_eq!(snapshot.operation, Some(RepositoryOperation::Rebase));
+        assert!(
+            snapshot
+                .status
+                .changes
+                .iter()
+                .any(|change| change.is_conflict)
+        );
+        fixture.write("tracked.txt", &format!("resolved {attempt}\n"));
+        fixture.git(["add", "tracked.txt"]);
+        service
+            .continue_rebase(&repository)
+            .expect("continue resolved rebase");
+    }
+    assert!(
+        completed
+            || service
+                .snapshot(&repository, 6)
+                .expect("final snapshot")
+                .operation
+                .is_none(),
+        "rebase remained paused after resolving conflicts"
+    );
 }
 
 #[test]

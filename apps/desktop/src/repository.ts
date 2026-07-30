@@ -29,6 +29,7 @@ export type RepositorySnapshotDto = {
   behind: number;
   stashCount: number;
   changes: FileChangeDto[];
+  operation?: "rebase" | "rebaseEdit" | "autostashConflict";
 };
 
 export type FileChangeDto = {
@@ -115,6 +116,37 @@ export type HistoryPageDto = {
   schemaVersion: 1;
   commits: CommitDto[];
   nextCursor?: string;
+};
+
+export type InteractiveRebaseAction =
+  | "pick"
+  | "reword"
+  | "edit"
+  | "squash"
+  | "fixup"
+  | "drop";
+
+export type InteractiveRebasePreviewDto = {
+  schemaVersion: 1;
+  baseOid: string;
+  headOid: string;
+  branch: string;
+  commits: Array<{
+    oid: string;
+    subject: string;
+  }>;
+};
+
+export type InteractiveRebaseRequest = {
+  baseOid: string;
+  expectedHeadOid: string;
+  items: Array<{
+    oid: string;
+    action: InteractiveRebaseAction;
+    summary?: string;
+    description?: string;
+  }>;
+  autoStash: boolean;
 };
 
 export type ReferenceDto = {
@@ -434,6 +466,51 @@ export function rebaseBranch(
     revision,
     reference,
   });
+}
+
+export function previewInteractiveRebase(
+  repoId: string,
+  revision: number,
+  baseOid: string,
+): Promise<InteractiveRebasePreviewDto> {
+  return invoke<InteractiveRebasePreviewDto>("interactive_rebase_preview", {
+    repoId,
+    revision,
+    baseOid,
+  });
+}
+
+export function startInteractiveRebase(
+  repoId: string,
+  revision: number,
+  request: InteractiveRebaseRequest,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("interactive_rebase_start", {
+    repoId,
+    revision,
+    request,
+  });
+}
+
+export function continueRebase(
+  repoId: string,
+  revision: number,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("rebase_continue", { repoId, revision });
+}
+
+export function skipRebase(
+  repoId: string,
+  revision: number,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("rebase_skip", { repoId, revision });
+}
+
+export function abortRebase(
+  repoId: string,
+  revision: number,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("rebase_abort", { repoId, revision });
 }
 
 export function createTag(

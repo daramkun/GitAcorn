@@ -26,6 +26,7 @@ import {
   applyPatchSelection,
   addRemote,
   abortMerge,
+  abortRebase,
   activateSessionTab,
   activateWorktree,
   applyStash,
@@ -38,6 +39,7 @@ import {
   createCommit,
   createStash,
   createTag,
+  continueRebase,
   deleteBranch,
   deleteTag,
   discardPath,
@@ -57,6 +59,7 @@ import {
   listenForRepositoryChanges,
   normalizeAppError,
   openRepository,
+  previewInteractiveRebase,
   rebaseBranch,
   renameBranch,
   reorderSessionTabs,
@@ -64,7 +67,9 @@ import {
   resolveConflict,
   restoreSession,
   startClone,
+  startInteractiveRebase,
   startRemoteOperation,
+  skipRebase,
   stagePaths,
   unstagePaths,
   updateSessionTab,
@@ -76,6 +81,8 @@ import {
   type DiffTarget,
   type FileChangeDto,
   type GitRemoteDto,
+  type InteractiveRebaseAction,
+  type InteractiveRebasePreviewDto,
   type OperationEventDto,
   type OperationRecordDto,
   type RemoteOperationOptions,
@@ -1941,7 +1948,18 @@ export function App() {
                 tab={activeTab}
                 snapshot={activeSnapshot}
                 onPersist={(patch) => updateActiveTab(patch)}
+                onSnapshot={(snapshot) => {
+                  setTabs((current) =>
+                    current.map((tab) =>
+                      tab.repoId === snapshot.repository.id &&
+                      (!tab.snapshot || snapshot.revision >= tab.snapshot.revision)
+                        ? { ...tab, snapshot, unavailable: false }
+                        : tab,
+                    ),
+                  );
+                }}
                 onError={reportError}
+                onClearError={() => setError(undefined)}
               />
             ) : (
               <HistoryEmpty />
@@ -4659,26 +4677,42 @@ function ChangesView({
                   >
                     {t("Mark current content resolved")}
                   </button>
-                  <button
-                    type="button"
-                    className="danger-button"
-                    disabled={mutationBlocked}
-                    onClick={() => {
-                      if (
-                        confirmRepositoryMutation(
-                          t(
-                            "Abort this merge and restore the pre-merge working tree?",
-                          ),
-                        )
-                      ) {
-                        void mutate(t("Aborting merge…"), () =>
-                          abortMerge(snapshot.repository.id, snapshot.revision),
-                        );
-                      }
-                    }}
-                  >
-                    {t("Abort merge…")}
-                  </button>
+                  {snapshot.operation !== "autostashConflict" && (
+                    <button
+                      type="button"
+                      className="danger-button"
+                      disabled={mutationBlocked}
+                      onClick={() => {
+                        if (
+                          confirmRepositoryMutation(
+                            snapshot.operation === "rebase"
+                              ? t("Abort this rebase and restore the previous branch state?")
+                              : t("Abort this merge and restore the pre-merge working tree?"),
+                          )
+                        ) {
+                          void mutate(
+                            snapshot.operation === "rebase"
+                              ? t("Aborting rebase…")
+                              : t("Aborting merge…"),
+                            () =>
+                              snapshot.operation === "rebase"
+                                ? abortRebase(
+                                    snapshot.repository.id,
+                                    snapshot.revision,
+                                  )
+                                : abortMerge(
+                                    snapshot.repository.id,
+                                    snapshot.revision,
+                                  ),
+                          );
+                        }
+                      }}
+                    >
+                      {snapshot.operation === "rebase"
+                        ? t("Abort rebase…")
+                        : t("Abort merge…")}
+                    </button>
+                  )}
                 </div>
               ) : (
               <div>
@@ -5671,7 +5705,9 @@ function HistoryView({
   tab,
   snapshot,
   onPersist,
+  onSnapshot,
   onError,
+  onClearError,
 }: {
   tab: SessionTabDto;
   snapshot: RepositorySnapshotDto;
@@ -5680,7 +5716,9 @@ function HistoryView({
       Pick<SessionTabDto, "historyCursor" | "selectedCommit" | "historyFilter">
     >,
   ) => void;
+  onSnapshot: (snapshot: RepositorySnapshotDto) => void;
   onError: (error: unknown) => void;
+  onClearError: () => void;
 }) {
   const savedFilter = parseHistoryFilter(tab.historyFilter);
   const [commits, setCommits] = useState<CommitDto[]>([]);
@@ -5698,6 +5736,30 @@ function HistoryView({
   const [commitDiff, setCommitDiff] = useState<DiffDto>();
   const [loadingCommitFiles, setLoadingCommitFiles] = useState(false);
   const [loadingCommitDiff, setLoadingCommitDiff] = useState(false);
+  const [rebaseMenu, setRebaseMenu] = useState<{
+    commit: CommitDto;
+    x: number;
+    y: number;
+  }>();
+  const [rebasePreview, setRebasePreview] =
+    useState<InteractiveRebasePreviewDto>();
+  const [rebasePlan, setRebasePlan] = useState<
+    Array<{
+      oid: string;
+      subject: string;
+      action: InteractiveRebaseAction;
+      summary: string;
+      description: string;
+    }>
+  >([]);
+  const [autoStash, setAutoStash] = useState(false);
+  const [rebaseBusy, setRebaseBusy] = useState(false);
+  const draggedRebaseOid = useRef<string | undefined>(undefined);
+  const [draggingRebaseOid, setDraggingRebaseOid] = useState<string>();
+  const [rebaseDropTarget, setRebaseDropTarget] = useState<{
+    oid: string;
+    edge: "before" | "after";
+  }>();
   const selectedRowRef = useRef<HTMLButtonElement | null>(null);
   const historySearchInputRef = useRef<HTMLInputElement>(null);
   const commitFileSearchInputRef = useRef<HTMLInputElement>(null);
@@ -5772,6 +5834,17 @@ function HistoryView({
       commitFileSearchInputRef.current?.focus();
     }
   }, [showCommitFileSearch]);
+
+  useEffect(() => {
+    if (!rebaseMenu) return;
+    const close = () => setRebaseMenu(undefined);
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [rebaseMenu]);
 
   useEffect(() => {
     let active = true;
@@ -5875,6 +5948,115 @@ function HistoryView({
     });
   }
 
+  async function openInteractiveRebase(commit: CommitDto) {
+    setRebaseMenu(undefined);
+    onClearError();
+    setRebaseBusy(true);
+    try {
+      const preview = await previewInteractiveRebase(
+        snapshot.repository.id,
+        snapshot.revision,
+        commit.oid,
+      );
+      setRebasePreview(preview);
+      setRebasePlan(
+        preview.commits.map((item) => ({
+          ...item,
+          action: "pick" as const,
+          summary: item.subject,
+          description: "",
+        })),
+      );
+      setAutoStash(snapshot.changes.length > 0);
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setRebaseBusy(false);
+    }
+  }
+
+  function moveRebaseItem(index: number, offset: -1 | 1) {
+    const destination = index + offset;
+    if (destination < 0 || destination >= rebasePlan.length) return;
+    setRebasePlan((current) => {
+      const next = [...current];
+      [next[index], next[destination]] = [next[destination], next[index]];
+      return next;
+    });
+  }
+
+  function finishRebaseDrag() {
+    draggedRebaseOid.current = undefined;
+    setDraggingRebaseOid(undefined);
+    setRebaseDropTarget(undefined);
+  }
+
+  function dropRebaseItem(targetOid: string, edge: "before" | "after") {
+    const sourceOid = draggedRebaseOid.current;
+    if (!sourceOid || sourceOid === targetOid) {
+      finishRebaseDrag();
+      return;
+    }
+    setRebasePlan((current) => {
+      const sourceIndex = current.findIndex((item) => item.oid === sourceOid);
+      if (sourceIndex < 0) return current;
+      const next = [...current];
+      const [moved] = next.splice(sourceIndex, 1);
+      const targetIndex = next.findIndex((item) => item.oid === targetOid);
+      if (targetIndex < 0) return current;
+      next.splice(targetIndex + (edge === "after" ? 1 : 0), 0, moved);
+      return next;
+    });
+    finishRebaseDrag();
+  }
+
+  async function runInteractiveRebase() {
+    if (!rebasePreview) return;
+    onClearError();
+    setRebaseBusy(true);
+    try {
+      const next = await startInteractiveRebase(
+        snapshot.repository.id,
+        snapshot.revision,
+        {
+          baseOid: rebasePreview.baseOid,
+          expectedHeadOid: rebasePreview.headOid,
+          items: rebasePlan.map(
+            ({ oid, action, summary, description }) => ({
+              oid,
+              action,
+              ...(action === "reword" ? { summary, description } : {}),
+            }),
+          ),
+          autoStash,
+        },
+      );
+      onSnapshot(next);
+      setRebasePreview(undefined);
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setRebaseBusy(false);
+    }
+  }
+
+  async function controlRebase(
+    action: (
+      repoId: string,
+      revision: number,
+    ) => Promise<RepositorySnapshotDto>,
+  ) {
+    onClearError();
+    setRebaseBusy(true);
+    try {
+      onSnapshot(await action(snapshot.repository.id, snapshot.revision));
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setRebaseBusy(false);
+    }
+  }
+
   function closeHistorySearch() {
     setShowHistorySearch(false);
     setDraftQuery("");
@@ -5918,6 +6100,55 @@ function HistoryView({
         aria-label={t("Commit history")}
         onKeyDownCapture={handleHistoryKeyDownCapture}
       >
+        {(snapshot.operation === "rebase" ||
+          snapshot.operation === "rebaseEdit") && (
+          <div className="rebase-status" role="status">
+            <div>
+              <strong>
+                {snapshot.operation === "rebaseEdit"
+                  ? t("Interactive rebase stopped for editing")
+                  : t("Interactive rebase is paused")}
+              </strong>
+              <span>
+                {hasConflicts
+                  ? t("Resolve and stage conflicts, then continue.")
+                  : snapshot.operation === "rebaseEdit"
+                    ? t("Amend this commit in Changes, then continue the rebase.")
+                  : t("Continue, skip the current commit, or abort the rebase.")}
+              </span>
+            </div>
+            <div>
+              <button
+                className="control-button control-button--secondary"
+                type="button"
+                disabled={rebaseBusy || hasConflicts}
+                onClick={() => void controlRebase(continueRebase)}
+              >
+                {t("Continue")}
+              </button>
+              <button
+                className="control-button control-button--secondary"
+                type="button"
+                disabled={rebaseBusy}
+                onClick={() => void controlRebase(skipRebase)}
+              >
+                {t("Skip")}
+              </button>
+              <button
+                className="control-button control-button--danger"
+                type="button"
+                disabled={rebaseBusy}
+                onClick={() => {
+                  if (confirmRepositoryMutation(t("Abort this rebase and restore the previous branch state?"))) {
+                    void controlRebase(abortRebase);
+                  }
+                }}
+              >
+                {t("Abort")}
+              </button>
+            </div>
+          </div>
+        )}
         {showHistorySearch && (
           <form
             className="history-filterbar"
@@ -5978,6 +6209,30 @@ function HistoryView({
                   setSelectedOid(commit.oid);
                   onPersist({ selectedCommit: commit.oid });
                 }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setSelectedOid(commit.oid);
+                  onPersist({ selectedCommit: commit.oid });
+                  setRebaseMenu({
+                    commit,
+                    x: event.clientX,
+                    y: event.clientY,
+                  });
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "ContextMenu" ||
+                    (event.shiftKey && event.key === "F10")
+                  ) {
+                    event.preventDefault();
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    setRebaseMenu({
+                      commit,
+                      x: bounds.left + 16,
+                      y: bounds.top + 16,
+                    });
+                  }
+                }}
               >
                 <CommitGraph
                   row={graph.rows[index]}
@@ -6007,9 +6262,11 @@ function HistoryView({
       </section>
 
       <aside className="commit-detail" aria-label={t("Commit details")}>
-        {hasConflicts && (
+        {hasConflicts && snapshot.operation !== "rebase" && (
           <div className="merge-conflict" role="alert">
-            {t("Merge stopped with conflicts. Resolve the highlighted files in Changes.")}
+            {snapshot.operation === "autostashConflict"
+              ? t("The rebase completed, but automatic stash restore has conflicts. Resolve them in Changes; the stash was kept.")
+              : t("Merge stopped with conflicts. Resolve the highlighted files in Changes.")}
           </div>
         )}
         {selected ? (
@@ -6153,6 +6410,273 @@ function HistoryView({
           <div className="history-state">{t("Select a commit to inspect it.")}</div>
         )}
       </aside>
+      {rebaseMenu && (
+        <div
+          className="remote-context-menu"
+          role="menu"
+          aria-label={t("Commit actions")}
+          style={{ left: rebaseMenu.x, top: rebaseMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={
+              rebaseBusy ||
+              Boolean(snapshot.operation) ||
+              snapshot.head.kind !== "branch" ||
+              snapshot.head.oid === rebaseMenu.commit.oid ||
+              Boolean(rebaseMenu.commit.remoteOnly)
+            }
+            onClick={() => void openInteractiveRebase(rebaseMenu.commit)}
+          >
+            {t("Interactively rebase commits after this…")}
+          </button>
+        </div>
+      )}
+      {rebasePreview && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => !rebaseBusy && setRebasePreview(undefined)}
+        >
+          <div
+            className="settings-modal interactive-rebase-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="interactive-rebase-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div>
+                <h2 id="interactive-rebase-title">{t("Interactive rebase")}</h2>
+                <small>
+                  {rebasePreview.branch} · {rebasePreview.baseOid.slice(0, 8)}..HEAD
+                </small>
+              </div>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close interactive rebase")}
+                disabled={rebaseBusy}
+                onClick={() => setRebasePreview(undefined)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="interactive-rebase-body">
+              <p>
+                {t("Reorder commits and choose how each commit should be replayed. Merge commits are not supported yet.")}
+              </p>
+              <ol className="interactive-rebase-list">
+                {rebasePlan.map((item, index) => (
+                  <li
+                    key={item.oid}
+                    className={[
+                      draggingRebaseOid === item.oid ? "dragging" : "",
+                      rebaseDropTarget?.oid === item.oid
+                        ? `drop-${rebaseDropTarget.edge}`
+                        : "",
+                    ].filter(Boolean).join(" ")}
+                    draggable={!rebaseBusy}
+                    tabIndex={0}
+                    aria-label={t("Drag to reorder {subject}", {
+                      subject: item.subject,
+                    })}
+                    onDragStart={(event) => {
+                      if (
+                        (event.target as HTMLElement).closest(
+                          "input, textarea, select",
+                        )
+                      ) {
+                        event.preventDefault();
+                        return;
+                      }
+                      draggedRebaseOid.current = item.oid;
+                      setDraggingRebaseOid(item.oid);
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", item.oid);
+                    }}
+                    onDragOver={(event) => {
+                      if (
+                        !draggedRebaseOid.current ||
+                        draggedRebaseOid.current === item.oid
+                      ) {
+                        return;
+                      }
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                      const bounds = event.currentTarget.getBoundingClientRect();
+                      setRebaseDropTarget({
+                        oid: item.oid,
+                        edge:
+                          event.clientY < bounds.top + bounds.height / 2
+                            ? "before"
+                            : "after",
+                      });
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const edge =
+                        rebaseDropTarget?.oid === item.oid
+                          ? rebaseDropTarget.edge
+                          : "after";
+                      dropRebaseItem(item.oid, edge);
+                    }}
+                    onDragEnd={finishRebaseDrag}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
+                      if (event.altKey && event.key === "ArrowUp") {
+                        event.preventDefault();
+                        moveRebaseItem(index, -1);
+                      } else if (event.altKey && event.key === "ArrowDown") {
+                        event.preventDefault();
+                        moveRebaseItem(index, 1);
+                      }
+                    }}
+                  >
+                    <span className="rebase-drag-handle" aria-hidden="true">
+                      ⠿
+                    </span>
+                    <select
+                      className="control-input rebase-action-select"
+                      draggable={false}
+                      aria-label={t("Action for {subject}", { subject: item.subject })}
+                      value={item.action}
+                      disabled={rebaseBusy}
+                      onDragStart={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
+                      onChange={(event) => {
+                        const action = event.currentTarget
+                          .value as InteractiveRebaseAction;
+                        setRebasePlan((current) =>
+                          current.map((entry, entryIndex) =>
+                            entryIndex === index ? { ...entry, action } : entry,
+                          ),
+                        );
+                      }}
+                    >
+                      <option value="pick">pick</option>
+                      <option value="reword">reword</option>
+                      <option value="edit">edit</option>
+                      <option value="squash">squash</option>
+                      <option value="fixup">fixup</option>
+                      <option value="drop">drop</option>
+                    </select>
+                    <code>{item.oid.slice(0, 8)}</code>
+                    <span className="rebase-commit-subject">{item.subject}</span>
+                    {item.action === "reword" && (
+                      <div className="rebase-message-fields">
+                        <input
+                          className="control-input"
+                          type="text"
+                          aria-label={t("New summary for {subject}", {
+                            subject: item.subject,
+                          })}
+                          value={item.summary}
+                          disabled={rebaseBusy}
+                          onDragStart={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
+                          onChange={(event) => {
+                            const summary = event.currentTarget.value;
+                            setRebasePlan((current) =>
+                              current.map((entry, entryIndex) =>
+                                entryIndex === index
+                                  ? { ...entry, summary }
+                                  : entry,
+                              ),
+                            );
+                          }}
+                          placeholder={t("New commit summary")}
+                        />
+                        <textarea
+                          className="control-input"
+                          aria-label={t("New description for {subject}", {
+                            subject: item.subject,
+                          })}
+                          value={item.description}
+                          disabled={rebaseBusy}
+                          onDragStart={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
+                          onChange={(event) => {
+                            const description = event.currentTarget.value;
+                            setRebasePlan((current) =>
+                              current.map((entry, entryIndex) =>
+                                entryIndex === index
+                                  ? { ...entry, description }
+                                  : entry,
+                              ),
+                            );
+                          }}
+                          placeholder={t("New commit description (optional)")}
+                        />
+                      </div>
+                    )}
+                    {item.action === "edit" && (
+                      <small className="rebase-action-note">
+                        {t("Rebase will stop at this commit so you can amend its contents.")}
+                      </small>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={autoStash}
+                  disabled={rebaseBusy}
+                  onChange={(event) => setAutoStash(event.currentTarget.checked)}
+                />
+                <span>{t("Automatically stash and reapply local changes")}</span>
+              </label>
+              {snapshot.changes.length > 0 && !autoStash && (
+                <small className="rebase-warning">
+                  {t("The working tree has changes. Enable automatic stash to continue.")}
+                </small>
+              )}
+              <div className="remote-form-actions">
+                <button
+                  className="control-button control-button--secondary"
+                  type="button"
+                  disabled={rebaseBusy}
+                  onClick={() => setRebasePreview(undefined)}
+                >
+                  {t("Cancel")}
+                </button>
+                <button
+                  type="button"
+                  className="control-button control-button--primary"
+                  disabled={
+                    rebaseBusy ||
+                    (snapshot.changes.length > 0 && !autoStash) ||
+                    rebasePlan.every((item) => item.action === "drop") ||
+                    rebasePlan.some(
+                      (item) =>
+                        item.action === "reword" && !item.summary.trim(),
+                    ) ||
+                    rebasePlan.some(
+                      (item, index) =>
+                        (item.action === "squash" || item.action === "fixup") &&
+                        !rebasePlan
+                          .slice(0, index)
+                          .some((previous) => previous.action !== "drop"),
+                    )
+                  }
+                  onClick={() => void runInteractiveRebase()}
+                >
+                  {rebaseBusy ? t("Rebasing…") : t("Start rebase")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

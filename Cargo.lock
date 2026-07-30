@@ -60,6 +60,7 @@ dependencies = [
  "git-cli",
  "git-domain",
  "serde",
+ "serde_json",
  "tempfile",
  "test-support",
  "thiserror 2.0.19",

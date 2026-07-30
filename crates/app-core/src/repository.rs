@@ -1,13 +1,16 @@
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use git_cli::{CancellationToken, GitExecutionError, GitExecutor, GitOutput, GitRequest};
 use git_domain::{
-    DiffDocument, DiffLineKind, HistoryPage, RepoId, RepositoryDescriptor, RepositorySnapshot,
-    WorktreeId, parse_history_records, parse_porcelain_v2, parse_unified_diff,
+    DiffDocument, DiffLineKind, HistoryPage, RepoId, RepositoryDescriptor, RepositoryOperation,
+    RepositorySnapshot, WorktreeId, parse_history_records, parse_porcelain_v2, parse_unified_diff,
 };
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppError;
@@ -113,6 +116,68 @@ pub struct CommitFile {
     pub path: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InteractiveRebaseAction {
+    Pick,
+    Reword,
+    Edit,
+    Squash,
+    Fixup,
+    Drop,
+}
+
+impl InteractiveRebaseAction {
+    fn as_todo_command(self) -> &'static str {
+        match self {
+            Self::Pick => "pick",
+            Self::Reword | Self::Edit => "edit",
+            Self::Squash => "squash",
+            Self::Fixup => "fixup",
+            Self::Drop => "drop",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveRebaseItem {
+    pub oid: String,
+    pub action: InteractiveRebaseAction,
+    pub summary: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractiveRebaseRequest {
+    pub base_oid: String,
+    pub expected_head_oid: String,
+    pub items: Vec<InteractiveRebaseItem>,
+    pub auto_stash: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractiveRebaseCommit {
+    pub oid: String,
+    pub subject: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractiveRebasePreview {
+    pub base_oid: String,
+    pub head_oid: String,
+    pub branch: String,
+    pub commits: Vec<InteractiveRebaseCommit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveRebaseSession {
+    items: Vec<InteractiveRebaseItem>,
+}
+
+const INTERACTIVE_REBASE_SESSION_FILE: &str = "git-acorn-interactive-rebase.json";
+
 const MINIMUM_GIT_VERSION: GitVersion = GitVersion {
     major: 2,
     minor: 40,
@@ -201,11 +266,33 @@ impl RepositoryService {
         let output = ensure_success(self.run(request)?)?;
         let status = parse_porcelain_v2(&output.stdout)
             .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
+        let autostash_conflict_marker = repository.git_dir.join("git-acorn-autostash-conflict");
+        let operation = if self.rebase_in_progress(repository) {
+            if !status.changes.iter().any(|change| change.is_conflict)
+                && self
+                    .paused_rebase_item(repository)
+                    .is_some_and(|item| item.action == InteractiveRebaseAction::Edit)
+            {
+                Some(RepositoryOperation::RebaseEdit)
+            } else {
+                Some(RepositoryOperation::Rebase)
+            }
+        } else if autostash_conflict_marker.is_file()
+            && status.changes.iter().any(|change| change.is_conflict)
+        {
+            Some(RepositoryOperation::AutostashConflict)
+        } else {
+            if autostash_conflict_marker.is_file() {
+                let _ = fs::remove_file(autostash_conflict_marker);
+            }
+            None
+        };
 
         Ok(RepositorySnapshot {
             revision,
             repository: repository.clone(),
             status,
+            operation,
         })
     }
 
@@ -794,6 +881,272 @@ impl RepositoryService {
         } else {
             ensure_success(output).map(|_| ())
         }
+    }
+
+    pub fn interactive_rebase_preview(
+        &self,
+        repository: &RepositoryDescriptor,
+        base_oid: &str,
+    ) -> Result<InteractiveRebasePreview, AppError> {
+        if self.rebase_in_progress(repository) {
+            return Err(AppError::InvalidRequest(
+                "A rebase is already in progress".to_owned(),
+            ));
+        }
+        validate_object_id(base_oid)?;
+
+        let head_oid = self
+            .git_text(repository, ["rev-parse", "--verify", "HEAD^{commit}"])?
+            .trim()
+            .to_owned();
+        let mut branch_request = GitRequest::new(["symbolic-ref", "--quiet", "--short", "HEAD"]);
+        branch_request.working_directory = Some(repository.worktree_path.clone());
+        let branch_output = self.run(branch_request)?;
+        if branch_output.exit_code != 0 {
+            return Err(AppError::InvalidRequest(
+                "Interactive rebase requires a checked out local branch".to_owned(),
+            ));
+        }
+        let branch = String::from_utf8(branch_output.stdout)
+            .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?
+            .trim()
+            .to_owned();
+
+        let mut ancestor_request =
+            GitRequest::new(["merge-base", "--is-ancestor", base_oid, head_oid.as_str()]);
+        ancestor_request.working_directory = Some(repository.worktree_path.clone());
+        let ancestor_output = self.run(ancestor_request)?;
+        if ancestor_output.exit_code != 0 {
+            return Err(AppError::InvalidRequest(
+                "The selected commit is not an ancestor of the current branch".to_owned(),
+            ));
+        }
+
+        let range = format!("{base_oid}..{head_oid}");
+        let output = self.git_bytes(
+            repository,
+            [
+                "log",
+                "--reverse",
+                "--topo-order",
+                "--format=%H%x00%s%x00%P%x1e",
+                range.as_str(),
+            ],
+        )?;
+        let commits = parse_interactive_rebase_commits(&output)?;
+        if commits.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "There are no commits after the selected commit".to_owned(),
+            ));
+        }
+
+        Ok(InteractiveRebasePreview {
+            base_oid: base_oid.to_owned(),
+            head_oid,
+            branch,
+            commits,
+        })
+    }
+
+    pub fn start_interactive_rebase(
+        &self,
+        repository: &RepositoryDescriptor,
+        request: &InteractiveRebaseRequest,
+        sequence_editor_executable: &Path,
+    ) -> Result<(), AppError> {
+        let preview = self.interactive_rebase_preview(repository, &request.base_oid)?;
+        if preview.head_oid != request.expected_head_oid {
+            return Err(AppError::InvalidRequest(
+                "The branch changed after the rebase plan was opened".to_owned(),
+            ));
+        }
+        validate_rebase_plan(&preview, &request.items)?;
+        self.save_interactive_rebase_session(repository, &request.items)?;
+
+        let mut plan = tempfile::Builder::new()
+            .prefix("git-acorn-rebase-")
+            .suffix(".todo")
+            .tempfile_in(&repository.git_dir)
+            .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+        for item in &request.items {
+            writeln!(plan, "{} {}", item.action.as_todo_command(), item.oid)
+                .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+        }
+        plan.flush()
+            .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+
+        let editor = format!(
+            "{} --git-acorn-sequence-editor {}",
+            shell_quote(sequence_editor_executable),
+            shell_quote(plan.path()),
+        );
+        let mut args = vec![OsString::from("rebase"), OsString::from("-i")];
+        if request.auto_stash {
+            args.push(OsString::from("--autostash"));
+        }
+        args.extend([OsString::from("--"), OsString::from(&request.base_oid)]);
+        let mut git_request = GitRequest::new(args);
+        git_request.working_directory = Some(repository.worktree_path.clone());
+        git_request.timeout = Duration::from_secs(120);
+        git_request.environment.insert(
+            OsString::from("GIT_SEQUENCE_EDITOR"),
+            OsString::from(editor),
+        );
+        git_request
+            .environment
+            .insert(OsString::from("GIT_EDITOR"), OsString::from("true"));
+
+        let output = self.run(git_request)?;
+        if output.exit_code != 0 && !self.rebase_in_progress(repository) {
+            self.remove_interactive_rebase_session(repository);
+        }
+        if output.exit_code == 0 || self.rebase_in_progress(repository) {
+            self.advance_automatic_rewords(repository)?;
+        }
+        let autostash_conflict = request.auto_stash
+            && !self.rebase_in_progress(repository)
+            && self
+                .git_text(repository, ["diff", "--name-only", "--diff-filter=U"])?
+                .lines()
+                .any(|line| !line.trim().is_empty());
+        if autostash_conflict {
+            fs::write(repository.git_dir.join("git-acorn-autostash-conflict"), [])
+                .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+        }
+        if output.exit_code == 0 || self.rebase_in_progress(repository) || autostash_conflict {
+            if !self.rebase_in_progress(repository) {
+                self.remove_interactive_rebase_session(repository);
+            }
+            Ok(())
+        } else {
+            ensure_success(output).map(|_| ())
+        }
+    }
+
+    pub fn continue_rebase(&self, repository: &RepositoryDescriptor) -> Result<(), AppError> {
+        self.run_rebase_control(repository, "--continue")?;
+        self.advance_automatic_rewords(repository)
+    }
+
+    pub fn skip_rebase(&self, repository: &RepositoryDescriptor) -> Result<(), AppError> {
+        self.run_rebase_control(repository, "--skip")?;
+        self.advance_automatic_rewords(repository)
+    }
+
+    pub fn abort_rebase(&self, repository: &RepositoryDescriptor) -> Result<(), AppError> {
+        self.run_rebase_control(repository, "--abort")?;
+        self.remove_interactive_rebase_session(repository);
+        Ok(())
+    }
+
+    fn run_rebase_control(
+        &self,
+        repository: &RepositoryDescriptor,
+        action: &str,
+    ) -> Result<(), AppError> {
+        if !self.rebase_in_progress(repository) {
+            return Err(AppError::InvalidRequest(
+                "There is no rebase in progress".to_owned(),
+            ));
+        }
+        let mut request = GitRequest::new(["rebase", action]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(120);
+        request
+            .environment
+            .insert(OsString::from("GIT_EDITOR"), OsString::from("true"));
+        let output = self.run(request)?;
+        if output.exit_code == 0 || self.rebase_in_progress(repository) {
+            Ok(())
+        } else {
+            ensure_success(output).map(|_| ())
+        }
+    }
+
+    fn advance_automatic_rewords(&self, repository: &RepositoryDescriptor) -> Result<(), AppError> {
+        while self.rebase_in_progress(repository)
+            && !self.rebase_has_unmerged_entries(repository)?
+        {
+            let Some(item) = self.paused_rebase_item(repository) else {
+                break;
+            };
+            if item.action != InteractiveRebaseAction::Reword {
+                break;
+            }
+            let summary = item.summary.as_deref().unwrap_or_default();
+            let description = item.description.as_deref().unwrap_or_default();
+            self.commit(
+                repository,
+                &CommitRequest {
+                    summary: summary.to_owned(),
+                    description: description.to_owned(),
+                    amend: true,
+                },
+            )?;
+            self.run_rebase_control(repository, "--continue")?;
+        }
+        if !self.rebase_in_progress(repository) {
+            self.remove_interactive_rebase_session(repository);
+        }
+        Ok(())
+    }
+
+    fn rebase_has_unmerged_entries(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<bool, AppError> {
+        Ok(self
+            .git_text(repository, ["diff", "--name-only", "--diff-filter=U"])?
+            .lines()
+            .any(|line| !line.trim().is_empty()))
+    }
+
+    fn interactive_rebase_session_path(&self, repository: &RepositoryDescriptor) -> PathBuf {
+        repository.git_dir.join(INTERACTIVE_REBASE_SESSION_FILE)
+    }
+
+    fn save_interactive_rebase_session(
+        &self,
+        repository: &RepositoryDescriptor,
+        items: &[InteractiveRebaseItem],
+    ) -> Result<(), AppError> {
+        let contents = serde_json::to_vec(&InteractiveRebaseSession {
+            items: items.to_vec(),
+        })
+        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+        fs::write(self.interactive_rebase_session_path(repository), contents)
+            .map_err(|error| AppError::InvalidRequest(error.to_string()))
+    }
+
+    fn load_interactive_rebase_session(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Option<InteractiveRebaseSession> {
+        fs::read(self.interactive_rebase_session_path(repository))
+            .ok()
+            .and_then(|contents| serde_json::from_slice(&contents).ok())
+    }
+
+    fn remove_interactive_rebase_session(&self, repository: &RepositoryDescriptor) {
+        let _ = fs::remove_file(self.interactive_rebase_session_path(repository));
+    }
+
+    fn paused_rebase_item(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Option<InteractiveRebaseItem> {
+        let stopped_oid =
+            fs::read_to_string(repository.git_dir.join("rebase-merge/stopped-sha")).ok()?;
+        let stopped_oid = stopped_oid.trim();
+        self.load_interactive_rebase_session(repository)?
+            .items
+            .into_iter()
+            .find(|item| item.oid == stopped_oid)
+    }
+
+    fn rebase_in_progress(&self, repository: &RepositoryDescriptor) -> bool {
+        repository.git_dir.join("rebase-merge").is_dir()
+            || repository.git_dir.join("rebase-apply").is_dir()
     }
 
     pub fn create_tag(
@@ -1561,6 +1914,98 @@ fn parse_references(output: &[u8]) -> Result<Vec<GitReference>, AppError> {
         .collect()
 }
 
+fn validate_object_id(oid: &str) -> Result<(), AppError> {
+    if matches!(oid.len(), 40 | 64) && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(AppError::InvalidRequest(
+            "The selected commit ID is invalid".to_owned(),
+        ))
+    }
+}
+
+fn parse_interactive_rebase_commits(
+    output: &[u8],
+) -> Result<Vec<InteractiveRebaseCommit>, AppError> {
+    output
+        .split(|byte| *byte == 0x1e)
+        .filter(|record| !record.iter().all(u8::is_ascii_whitespace))
+        .map(|record| {
+            let record = record.strip_prefix(b"\n").unwrap_or(record);
+            let fields: Vec<&[u8]> = record.split(|byte| *byte == 0).collect();
+            if fields.len() < 3 {
+                return Err(AppError::InvalidGitOutput(
+                    "Interactive rebase history record is incomplete".to_owned(),
+                ));
+            }
+            let oid = String::from_utf8(fields[0].to_vec())
+                .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
+            validate_object_id(&oid)?;
+            let subject = String::from_utf8_lossy(fields[1]).into_owned();
+            let parents = String::from_utf8_lossy(fields[2]);
+            if parents.split_whitespace().count() > 1 {
+                return Err(AppError::InvalidRequest(
+                    "Interactive rebase does not yet support merge commits".to_owned(),
+                ));
+            }
+            Ok(InteractiveRebaseCommit { oid, subject })
+        })
+        .collect()
+}
+
+fn validate_rebase_plan(
+    preview: &InteractiveRebasePreview,
+    items: &[InteractiveRebaseItem],
+) -> Result<(), AppError> {
+    if items.len() != preview.commits.len() {
+        return Err(AppError::InvalidRequest(
+            "The rebase plan must contain every commit exactly once".to_owned(),
+        ));
+    }
+    let expected: HashSet<&str> = preview
+        .commits
+        .iter()
+        .map(|commit| commit.oid.as_str())
+        .collect();
+    let actual: HashSet<&str> = items.iter().map(|item| item.oid.as_str()).collect();
+    if actual.len() != items.len() || actual != expected {
+        return Err(AppError::InvalidRequest(
+            "The rebase plan contains an unknown or duplicate commit".to_owned(),
+        ));
+    }
+
+    let mut has_previous = false;
+    for item in items {
+        if item.action == InteractiveRebaseAction::Reword {
+            let summary = item.summary.as_deref().unwrap_or_default().trim();
+            if summary.is_empty() || summary.contains(['\r', '\n']) {
+                return Err(AppError::InvalidRequest(
+                    "A reword action requires a single-line commit summary".to_owned(),
+                ));
+            }
+        }
+        match item.action {
+            InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup if !has_previous => {
+                return Err(AppError::InvalidRequest(
+                    "Squash and fixup require a preceding commit".to_owned(),
+                ));
+            }
+            InteractiveRebaseAction::Drop => {}
+            _ => has_previous = true,
+        }
+    }
+    if !has_previous {
+        return Err(AppError::InvalidRequest(
+            "The rebase plan cannot drop every commit".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
 fn ensure_success(output: GitOutput) -> Result<GitOutput, AppError> {
     if output.exit_code == 0 {
         return Ok(output);
@@ -1620,8 +2065,9 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        GitVersion, ReferenceKind, parse_git_version, parse_references, parse_stashes,
-        parse_worktrees, summarize_refs,
+        GitVersion, InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
+        ReferenceKind, parse_git_version, parse_interactive_rebase_commits, parse_references,
+        parse_stashes, parse_worktrees, summarize_refs, validate_rebase_plan,
     };
 
     #[test]
@@ -1663,5 +2109,105 @@ mod tests {
         assert_eq!(refs[0].kind, ReferenceKind::LocalBranch);
         assert_eq!(refs[0].ahead, 2);
         assert_eq!(refs[0].behind, 3);
+    }
+
+    #[test]
+    fn parses_linear_interactive_rebase_commits() {
+        let first = "1".repeat(40);
+        let second = "2".repeat(40);
+        let output = format!(
+            "{first}\0First\0{}\x1e\n{second}\0Second\0{first}\x1e\n",
+            "0".repeat(40)
+        );
+        let commits = parse_interactive_rebase_commits(output.as_bytes()).expect("linear history");
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[1].subject, "Second");
+    }
+
+    #[test]
+    fn rejects_merge_commits_from_interactive_rebase() {
+        let oid = "1".repeat(40);
+        let parents = format!("{} {}", "2".repeat(40), "3".repeat(40));
+        let output = format!("{oid}\0Merge\0{parents}\x1e\n");
+        assert!(parse_interactive_rebase_commits(output.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn validates_reordered_rebase_plan_and_rejects_leading_squash() {
+        let first = "1".repeat(40);
+        let second = "2".repeat(40);
+        let preview = InteractiveRebasePreview {
+            base_oid: "0".repeat(40),
+            head_oid: second.clone(),
+            branch: "main".to_owned(),
+            commits: vec![
+                super::InteractiveRebaseCommit {
+                    oid: first.clone(),
+                    subject: "First".to_owned(),
+                },
+                super::InteractiveRebaseCommit {
+                    oid: second.clone(),
+                    subject: "Second".to_owned(),
+                },
+            ],
+        };
+        let reordered = vec![
+            InteractiveRebaseItem {
+                oid: second.clone(),
+                action: InteractiveRebaseAction::Pick,
+                summary: None,
+                description: None,
+            },
+            InteractiveRebaseItem {
+                oid: first.clone(),
+                action: InteractiveRebaseAction::Fixup,
+                summary: None,
+                description: None,
+            },
+        ];
+        assert!(validate_rebase_plan(&preview, &reordered).is_ok());
+
+        let invalid = vec![
+            InteractiveRebaseItem {
+                oid: first,
+                action: InteractiveRebaseAction::Squash,
+                summary: None,
+                description: None,
+            },
+            InteractiveRebaseItem {
+                oid: second,
+                action: InteractiveRebaseAction::Pick,
+                summary: None,
+                description: None,
+            },
+        ];
+        assert!(validate_rebase_plan(&preview, &invalid).is_err());
+    }
+
+    #[test]
+    fn maps_reword_and_edit_to_pausing_todo_commands() {
+        assert_eq!(InteractiveRebaseAction::Reword.as_todo_command(), "edit");
+        assert_eq!(InteractiveRebaseAction::Edit.as_todo_command(), "edit");
+    }
+
+    #[test]
+    fn requires_a_valid_summary_for_reword() {
+        let oid = "1".repeat(40);
+        let preview = InteractiveRebasePreview {
+            base_oid: "0".repeat(40),
+            head_oid: oid.clone(),
+            branch: "main".to_owned(),
+            commits: vec![super::InteractiveRebaseCommit {
+                oid: oid.clone(),
+                subject: "Original".to_owned(),
+            }],
+        };
+        let invalid = [InteractiveRebaseItem {
+            oid,
+            action: InteractiveRebaseAction::Reword,
+            summary: Some("".to_owned()),
+            description: None,
+        }];
+        assert!(validate_rebase_plan(&preview, &invalid).is_err());
     }
 }
