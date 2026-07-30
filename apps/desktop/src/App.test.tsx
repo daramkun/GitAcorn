@@ -233,6 +233,7 @@ const sessionWithSnapshot: SessionDto = {
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     mockedCloseAppWindow.mockResolvedValue();
     mockedMinimizeAppWindow.mockResolvedValue();
     mockedToggleMaximizeAppWindow.mockResolvedValue();
@@ -2803,7 +2804,6 @@ describe("App", () => {
   });
 
   it("opens settings modal and allows changing theme between system, light, and dark", async () => {
-    localStorage.clear();
     mockedRestoreSession.mockResolvedValueOnce({
       schemaVersion: 1,
       tabs: [],
@@ -2833,10 +2833,62 @@ describe("App", () => {
 
     expect(localStorage.getItem("gitacorn_theme")).toBe("system");
 
+    const gravatarOption = screen.getByRole("checkbox", {
+      name: /Show Gravatar images|Gravatar 이미지 표시/i,
+    });
+    expect(gravatarOption).not.toBeChecked();
+    expect(localStorage.getItem("gitacorn_show_gravatars")).toBe("false");
+
+    fireEvent.click(gravatarOption);
+
+    expect(gravatarOption).toBeChecked();
+    expect(localStorage.getItem("gitacorn_show_gravatars")).toBe("true");
+
     const closeBtn = screen.getByRole("button", { name: /close settings|설정 닫기/i });
     fireEvent.click(closeBtn);
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows Gravatar images in commit history only when enabled", async () => {
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: "abcdef123456",
+          parents: [],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          subject: "Initial commit",
+          body: "Co-authored-by: Grace Hopper <grace@example.com>",
+          references: ["HEAD -> refs/heads/main"],
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], page: "history" }],
+    });
+
+    const disabledView = render(<App />);
+    await screen.findByRole("button", { name: /Initial commit/ });
+    expect(screen.queryByTitle(/Ada.*Gravatar/i)).not.toBeInTheDocument();
+    disabledView.unmount();
+
+    localStorage.setItem("gitacorn_show_gravatars", "true");
+    render(<App />);
+
+    const avatar = await screen.findByTitle(/Ada.*Gravatar/i);
+    expect(avatar).toHaveAttribute(
+      "src",
+      expect.stringMatching(
+        /^https:\/\/www\.gravatar\.com\/avatar\/[0-9a-f]{64}\?s=40&d=identicon$/,
+      ),
+    );
+    expect(await screen.findByTitle(/Grace Hopper.*Gravatar/i)).toBeInTheDocument();
   });
 });
 

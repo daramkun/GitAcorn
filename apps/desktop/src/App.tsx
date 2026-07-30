@@ -95,6 +95,11 @@ import {
 } from "./repository";
 import { updateRepositoryOperation } from "./remote-operations";
 import { localeTag, t } from "./i18n";
+import {
+  coAuthorsFromCommitBody,
+  gravatarUrl,
+  type GravatarAuthor,
+} from "./gravatar";
 
 type Page = "changes" | "history";
 type AppInfoState =
@@ -419,6 +424,24 @@ export function App() {
     }
     return "system";
   });
+  const [showGravatars, setShowGravatars] = useState(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return localStorage.getItem("gitacorn_show_gravatars") === "true";
+      } catch {
+        // ignore
+      }
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("gitacorn_show_gravatars", String(showGravatars));
+    } catch {
+      // ignore
+    }
+  }, [showGravatars]);
 
   useEffect(() => {
     try {
@@ -1947,6 +1970,7 @@ export function App() {
                 key={activeTab.repoId}
                 tab={activeTab}
                 snapshot={activeSnapshot}
+                showGravatars={showGravatars}
                 onPersist={(patch) => updateActiveTab(patch)}
                 onSnapshot={(snapshot) => {
                   setTabs((current) =>
@@ -2024,6 +2048,22 @@ export function App() {
                     <span className="theme-label">{t("Dark")}</span>
                   </button>
                 </div>
+              </div>
+              <div className="settings-section">
+                <h3>{t("Commit history")}</h3>
+                <label className="settings-toggle-row">
+                  <span>
+                    <strong>{t("Show Gravatar images")}</strong>
+                    <small>
+                      {t("Loads author images from Gravatar using hashed email addresses.")}
+                    </small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={showGravatars}
+                    onChange={(event) => setShowGravatars(event.target.checked)}
+                  />
+                </label>
               </div>
             </div>
           </div>
@@ -5704,6 +5744,7 @@ function ChangesEmpty({ onOpen, opening }: { onOpen: () => void; opening: boolea
 function HistoryView({
   tab,
   snapshot,
+  showGravatars,
   onPersist,
   onSnapshot,
   onError,
@@ -5711,6 +5752,7 @@ function HistoryView({
 }: {
   tab: SessionTabDto;
   snapshot: RepositorySnapshotDto;
+  showGravatars: boolean;
   onPersist: (
     patch: Partial<
       Pick<SessionTabDto, "historyCursor" | "selectedCommit" | "historyFilter">
@@ -6244,7 +6286,20 @@ function HistoryView({
                 />
                 <span className="commit-copy">
                   <strong>{commit.subject}</strong>
-                  <span>{commit.authorName} · {relativeTime(commit.authoredAt)}</span>
+                  <span className="commit-author-line">
+                    {showGravatars && (
+                      <CommitAvatars
+                        primaryAuthor={{
+                          name: commit.authorName,
+                          email: commit.authorEmail,
+                        }}
+                        coAuthors={coAuthorsFromCommitBody(commit.body)}
+                      />
+                    )}
+                    <span>
+                      {commit.authorName} · {relativeTime(commit.authoredAt)}
+                    </span>
+                  </span>
                 </span>
                 <span className="commit-refs">
                   {commit.references.slice(0, 2).map((item) => <small key={item}>{shortRef(item)}</small>)}
@@ -6678,6 +6733,72 @@ function HistoryView({
         </div>
       )}
     </div>
+  );
+}
+
+function CommitAvatars({
+  primaryAuthor,
+  coAuthors,
+}: {
+  primaryAuthor: GravatarAuthor;
+  coAuthors: GravatarAuthor[];
+}) {
+  const primaryEmail = primaryAuthor.email.trim().toLowerCase();
+  const authors = [
+    primaryAuthor,
+    ...coAuthors.filter(
+      (author) => author.email.trim().toLowerCase() !== primaryEmail,
+    ),
+  ];
+
+  return (
+    <span className="commit-avatars">
+      {authors.map((author, index) => (
+        <GravatarAvatar
+          key={author.email.trim().toLowerCase()}
+          authorName={author.name}
+          email={author.email}
+          stackOrder={authors.length - index}
+        />
+      ))}
+    </span>
+  );
+}
+
+function GravatarAvatar({
+  authorName,
+  email,
+  stackOrder,
+}: {
+  authorName: string;
+  email: string;
+  stackOrder: number;
+}) {
+  const [source, setSource] = useState<string>();
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setSource(undefined);
+    setFailed(false);
+    gravatarUrl(email)
+      .then((url) => active && setSource(url))
+      .catch(() => active && setFailed(true));
+    return () => {
+      active = false;
+    };
+  }, [email]);
+
+  if (!source || failed) return null;
+  return (
+    <img
+      className="commit-avatar"
+      src={source}
+      alt=""
+      title={t("{name}'s Gravatar", { name: authorName })}
+      style={{ zIndex: stackOrder }}
+      onError={() => setFailed(true)}
+    />
   );
 }
 

@@ -2189,6 +2189,39 @@ button:disabled {
   font-size: 12px;
 }
 
+.commit-author-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.commit-author-line > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.commit-avatars {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  overflow: visible !important;
+}
+
+.commit-avatar {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-raised);
+}
+
+.commit-avatar + .commit-avatar {
+  margin-left: -8px;
+}
+
 .commit-refs {
   display: flex;
   min-width: 0;
@@ -2785,6 +2818,12 @@ button:disabled {
   color: var(--text);
 }
 
+.settings-section + .settings-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
 .settings-section-desc {
   margin: 0 0 14px;
   font-size: 11px;
@@ -2838,6 +2877,43 @@ button:disabled {
   font-size: 9px;
   color: var(--faint);
   margin-top: 3px;
+}
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  cursor: pointer;
+}
+
+.settings-toggle-row > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-toggle-row strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.settings-toggle-row small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.settings-toggle-row input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
 }
 
 .rebase-status {
