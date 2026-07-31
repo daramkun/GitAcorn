@@ -2676,6 +2676,51 @@ describe("App", () => {
     confirm.mockRestore();
   });
 
+  it("shows remote details from the right-click context menu", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 1, items: ["main"] },
+      remoteBranches: { total: 2, items: ["origin/main", "origin/topic"] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    mockedGetRemotes.mockResolvedValue([
+      { name: "origin", url: "https://example.com/acorn.git" },
+    ]);
+    mockedGetRemoteTags.mockResolvedValue([
+      { remote: "origin", name: "v1.0.0", oid: "999999999999" },
+    ]);
+    render(<App />);
+
+    const origin = await screen.findByRole("button", { name: "Remote origin" });
+    fireEvent.contextMenu(origin, { clientX: 120, clientY: 160 });
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Refresh remote tags" }),
+    );
+    await screen.findByRole("button", { name: "Tag v1.0.0" });
+
+    fireEvent.contextMenu(origin, { clientX: 120, clientY: 160 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remote details" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Remote details" });
+    expect(within(dialog).getByText("origin")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("https://example.com/acorn.git"),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("main")).toBeInTheDocument();
+    expect(within(dialog).getByText("topic")).toBeInTheDocument();
+    expect(within(dialog).getByText("v1.0.0")).toBeInTheDocument();
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Close remote details" }),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Remote details" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("groups remote branches and remote tags under Remote", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedGetSidebar.mockResolvedValue({

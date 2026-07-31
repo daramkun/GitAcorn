@@ -168,6 +168,12 @@ type SubmoduleContextMenu = {
   submodule: SubmoduleItem;
 };
 
+type RemoteDetails = {
+  remote: GitRemoteDto;
+  branches: string[];
+  tags: RemoteTagDto[];
+};
+
 type ReferenceEditor =
   | { mode: "createBranch"; source: string }
   | { mode: "renameBranch"; name: string; upstream?: string }
@@ -410,6 +416,7 @@ export function App() {
     y: number;
     remote?: GitRemoteDto;
   }>();
+  const [remoteDetails, setRemoteDetails] = useState<RemoteDetails>();
   const [referenceContextMenu, setReferenceContextMenu] =
     useState<ReferenceContextMenu>();
   const [stashContextMenu, setStashContextMenu] =
@@ -529,6 +536,7 @@ export function App() {
         if (showSubmoduleAdd) setShowSubmoduleAdd(false);
         else if (remoteEditor) setRemoteEditor(undefined);
         else if (remoteDialog) setRemoteDialog(undefined);
+        else if (remoteDetails) setRemoteDetails(undefined);
         else if (checkoutTarget) setCheckoutTarget(undefined);
         else if (stashDialog) setStashDialog(undefined);
         else if (referenceDeleteDialog) setReferenceDeleteDialog(undefined);
@@ -554,6 +562,7 @@ export function App() {
     submoduleContextMenu,
     stashDialog,
     remoteContextMenu,
+    remoteDetails,
     remoteDialog,
     remoteEditor,
     showRepositorySettings,
@@ -3133,6 +3142,26 @@ export function App() {
                 type="button"
                 role="menuitem"
                 onClick={() => {
+                  const selectedRemote = remoteContextMenu.remote;
+                  const entry = remoteSidebarEntries.find(
+                    (item) => item.name === selectedRemote?.name,
+                  );
+                  if (selectedRemote) {
+                    setRemoteDetails({
+                      remote: selectedRemote,
+                      branches: entry?.branches ?? [],
+                      tags: entry?.tags ?? [],
+                    });
+                  }
+                  setRemoteContextMenu(undefined);
+                }}
+              >
+                {t("Remote details")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
                   setRemoteEditor({
                     mode: "edit",
                     remote: remoteContextMenu.remote,
@@ -3194,6 +3223,12 @@ export function App() {
             </button>
           )}
         </div>
+      )}
+      {remoteDetails && (
+        <RemoteDetailsDialog
+          details={remoteDetails}
+          onClose={() => setRemoteDetails(undefined)}
+        />
       )}
       {remoteEditor && activeSnapshot && (
         <RemoteEditor
@@ -3403,6 +3438,87 @@ function SubmoduleAddDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+function RemoteDetailsDialog({
+  details,
+  onClose,
+}: {
+  details: RemoteDetails;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-overlay" onClick={onClose} role="presentation">
+      <div
+        className="settings-modal remote-details-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="remote-details-title"
+      >
+        <div className="settings-modal-header">
+          <h2 id="remote-details-title">{t("Remote details")}</h2>
+          <button
+            className="settings-close-btn"
+            type="button"
+            aria-label={t("Close remote details")}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="remote-details-body">
+          <dl className="remote-details-summary">
+            <div>
+              <dt>{t("Remote name")}</dt>
+              <dd>{details.remote.name}</dd>
+            </div>
+            <div>
+              <dt>{t("Remote URL")}</dt>
+              <dd>{details.remote.url || t("Not available")}</dd>
+            </div>
+          </dl>
+          <RemoteDetailsReferences
+            title={t("Branches")}
+            emptyMessage={t("No remote branches")}
+            items={details.branches}
+          />
+          <RemoteDetailsReferences
+            title={t("Tags")}
+            emptyMessage={t("No remote tags")}
+            items={details.tags.map((tag) => tag.name)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RemoteDetailsReferences({
+  title,
+  emptyMessage,
+  items,
+}: {
+  title: string;
+  emptyMessage: string;
+  items: string[];
+}) {
+  return (
+    <section className="remote-details-references">
+      <h3>
+        {title} <span>{items.length}</span>
+      </h3>
+      {items.length ? (
+        <ul>
+          {items.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <p>{emptyMessage}</p>
+      )}
+    </section>
   );
 }
 

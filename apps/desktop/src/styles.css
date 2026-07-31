@@ -2859,6 +2859,83 @@ button:disabled {
   width: 560px;
 }
 
+.remote-details-modal {
+  width: 520px;
+}
+
+.remote-details-body {
+  display: grid;
+  gap: 18px;
+  max-height: min(620px, 75vh);
+  overflow-y: auto;
+  padding: 18px 20px 20px;
+}
+
+.remote-details-summary {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.remote-details-summary > div {
+  display: grid;
+  gap: 4px;
+}
+
+.remote-details-summary dt,
+.remote-details-references h3 {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.remote-details-summary dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.remote-details-references {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.remote-details-references h3,
+.remote-details-references p {
+  margin: 0;
+}
+
+.remote-details-references h3 span {
+  margin-left: 4px;
+  color: var(--faint);
+  font-weight: 500;
+}
+
+.remote-details-references ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.remote-details-references li {
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.remote-details-references p {
+  color: var(--faint);
+  font-size: 11px;
+}
+
 .remote-operation-modal {
   width: 420px;
 }
