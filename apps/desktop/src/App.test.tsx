@@ -1237,7 +1237,12 @@ describe("App", () => {
     render(<App />);
 
     await screen.findByText("acorn-demo");
-    fireEvent.click(screen.getByRole("button", { name: /Add submodule/ }));
+    const addButton = screen.getByRole("button", { name: "Add submodule" });
+    expect(addButton).toHaveTextContent("+");
+    expect(addButton.closest(".sidebar-group-row")).toHaveTextContent(
+      "Submodules",
+    );
+    fireEvent.click(addButton);
 
     const dialog = screen.getByRole("dialog", { name: "Add submodule" });
     fireEvent.change(

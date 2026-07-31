@@ -2333,15 +2333,12 @@ export function App() {
               label={t("Submodules")}
               count={filteredSubmodules.length}
               initialLimit={999}
+              action={{
+                label: t("Add submodule"),
+                disabled: !activeSnapshot,
+                onClick: () => setShowSubmoduleAdd(true),
+              }}
             >
-              <button
-                className="submodule-add-button"
-                type="button"
-                disabled={!activeSnapshot}
-                onClick={() => setShowSubmoduleAdd(true)}
-              >
-                ＋ {t("Add submodule")}
-              </button>
               {filteredSubmodules.map((submodule) => (
                 <div
                   className="submodule-item"
@@ -4625,6 +4622,7 @@ function SidebarGroup({
   children,
   initialLimit = 5,
   defaultExpanded = true,
+  action,
   onClearSelection,
   onContextMenu,
 }: {
@@ -4633,6 +4631,11 @@ function SidebarGroup({
   children?: ReactNode;
   initialLimit?: number;
   defaultExpanded?: boolean;
+  action?: {
+    label: string;
+    disabled?: boolean;
+    onClick: () => void;
+  };
   onClearSelection?: () => void;
   onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
@@ -4659,25 +4662,39 @@ function SidebarGroup({
         onClearSelection();
       }}
     >
-      <div
-        className="sidebar-group"
-        role="button"
-        tabIndex={0}
-        aria-expanded={isExpanded}
-        onContextMenu={onContextMenu}
-        onClick={() => setIsExpanded((prev) => !prev)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setIsExpanded((prev) => !prev);
-          }
-        }}
-      >
-        <span className={`group-chevron ${isExpanded ? "open" : ""}`} aria-hidden="true">
-          ›
-        </span>
-        {label}
-        {itemCount !== undefined && <small>({itemCount})</small>}
+      <div className="sidebar-group-row">
+        <div
+          className="sidebar-group"
+          role="button"
+          tabIndex={0}
+          aria-expanded={isExpanded}
+          onContextMenu={onContextMenu}
+          onClick={() => setIsExpanded((prev) => !prev)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setIsExpanded((prev) => !prev);
+            }
+          }}
+        >
+          <span className={`group-chevron ${isExpanded ? "open" : ""}`} aria-hidden="true">
+            ›
+          </span>
+          {label}
+          {itemCount !== undefined && <small>({itemCount})</small>}
+        </div>
+        {action && (
+          <button
+            className="sidebar-group-action"
+            type="button"
+            aria-label={action.label}
+            title={action.label}
+            disabled={action.disabled}
+            onClick={action.onClick}
+          >
+            +
+          </button>
+        )}
       </div>
       {isExpanded && childArray.length > 0 && (
         <div className="sidebar-items">
