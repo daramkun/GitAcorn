@@ -396,6 +396,7 @@ pub struct SessionTabDto {
     pub selected_commit: Option<String>,
     pub history_filter: Option<String>,
     pub unavailable: bool,
+    pub loading: bool,
     pub snapshot: Option<RepositorySnapshotDto>,
 }
 
@@ -683,6 +684,7 @@ impl From<Vec<SessionTabState>> for SessionDto {
                     selected_commit: tab.stored.selected_commit,
                     history_filter: tab.stored.history_filter,
                     unavailable: tab.unavailable,
+                    loading: tab.loading,
                     snapshot: tab.snapshot.map(RepositorySnapshotDto::from),
                 })
                 .collect(),

@@ -291,6 +291,51 @@ button:focus-visible {
     var(--bg);
 }
 
+.session-loading-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: var(--font-size-lg);
+}
+
+.repository-loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  color: var(--muted);
+  font-size: var(--font-size-lg);
+}
+
+.session-loading-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: session-loading-spin 700ms linear infinite;
+}
+
+@keyframes session-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-loading-spinner {
+    animation-duration: 1400ms;
+  }
+}
+
 .titlebar,
 .tabbar,
 .contextbar {

@@ -431,14 +431,74 @@ describe("App", () => {
   it("renders the typed app info returned by the Rust core", async () => {
     render(<App />);
 
-    expect(screen.getByText("Connecting to core…")).toBeInTheDocument();
     expect(await screen.findByText("Tauri 2 · v0.1.0")).toBeInTheDocument();
+  });
+
+  it("shows only the centered session loading state while restoring", () => {
+    mockedRestoreSession.mockImplementation(() => new Promise(() => undefined));
+
+    render(<App />);
+
+    const loadingState = screen.getByRole("status");
+    expect(loadingState).toHaveTextContent("Loading session");
+    expect(loadingState).toHaveClass("session-loading-screen");
+    expect(loadingState.querySelector(".session-loading-spinner")).toBeInTheDocument();
+    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+  });
+
+  it("renders the active repository first and fills inactive tabs in the background", async () => {
+    const inactiveSnapshot: RepositorySnapshotDto = {
+      ...snapshot,
+      repository: {
+        ...snapshot.repository,
+        id: "2fbb5062-b9d5-4aa4-a5e7-75bd9cf4dc51",
+        name: "second-repo",
+        worktreePath: "C:\\Code\\second-repo",
+      },
+      changes: [],
+    };
+    let completeSnapshotLoad:
+      | ((snapshot: RepositorySnapshotDto) => void)
+      | undefined;
+    mockedGetSnapshot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          completeSnapshotLoad = resolve;
+        }),
+    );
+    mockedRestoreSession.mockResolvedValue({
+      schemaVersion: 1,
+      tabs: [
+        sessionWithSnapshot.tabs[0],
+        {
+          repoId: inactiveSnapshot.repository.id,
+          worktreeId: "worktree-two",
+          worktreePath: inactiveSnapshot.repository.worktreePath,
+          active: false,
+          page: "changes",
+          selectedDiff: "unstaged",
+          panelWidth: 280,
+          unavailable: false,
+          loading: true,
+        },
+      ],
+    });
+
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    expect(screen.getByRole("button", { name: /^second-repo…$/ })).toBeInTheDocument();
+    expect(mockedGetSnapshot).toHaveBeenCalledWith(inactiveSnapshot.repository.id);
+
+    await act(async () => completeSnapshotLoad?.(inactiveSnapshot));
+
+    expect(await screen.findByRole("button", { name: /^second-repo0$/ })).toBeInTheDocument();
   });
 
   it("renders a draggable custom titlebar with native window actions", async () => {
     render(<App />);
 
-    expect(screen.getByRole("banner")).toHaveAttribute("data-tauri-drag-region");
+    expect(await screen.findByRole("banner")).toHaveAttribute("data-tauri-drag-region");
     fireEvent.click(screen.getByRole("button", { name: "Minimize window" }));
     fireEvent.click(screen.getByRole("button", { name: "Maximize or restore window" }));
     fireEvent.click(screen.getByRole("button", { name: "Close window" }));
@@ -839,7 +899,10 @@ describe("App", () => {
     mockedChooseRepository.mockResolvedValue("C:\\Code\\acorn-demo");
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open a repository" }));
+    const [openRepository] = await screen.findAllByRole("button", {
+      name: "Open a repository",
+    });
+    fireEvent.click(openRepository);
 
     expect(await screen.findByText("acorn-demo")).toBeInTheDocument();
     expect(screen.getByText("main · Changes")).toBeInTheDocument();
@@ -1597,7 +1660,10 @@ describe("App", () => {
     });
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open a repository" }));
+    const [openRepository] = await screen.findAllByRole("button", {
+      name: "Open a repository",
+    });
+    fireEvent.click(openRepository);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("not inside a Git working tree");
     expect(screen.getByRole("button", { name: "Choose another folder" })).toBeInTheDocument();
@@ -3202,7 +3268,7 @@ describe("App", () => {
 
     render(<App />);
 
-    const settingsBtn = screen.getByRole("button", {
+    const settingsBtn = await screen.findByRole("button", {
       name: /^Settings$|^설정$/i,
     });
     fireEvent.click(settingsBtn);
@@ -3339,7 +3405,7 @@ describe("App", () => {
     });
 
     render(<App />);
-    const repositorySettings = screen.getByRole("button", {
+    const repositorySettings = await screen.findByRole("button", {
       name: /Repository settings|저장소 설정/i,
     });
     expect(repositorySettings).toBeDisabled();

@@ -56,6 +56,8 @@ const korean = {
   "Minimize window": "창 최소화",
   "Maximize or restore window": "창 최대화 또는 복원",
   "Close window": "창 닫기",
+  "Loading session": "세션 불러 오는 중",
+  "Loading repository": "저장소 불러오는 중",
   "Restoring session…": "세션 복원 중…",
   "No repositories open": "열린 저장소 없음",
   "Move {name} left": "{name} 왼쪽으로 이동",

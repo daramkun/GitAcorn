@@ -31,6 +31,7 @@ pub struct SessionTabState {
     pub stored: SessionTab,
     pub snapshot: Option<RepositorySnapshot>,
     pub unavailable: bool,
+    pub loading: bool,
 }
 
 pub struct SessionTabUpdate {
@@ -130,7 +131,7 @@ impl ApplicationState {
             })
             .await
             .map_err(persistence_error)?;
-        self.session_tabs(Some((repo_id, snapshot))).await
+        self.session_tabs(Some((repo_id, snapshot)), false).await
     }
 
     pub async fn restore_session(&self, app: &AppHandle) -> Result<Vec<SessionTabState>, AppError> {
@@ -169,11 +170,10 @@ impl ApplicationState {
                 Err(error) => return Err(error),
             }
         }
-        self.backfill_submodule_sources().await?;
-        self.session_tabs(None).await
+        self.session_tabs(None, true).await
     }
 
-    async fn backfill_submodule_sources(&self) -> Result<(), AppError> {
+    pub(crate) async fn backfill_submodule_sources(&self) -> Result<(), AppError> {
         let repositories = self
             .repositories
             .lock()
@@ -854,7 +854,7 @@ impl ApplicationState {
                 .expect("watcher registry lock poisoned")
                 .remove(&current.worktree_id);
         }
-        self.session_tabs(Some((repo_id, snapshot))).await
+        self.session_tabs(Some((repo_id, snapshot)), false).await
     }
 
     pub async fn activate_tab(&self, repo_id: &str) -> Result<(), AppError> {
@@ -889,7 +889,7 @@ impl ApplicationState {
                 .await
                 .map_err(persistence_error)?;
         }
-        self.session_tabs(None).await
+        self.session_tabs(None, false).await
     }
 
     pub async fn reorder_tabs(&self, repo_ids: &[String]) -> Result<(), AppError> {
@@ -1077,12 +1077,21 @@ impl ApplicationState {
     async fn session_tabs(
         &self,
         known_snapshot: Option<(RepoId, RepositorySnapshot)>,
+        defer_inactive_snapshots: bool,
     ) -> Result<Vec<SessionTabState>, AppError> {
         let tabs = self.load_stored_tabs().await?;
         let mut result = Vec::with_capacity(tabs.len());
         for tab in tabs {
             let repo_id = parse_repo_id(&tab.repo_id)?;
-            let snapshot = if known_snapshot
+            let registered = self
+                .repositories
+                .lock()
+                .expect("repository registry lock poisoned")
+                .contains_key(&repo_id);
+            let loading = defer_inactive_snapshots && !tab.active && registered;
+            let snapshot = if loading {
+                None
+            } else if known_snapshot
                 .as_ref()
                 .is_some_and(|(known_id, _)| *known_id == repo_id)
             {
@@ -1093,7 +1102,8 @@ impl ApplicationState {
                 self.repository_snapshot(&tab.repo_id).ok()
             };
             result.push(SessionTabState {
-                unavailable: snapshot.is_none(),
+                unavailable: !loading && snapshot.is_none(),
+                loading,
                 snapshot,
                 stored: tab,
             });

@@ -94,6 +94,7 @@ export type SessionTabDto = {
   selectedCommit?: string;
   historyFilter?: string;
   unavailable: boolean;
+  loading?: boolean;
   snapshot?: RepositorySnapshotDto;
 };
 

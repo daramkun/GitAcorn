@@ -286,11 +286,17 @@ pub async fn session_restore(
     app: AppHandle,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<SessionDto> {
-    state
+    let session = state
         .restore_session(&app)
         .await
         .map(SessionDto::from)
-        .map_err(|error| AppErrorDto::from(&error))
+        .map_err(|error| AppErrorDto::from(&error))?;
+    let background_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = background_app.state::<ApplicationState>();
+        let _ = state.backfill_submodule_sources().await;
+    });
+    Ok(session)
 }
 
 #[tauri::command]

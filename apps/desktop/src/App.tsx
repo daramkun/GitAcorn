@@ -390,6 +390,8 @@ export function App() {
     edge: "before" | "after";
   }>();
   const [sessionLoading, setSessionLoading] = useState(true);
+  const backgroundSnapshotLoadsRef = useRef<Set<string>>(new Set());
+  const appMountedRef = useRef(true);
   const [opening, setOpening] = useState(false);
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
   const [sidebars, setSidebars] = useState<Record<string, RepositorySidebarDto>>({});
@@ -1019,6 +1021,65 @@ export function App() {
       });
     }
   };
+
+  useEffect(() => {
+    appMountedRef.current = true;
+    return () => {
+      appMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    for (const tab of tabs) {
+      if (
+        !tab.loading ||
+        tab.snapshot ||
+        tab.unavailable ||
+        backgroundSnapshotLoadsRef.current.has(tab.repoId)
+      ) {
+        continue;
+      }
+      backgroundSnapshotLoadsRef.current.add(tab.repoId);
+      getRepositorySnapshot(tab.repoId)
+        .then((snapshot) => {
+          if (!appMountedRef.current) return;
+          setTabs((current) =>
+            current.map((currentTab) => {
+              if (currentTab.repoId !== tab.repoId) return currentTab;
+              if (
+                currentTab.snapshot &&
+                currentTab.snapshot.revision > snapshot.revision
+              ) {
+                return { ...currentTab, loading: false };
+              }
+              return {
+                ...currentTab,
+                snapshot,
+                unavailable: false,
+                loading: false,
+              };
+            }),
+          );
+        })
+        .catch(() => {
+          if (!appMountedRef.current) return;
+          setTabs((current) =>
+            current.map((currentTab) =>
+              currentTab.repoId === tab.repoId
+                ? {
+                    ...currentTab,
+                    loading: false,
+                    unavailable: !currentTab.snapshot,
+                  }
+                : currentTab,
+            ),
+          );
+        })
+        .finally(() => {
+          backgroundSnapshotLoadsRef.current.delete(tab.repoId);
+        });
+    }
+  }, [tabs]);
 
   useEffect(() => {
     document.documentElement.lang = localeTag();
@@ -1863,6 +1924,15 @@ export function App() {
         : t("Unborn branch")
     : undefined;
 
+  if (sessionLoading) {
+    return (
+      <main className="session-loading-screen" role="status" aria-live="polite">
+        <span>{t("Loading session")}</span>
+        <span className="session-loading-spinner" aria-hidden="true" />
+      </main>
+    );
+  }
+
   return (
     <div className="app-shell">
       <header className="titlebar" data-tauri-drag-region>
@@ -2003,7 +2073,13 @@ export function App() {
                     </small>
                   )}
                 </span>
-                <span>{tab.unavailable ? "!" : (tab.snapshot?.changes.length ?? 0)}</span>
+                <span>
+                  {tab.unavailable
+                    ? "!"
+                    : tab.loading
+                      ? "…"
+                      : (tab.snapshot?.changes.length ?? 0)}
+                </span>
               </button>
               <div className="tab-controls">
                 <button type="button" aria-label={t("Close {name}", { name: repositoryName(tab.worktreePath) })} onClick={() => closeTab(tab.repoId)}>×</button>
@@ -2421,6 +2497,11 @@ export function App() {
           {appInfo.status !== "error" && error && <ErrorBanner title={t("Repository session needs attention.")} message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? t("Choose another folder") : undefined} onAction={handleOpenRepository} />}
           {alphaFeaturesEnabled && showOperationCenter ? (
             <OperationsView onError={reportError} />
+          ) : activeTab?.loading ? (
+            <div className="repository-loading-state" role="status">
+              <span>{t("Loading repository")}</span>
+              <span className="session-loading-spinner" aria-hidden="true" />
+            </div>
           ) : activeTab?.unavailable ? (
             <UnavailableRepository tab={activeTab} onLocate={handleOpenRepository} />
           ) : page === "changes" ? (
