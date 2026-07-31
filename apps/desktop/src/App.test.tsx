@@ -2746,8 +2746,13 @@ describe("App", () => {
     });
     const remoteGroup = remoteBranch.closest(".sidebar-read-group");
     const remoteNode = remoteBranch.closest(".remote-reference-node");
+    const remoteChildren = remoteBranch.closest(
+      ".remote-reference-children",
+    );
     expect(remoteGroup).not.toBeNull();
     expect(remoteNode).not.toBeNull();
+    expect(remoteChildren).toHaveAttribute("role", "group");
+    expect(remoteChildren).toContainElement(remoteBranch);
     expect(remoteGroup?.querySelector(".sidebar-group")).toHaveTextContent("Remote");
     expect(screen.queryByText(/Remote Branches/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Remote Tags/)).not.toBeInTheDocument();
@@ -2771,6 +2776,25 @@ describe("App", () => {
     expect(localTagsGroup?.querySelector(".sidebar-group")).toHaveTextContent("Tags");
     expect(localTagsGroup).toContainElement(localTag);
     expect(localTagsGroup).not.toContainElement(remoteTag);
+  });
+
+  it("uses the branch icon for current and non-current local branches", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 2, items: ["main", "topic"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const main = await screen.findByRole("button", { name: "Branch main" });
+    const topic = screen.getByRole("button", { name: "Branch topic" });
+    expect(main.querySelector(".branch-icon")).toHaveTextContent("⎇");
+    expect(topic.querySelector(".branch-icon")).toHaveTextContent("⎇");
+    expect(main.querySelector(".branch-icon")).not.toHaveTextContent("●");
   });
 
   it("validates and submits the commit form", async () => {

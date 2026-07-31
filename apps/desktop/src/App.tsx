@@ -4422,7 +4422,7 @@ function BranchTreeNodeView({
         }}
       >
         <span className="branch-icon" aria-hidden="true">
-          {isCurrent ? "● " : "⎇ "}
+          ⎇
         </span>
         <span className="branch-name" title={referencePath}>
           {node.name}
@@ -4556,7 +4556,10 @@ function RemoteReferenceNode({
         <small className="tree-node-count">({branches.length + tags.length})</small>
       </div>
       {isExpanded && (
-        <div className="tree-node-children remote-reference-children">
+        <div
+          className="tree-node-children remote-reference-children"
+          role="group"
+        >
           {branchTree.map((node) => (
             <BranchTreeNodeView
               key={node.id}
