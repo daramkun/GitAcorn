@@ -3377,10 +3377,68 @@ describe("App", () => {
     expect(gravatarOption).toBeChecked();
     expect(localStorage.getItem("gitacorn_show_gravatars")).toBe("true");
 
+    const compactGraphOption = screen.getByRole("checkbox", {
+      name: /Compact commit graph|커밋 그래프 작게 보기/i,
+    });
+    expect(compactGraphOption).not.toBeChecked();
+    expect(localStorage.getItem("gitacorn_compact_commit_graph")).toBe("false");
+
+    fireEvent.click(compactGraphOption);
+
+    expect(compactGraphOption).toBeChecked();
+    expect(localStorage.getItem("gitacorn_compact_commit_graph")).toBe("true");
+
     const closeBtn = screen.getByRole("button", { name: /close settings|설정 닫기/i });
     fireEvent.click(closeBtn);
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("uses a one-line compact layout for the commit graph when enabled", async () => {
+    localStorage.setItem("gitacorn_compact_commit_graph", "true");
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+
+    const commitRow = await screen.findByRole("button", {
+      name: /Initial commit/,
+    });
+    expect(commitRow.closest(".commit-list")).toHaveClass("compact");
+    expect(commitRow.querySelector(".commit-graph")).toHaveAttribute(
+      "viewBox",
+      "0 0 44 32",
+    );
+  });
+
+  it("copies the full commit SHA from the commit context menu", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    const commitRow = await screen.findByRole("button", {
+      name: /Initial commit/,
+    });
+
+    fireEvent.contextMenu(commitRow);
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /Copy commit SHA|커밋 SHA 복사/i }),
+    );
+
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("abcdef123456"),
+    );
+    expect(screen.queryByRole("menu", { name: /Commit actions|커밋 작업/i }))
+      .not.toBeInTheDocument();
   });
 
   it("updates global and repository Git identity from separate settings menus", async () => {

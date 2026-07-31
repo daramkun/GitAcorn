@@ -481,6 +481,16 @@ export function App() {
     }
     return false;
   });
+  const [compactCommitGraph, setCompactCommitGraph] = useState(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return localStorage.getItem("gitacorn_compact_commit_graph") === "true";
+      } catch {
+        // ignore
+      }
+    }
+    return false;
+  });
 
   useEffect(() => {
     try {
@@ -489,6 +499,17 @@ export function App() {
       // ignore
     }
   }, [showGravatars]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "gitacorn_compact_commit_graph",
+        String(compactCommitGraph),
+      );
+    } catch {
+      // ignore
+    }
+  }, [compactCommitGraph]);
 
   useEffect(() => {
     try {
@@ -2568,6 +2589,7 @@ export function App() {
                 tab={activeTab}
                 snapshot={activeSnapshot}
                 showGravatars={showGravatars}
+                compactCommitGraph={compactCommitGraph}
                 onPersist={(patch) => updateActiveTab(patch)}
                 onSnapshot={(snapshot) => {
                   setTabs((current) =>
@@ -2717,6 +2739,21 @@ export function App() {
               </div>
               <div className="settings-section">
                 <h3>{t("Commit history")}</h3>
+                <label className="settings-toggle-row">
+                  <span>
+                    <strong>{t("Compact commit graph")}</strong>
+                    <small>
+                      {t("Shows each commit on one line with smaller text.")}
+                    </small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={compactCommitGraph}
+                    onChange={(event) =>
+                      setCompactCommitGraph(event.target.checked)
+                    }
+                  />
+                </label>
                 <label className="settings-toggle-row">
                   <span>
                     <strong>{t("Show Gravatar images")}</strong>
@@ -6845,6 +6882,7 @@ function HistoryView({
   tab,
   snapshot,
   showGravatars,
+  compactCommitGraph,
   onPersist,
   onSnapshot,
   onError,
@@ -6853,6 +6891,7 @@ function HistoryView({
   tab: SessionTabDto;
   snapshot: RepositorySnapshotDto;
   showGravatars: boolean;
+  compactCommitGraph: boolean;
   onPersist: (
     patch: Partial<
       Pick<SessionTabDto, "historyCursor" | "selectedCommit" | "historyFilter">
@@ -7117,6 +7156,16 @@ function HistoryView({
     }
   }
 
+  async function copyCommitSha(commit: CommitDto) {
+    setRebaseMenu(undefined);
+    onClearError();
+    try {
+      await navigator.clipboard.writeText(commit.oid);
+    } catch (reason: unknown) {
+      onError(reason);
+    }
+  }
+
   function moveRebaseItem(index: number, offset: -1 | 1) {
     const destination = index + offset;
     if (destination < 0 || destination >= rebasePlan.length) return;
@@ -7333,7 +7382,7 @@ function HistoryView({
           <div className="history-state">{t("No commits match this filter.")}</div>
         ) : (
           <div
-            className="commit-list"
+            className={`commit-list${compactCommitGraph ? " compact" : ""}`}
             style={{ "--graph-width": `${graphWidth}px` } as CSSProperties}
           >
             {commits.map((commit, index) => (
@@ -7379,6 +7428,7 @@ function HistoryView({
                 <CommitGraph
                   row={graph.rows[index]}
                   width={graphWidth}
+                  compact={compactCommitGraph}
                   label={t("Graph lane {lane} of {total}", {
                     lane: graph.rows[index].nodeLane + 1,
                     total: graph.rows[index].laneCount,
@@ -7573,6 +7623,13 @@ function HistoryView({
           style={{ left: rebaseMenu.x, top: rebaseMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void copyCommitSha(rebaseMenu.commit)}
+          >
+            {t("Copy commit SHA")}
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -7903,7 +7960,7 @@ function GravatarAvatar({
 }
 
 const GRAPH_ROW_HEIGHT = 56;
-const GRAPH_NODE_Y = GRAPH_ROW_HEIGHT / 2;
+const COMPACT_GRAPH_ROW_HEIGHT = 32;
 const GRAPH_LANE_GAP = 16;
 const GRAPH_LANE_OFFSET = 12;
 
@@ -7911,17 +7968,21 @@ function CommitGraph({
   row,
   width,
   label,
+  compact,
 }: {
   row: CommitGraphRow;
   width: number;
   label: string;
+  compact: boolean;
 }) {
+  const rowHeight = compact ? COMPACT_GRAPH_ROW_HEIGHT : GRAPH_ROW_HEIGHT;
+  const nodeY = rowHeight / 2;
   const laneX = (lane: number) => GRAPH_LANE_OFFSET + lane * GRAPH_LANE_GAP;
 
   return (
     <svg
       className="commit-graph"
-      viewBox={`0 0 ${width} ${GRAPH_ROW_HEIGHT}`}
+      viewBox={`0 0 ${width} ${rowHeight}`}
       role="img"
       aria-label={label}
     >
@@ -7929,13 +7990,13 @@ function CommitGraph({
         <path
           key={`${segment.from}-${segment.to}-${segment.fromLane}-${segment.toLane}-${index}`}
           className={`graph-edge graph-color-${segment.color % 8}`}
-          d={graphSegmentPath(segment, laneX)}
+          d={graphSegmentPath(segment, laneX, rowHeight)}
         />
       ))}
       <circle
         className={`graph-commit-node graph-color-${row.nodeColor % 8}`}
         cx={laneX(row.nodeLane)}
-        cy={GRAPH_NODE_Y}
+        cy={nodeY}
         r="5"
       />
     </svg>
@@ -7945,9 +8006,11 @@ function CommitGraph({
 function graphSegmentPath(
   segment: GraphSegment,
   laneX: (lane: number) => number,
+  rowHeight: number,
 ) {
-  const startY = segment.from === "top" ? 0 : GRAPH_NODE_Y;
-  const endY = segment.to === "node" ? GRAPH_NODE_Y : GRAPH_ROW_HEIGHT;
+  const nodeY = rowHeight / 2;
+  const startY = segment.from === "top" ? 0 : nodeY;
+  const endY = segment.to === "node" ? nodeY : rowHeight;
   const startX = laneX(segment.fromLane);
   const endX = laneX(segment.toLane);
   const middleY = (startY + endY) / 2;

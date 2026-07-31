@@ -2318,6 +2318,49 @@ button:disabled {
   box-shadow: inset 3px 0 var(--accent);
 }
 
+.commit-list.compact .commit-row {
+  grid-template-columns: var(--graph-width) minmax(260px, 1fr) minmax(70px, auto) 58px;
+  min-height: 32px;
+  gap: 8px;
+  padding-right: 10px;
+}
+
+.commit-list.compact .commit-graph {
+  height: 32px;
+}
+
+.commit-list.compact .commit-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px;
+  align-items: center;
+  gap: 6px;
+}
+
+.commit-list.compact .commit-copy strong {
+  min-width: 0;
+  font-size: 11px;
+}
+
+.commit-list.compact .commit-author-line,
+.commit-list.compact .commit-row code {
+  font-size: 10px;
+}
+
+.commit-list.compact .commit-author-line {
+  min-width: 0;
+}
+
+.commit-list.compact .commit-avatar {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+}
+
+.commit-list.compact .commit-refs small {
+  padding: 1px 5px;
+  font-size: 9px;
+}
+
 .commit-row.remote-only {
   opacity: 0.55;
 }
