@@ -1532,7 +1532,7 @@ button:disabled {
   letter-spacing: 0.02em;
 }
 
-.panel-heading span {
+.panel-heading .change-count {
   min-width: 19px;
   padding: 2px 5px;
   border-radius: 8px;
@@ -1558,6 +1558,60 @@ button:disabled {
   flex: 1;
   min-height: 0;
   user-select: none;
+}
+
+.change-heading-actions,
+.change-view-toggle {
+  display: flex;
+  align-items: center;
+}
+
+.change-heading-actions {
+  gap: 7px;
+}
+
+.change-view-toggle {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.change-view-toggle button {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 23px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.change-view-toggle button + button {
+  border-left: 1px solid var(--border);
+}
+
+.change-view-toggle button:hover,
+.change-view-toggle button.active {
+  background: var(--surface-soft);
+  color: var(--accent-strong);
+}
+
+.change-view-toggle button:focus-visible {
+  position: relative;
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.change-view-toggle svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
 }
 
 .change-section.drop-target {
@@ -1592,11 +1646,11 @@ button:disabled {
 
 .change-row {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: 22px 16px minmax(0, 1fr) auto;
   align-items: center;
   width: 100%;
   gap: 7px;
-  padding: 7px;
+  padding: 7px 7px 7px calc(7px + var(--tree-indent, 0px));
   min-height: 34px;
   border: 0;
   border-radius: 5px;
@@ -1665,6 +1719,74 @@ button:disabled {
   justify-content: flex-start;
   padding: 0;
   text-align: left;
+}
+
+.change-tree-folder {
+  display: grid;
+  grid-template-columns: 12px 16px minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  gap: 5px;
+  padding: 7px 7px 7px calc(7px + var(--tree-indent, 0px));
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  text-align: left;
+}
+
+.change-tree-folder:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.change-tree-folder:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tree-chevron {
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+  transform: rotate(0deg);
+  transition: transform 0.12s ease;
+}
+
+.tree-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+.change-file-icon,
+.change-folder-icon {
+  fill: color-mix(in srgb, currentColor 9%, transparent);
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.15;
+}
+
+.change-file-icon {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  color: var(--muted);
+}
+
+.change-file-icon.system {
+  fill: none;
+  stroke: none;
+}
+
+.change-folder-icon {
+  width: 15px;
+  height: 15px;
+  color: #b58a4d;
 }
 
 .diff-content {

@@ -1,6 +1,7 @@
 mod commands;
 mod dto;
 mod state;
+mod system_icons;
 #[cfg(windows)]
 mod windows_snap;
 
@@ -33,6 +34,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::system_file_icons,
             commands::git_identity_get,
             commands::git_identity_update_global,
             commands::git_identity_update_repository,

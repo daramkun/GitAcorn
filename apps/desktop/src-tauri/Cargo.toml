@@ -18,10 +18,12 @@ tauri-build = { version = "2.4", features = [] }
 
 [dependencies]
 app-core = { path = "../../../crates/app-core" }
+base64 = "0.22"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
 git-domain = { path = "../../../crates/git-domain" }
 git-cli = { path = "../../../crates/git-cli" }
 notify = "8.0"
+png = "0.17"
 persistence = { path = "../../../crates/persistence" }
 serde.workspace = true
 sqlx.workspace = true
@@ -30,6 +32,29 @@ tauri-plugin-dialog = "2.4"
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Graphics_Gdi",
+  "Win32_Storage_FileSystem",
+  "Win32_UI_Controls",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "NSBitmapImageRep",
+  "NSImage",
+  "NSImageRep",
+  "NSWorkspace",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "NSData",
+  "NSDictionary",
+  "NSString",
+] }
 
 [dev-dependencies]
 serde_json.workspace = true

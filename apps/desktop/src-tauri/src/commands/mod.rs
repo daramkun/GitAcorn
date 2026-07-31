@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use app_core::{
     AppError, AppErrorDto, ConflictResolution, DiffTarget, HistoryFilter, PatchSelection,
@@ -21,6 +21,11 @@ use crate::state::{ApplicationState, RepositoryOpenSource, SessionTabUpdate};
 #[tauri::command]
 pub fn app_info() -> AppInfoDto {
     AppInfoDto::current()
+}
+
+#[tauri::command]
+pub fn system_file_icons(worktree_path: String, paths: Vec<String>) -> HashMap<String, String> {
+    crate::system_icons::file_icons(&worktree_path, &paths)
 }
 
 #[tauri::command]

@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App, buildRemoteBranchTree } from "./App";
 import { getAppInfo } from "./app-info";
+import { getSystemFileIcons } from "./fileIcons";
 import {
   closeAppWindow,
   minimizeAppWindow,
@@ -67,6 +68,10 @@ import {
 
 vi.mock("./app-info", () => ({
   getAppInfo: vi.fn(),
+}));
+
+vi.mock("./fileIcons", () => ({
+  getSystemFileIcons: vi.fn(),
 }));
 
 vi.mock("./windowControls", () => ({
@@ -201,6 +206,7 @@ const mockedUpdateRepositoryGitIdentity = vi.mocked(
 );
 const mockedGetOperationHistory = vi.mocked(getOperationHistory);
 const mockedListenForChanges = vi.mocked(listenForRepositoryChanges);
+const mockedGetSystemFileIcons = vi.mocked(getSystemFileIcons);
 
 const snapshot: RepositorySnapshotDto = {
   schemaVersion: 1,
@@ -266,6 +272,7 @@ describe("App", () => {
       version: "0.1.0",
       runtime: "Tauri 2",
     });
+    mockedGetSystemFileIcons.mockResolvedValue({});
     mockedChooseRepository.mockResolvedValue(null);
     mockedOpenRepository.mockResolvedValue(sessionWithSnapshot);
     mockedRestoreSession.mockResolvedValue({ schemaVersion: 1, tabs: [] });
@@ -797,6 +804,9 @@ describe("App", () => {
 
   it("toggles the changed file list and each selected file diff", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSystemFileIcons.mockResolvedValue({
+      "first.txt": "data:image/png;base64,Y29tbWl0LWZpbGUtaWNvbg==",
+    });
     mockedGetCommitFiles.mockResolvedValue([
       { path: "first.txt", pathBytes: [102, 105, 114, 115, 116, 46, 116, 120, 116] },
       { path: "second.txt", pathBytes: [115, 101, 99, 111, 110, 100, 46, 116, 120, 116] },
@@ -807,6 +817,16 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /^History/ }));
 
     const firstFile = await screen.findByRole("button", { name: "first.txt" });
+    await waitFor(() => {
+      expect(mockedGetSystemFileIcons).toHaveBeenCalledWith(
+        snapshot.repository.worktreePath,
+        ["first.txt", "second.txt"],
+      );
+      expect(firstFile.querySelector("img.change-file-icon.system")).toHaveAttribute(
+        "src",
+        "data:image/png;base64,Y29tbWl0LWZpbGUtaWNvbg==",
+      );
+    });
     expect(firstFile).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("after commit")).not.toBeInTheDocument();
     expect(screen.queryByText("Reference actions")).not.toBeInTheDocument();
@@ -3037,6 +3057,61 @@ describe("App", () => {
     fireEvent.click(unstagedRow);
     expect(stagedRow).toHaveAttribute("aria-pressed", "false");
     expect(unstagedRow).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("switches changed files between list and collapsible tree views with file icons", async () => {
+    const nestedChange = {
+      path: "src/components/card.tsx",
+      pathBytes: [],
+      indexStatus: ".",
+      worktreeStatus: "M",
+      conflict: false,
+      submodule: false,
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [
+        {
+          ...sessionWithSnapshot.tabs[0],
+          snapshot: {
+            ...snapshot,
+            changes: [...snapshot.changes, nestedChange],
+          },
+        },
+      ],
+    });
+    mockedGetSystemFileIcons.mockResolvedValue({
+      [nestedChange.path]: "data:image/png;base64,c3lzdGVtLWljb24=",
+    });
+    render(<App />);
+
+    const unstagedHeading = await screen.findByRole("heading", { name: "Unstaged" });
+    const unstagedSection = unstagedHeading.closest<HTMLElement>(".change-section");
+    expect(unstagedSection).not.toBeNull();
+    const section = within(unstagedSection!);
+    const listRow = section.getByRole("button", { name: nestedChange.path });
+    await waitFor(() =>
+      expect(listRow.querySelector("img.change-file-icon.system")).toHaveAttribute(
+        "src",
+        "data:image/png;base64,c3lzdGVtLWljb24=",
+      ),
+    );
+
+    fireEvent.click(section.getByRole("button", { name: "Show as tree" }));
+    expect(section.getByRole("button", { name: "src" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    const componentsFolder = section.getByRole("button", { name: "components" });
+    expect(section.getByRole("button", { name: nestedChange.path })).toHaveTextContent(
+      "card.tsx",
+    );
+
+    fireEvent.click(componentsFolder);
+    expect(section.queryByRole("button", { name: nestedChange.path })).not.toBeInTheDocument();
+    fireEvent.click(section.getByRole("button", { name: "components" }));
+    expect(section.getByRole("button", { name: nestedChange.path })).toBeInTheDocument();
+    expect(localStorage.getItem("gitacorn:change-view:unstaged")).toBe("tree");
   });
 
   it("opens stash actions from a branch-like row and can apply then drop", async () => {

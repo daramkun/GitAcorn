@@ -105,6 +105,7 @@ import {
 } from "./repository";
 import { updateRepositoryOperation } from "./remote-operations";
 import { localeTag, t } from "./i18n";
+import { getSystemFileIcons } from "./fileIcons";
 import {
   coAuthorsFromCommitBody,
   gravatarUrl,
@@ -148,6 +149,11 @@ function confirmRepositoryMutation(message: string) {
 }
 
 type MultiSelection = ReturnType<typeof useMultiSelection>;
+type ChangeViewMode = "list" | "tree";
+
+type ChangeListEntry =
+  | { kind: "folder"; path: string; name: string; depth: number }
+  | { kind: "file"; change: FileChangeDto; depth: number };
 
 type ReferenceContextMenu =
   | { x: number; y: number; kind: "branch"; name: string; upstream?: string }
@@ -5048,6 +5054,7 @@ function ChangesView({
   >(undefined);
   const nativeDropHandled = useRef(false);
   const [activeDropTarget, setActiveDropTarget] = useState<DiffTarget>();
+  const [fileIcons, setFileIcons] = useState<Record<string, string>>({});
   const normalizedFileFilter = fileFilter.trim().toLocaleLowerCase();
   const filteredUnstaged = useMemo(
     () =>
@@ -5063,6 +5070,24 @@ function ChangesView({
       ),
     [normalizedFileFilter, staged],
   );
+
+  useEffect(() => {
+    let active = true;
+    setFileIcons({});
+    getSystemFileIcons(
+      snapshot.repository.worktreePath,
+      snapshot.changes.map((change) => change.path),
+    )
+      .then((icons) => {
+        if (active) setFileIcons(icons);
+      })
+      .catch((reason: unknown) => {
+        console.warn("System file icons are unavailable", reason);
+      });
+    return () => {
+      active = false;
+    };
+  }, [snapshot.changes, snapshot.repository.worktreePath]);
   const normalizedDiffSearch = diffSearchQuery.toLocaleLowerCase();
   const diffSearchMatches = useMemo(
     () =>
@@ -5713,6 +5738,7 @@ function ChangesView({
             title={t("Unstaged")}
             target="unstaged"
             changes={filteredUnstaged}
+            fileIcons={fileIcons}
             selectedPath={selectedPath}
             selectedTarget={selectedTarget}
             selection={unstagedSelection}
@@ -5748,6 +5774,7 @@ function ChangesView({
             title={t("Staged")}
             target="staged"
             changes={filteredStaged}
+            fileIcons={fileIcons}
             selectedPath={selectedPath}
             selectedTarget={selectedTarget}
             selection={stagedSelection}
@@ -6186,10 +6213,115 @@ function ChangesView({
   );
 }
 
+function fileName(path: string) {
+  return path.split(/[\\/]/).at(-1) ?? path;
+}
+
+function buildChangeTreeEntries(
+  changes: FileChangeDto[],
+  collapsedFolders: Set<string>,
+): ChangeListEntry[] {
+  type Node = {
+    name: string;
+    path: string;
+    folders: Map<string, Node>;
+    files: FileChangeDto[];
+  };
+
+  const root: Node = { name: "", path: "", folders: new Map(), files: [] };
+  for (const change of changes) {
+    const parts = change.path.split(/[\\/]/).filter(Boolean);
+    let node = root;
+    for (const part of parts.slice(0, -1)) {
+      const path = node.path ? `${node.path}/${part}` : part;
+      let child = node.folders.get(part);
+      if (!child) {
+        child = { name: part, path, folders: new Map(), files: [] };
+        node.folders.set(part, child);
+      }
+      node = child;
+    }
+    node.files.push(change);
+  }
+
+  const entries: ChangeListEntry[] = [];
+  const appendNode = (node: Node, depth: number) => {
+    const folders = [...node.folders.values()].sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
+    const files = [...node.files].sort((left, right) =>
+      fileName(left.path).localeCompare(fileName(right.path)),
+    );
+    for (const folder of folders) {
+      entries.push({
+        kind: "folder",
+        path: folder.path,
+        name: folder.name,
+        depth,
+      });
+      if (!collapsedFolders.has(folder.path)) appendNode(folder, depth + 1);
+    }
+    for (const change of files) {
+      entries.push({ kind: "file", change, depth });
+    }
+  };
+  appendNode(root, 0);
+  return entries;
+}
+
+function FileIcon({ source }: { source?: string }) {
+  if (source) {
+    return (
+      <img
+        className="change-file-icon system"
+        src={source}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+      />
+    );
+  }
+  return (
+    <svg
+      className="change-file-icon fallback"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+    >
+      <path d="M3.25 1.75h5.5l4 4v8.5H3.25z" />
+      <path d="M8.75 1.75v4h4" />
+    </svg>
+  );
+}
+
+function FolderIcon({ open }: { open: boolean }) {
+  return (
+    <svg className="change-folder-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d={open ? "M1.75 5.25h12.5l-1.5 8H3.25z" : "M2 3h4l1.4 1.5H14v8.75H2z"} />
+    </svg>
+  );
+}
+
+function ListViewIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3 4h1M6 4h7M3 8h1M6 8h7M3 12h1M6 12h7" />
+    </svg>
+  );
+}
+
+function TreeViewIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M4 3v8m0-5h3m-3 5h3M7 4h6v4H7zm0 5h6v4H7z" />
+    </svg>
+  );
+}
+
 function ChangeSection({
   title,
   target,
   changes,
+  fileIcons = {},
   selectedPath,
   selectedTarget,
   selection,
@@ -6209,6 +6341,7 @@ function ChangeSection({
   title: string;
   target: DiffTarget;
   changes: FileChangeDto[];
+  fileIcons?: Record<string, string>;
   selectedPath?: string;
   selectedTarget?: DiffTarget;
   selection?: MultiSelection;
@@ -6225,6 +6358,25 @@ function ChangeSection({
   onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
   isChangeDropTarget?: DiffTarget;
 }) {
+  const [viewMode, setViewMode] = useState<ChangeViewMode>(() => {
+    try {
+      return localStorage.getItem(`gitacorn:change-view:${target}`) === "tree"
+        ? "tree"
+        : "list";
+    } catch {
+      return "list";
+    }
+  });
+
+  const selectViewMode = (mode: ChangeViewMode) => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(`gitacorn:change-view:${target}`, mode);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div
       className={`change-section ${dropActive ? "drop-target" : ""}`}
@@ -6234,7 +6386,34 @@ function ChangeSection({
       onDrop={onDrop}
       data-change-drop-target={isChangeDropTarget}
     >
-      <div className="panel-heading"><h2>{title}</h2><span>{changes.length}</span></div>
+      <div className="panel-heading">
+        <h2>{title}</h2>
+        <div className="change-heading-actions">
+          <span className="change-count">{changes.length}</span>
+          <div className="change-view-toggle" role="group" aria-label={t("Change view")}>
+            <button
+              type="button"
+              className={viewMode === "list" ? "active" : ""}
+              aria-label={t("Show as list")}
+              aria-pressed={viewMode === "list"}
+              title={t("Show as list")}
+              onClick={() => selectViewMode("list")}
+            >
+              <ListViewIcon />
+            </button>
+            <button
+              type="button"
+              className={viewMode === "tree" ? "active" : ""}
+              aria-label={t("Show as tree")}
+              aria-pressed={viewMode === "tree"}
+              title={t("Show as tree")}
+              onClick={() => selectViewMode("tree")}
+            >
+              <TreeViewIcon />
+            </button>
+          </div>
+        </div>
+      </div>
       {changes.length === 0 ? (
         <div className="panel-empty">
           {target === "staged" ? t("No staged changes.") : t("No unstaged changes.")}
@@ -6242,6 +6421,8 @@ function ChangeSection({
       ) : (
         <VirtualChangeList
           changes={changes}
+          fileIcons={fileIcons}
+          viewMode={viewMode}
           target={target}
           selectedPath={selectedPath}
           selectedTarget={selectedTarget}
@@ -6260,6 +6441,8 @@ function ChangeSection({
 
 function VirtualChangeList({
   changes,
+  fileIcons,
+  viewMode,
   target,
   selectedPath,
   selectedTarget,
@@ -6272,6 +6455,8 @@ function VirtualChangeList({
   onDragEnd,
 }: {
   changes: FileChangeDto[];
+  fileIcons: Record<string, string>;
+  viewMode: ChangeViewMode;
   target: DiffTarget;
   selectedPath?: string;
   selectedTarget?: DiffTarget;
@@ -6285,6 +6470,7 @@ function VirtualChangeList({
 }) {
   const rowHeight = 34;
   const [scrollTop, setScrollTop] = useState(0);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement>(null);
   const blankDrag = useRef<
     | {
@@ -6297,9 +6483,25 @@ function VirtualChangeList({
   const [selectionBand, setSelectionBand] = useState<
     { top: number; height: number } | undefined
   >(undefined);
+  const entries = useMemo(
+    () =>
+      viewMode === "tree"
+        ? buildChangeTreeEntries(changes, collapsedFolders)
+        : changes.map<ChangeListEntry>((change) => ({
+            kind: "file",
+            change,
+            depth: 0,
+          })),
+    [changes, collapsedFolders, viewMode],
+  );
   const visibleCount = 20;
   const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 4);
-  const end = Math.min(changes.length, start + visibleCount + 8);
+  const end = Math.min(entries.length, start + visibleCount + 8);
+
+  useEffect(() => {
+    setScrollTop(0);
+    if (listRef.current) listRef.current.scrollTop = 0;
+  }, [viewMode]);
 
   useEffect(() => {
     const continueBlankDrag = (event: MouseEvent) => {
@@ -6311,7 +6513,7 @@ function VirtualChangeList({
       const currentY = event.clientY - space.getBoundingClientRect().top;
       if (Math.abs(currentY - pending.startY) > 4) pending.moved = true;
 
-      const totalHeight = changes.length * rowHeight;
+      const totalHeight = entries.length * rowHeight;
       const top = Math.min(pending.startY, currentY);
       const bottom = Math.max(pending.startY, currentY);
       const clippedTop = Math.max(0, Math.min(totalHeight, top));
@@ -6328,12 +6530,15 @@ function VirtualChangeList({
 
       const firstIndex = Math.max(0, Math.floor(Math.max(0, top) / rowHeight));
       const lastIndex = Math.min(
-        changes.length - 1,
+        entries.length - 1,
         Math.floor(Math.max(0, Math.min(totalHeight - 1, bottom)) / rowHeight),
       );
-      const range = changes
+      const range = entries
         .slice(firstIndex, lastIndex + 1)
-        .map((change) => change.path);
+        .filter((entry): entry is Extract<ChangeListEntry, { kind: "file" }> =>
+          entry.kind === "file"
+        )
+        .map((entry) => entry.change.path);
       selection?.setSelected(new Set([...pending.baseSelection, ...range]));
     };
 
@@ -6348,7 +6553,7 @@ function VirtualChangeList({
       window.removeEventListener("mousemove", continueBlankDrag);
       window.removeEventListener("mouseup", stopBlankDrag);
     };
-  }, [changes, selection]);
+  }, [entries, selection]);
 
   return (
     <div
@@ -6381,12 +6586,43 @@ function VirtualChangeList({
       }}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
     >
-      <div className="virtual-list-space" style={{ height: changes.length * rowHeight }}>
+      <div className="virtual-list-space" style={{ height: entries.length * rowHeight }}>
         <div
           className="virtual-list-items"
           style={{ transform: `translateY(${start * rowHeight}px)` }}
         >
-          {changes.slice(start, end).map((change) => {
+          {entries.slice(start, end).map((entry) => {
+            if (entry.kind === "folder") {
+              const collapsed = collapsedFolders.has(entry.path);
+              return (
+                <button
+                  className="change-tree-folder"
+                  type="button"
+                  aria-expanded={!collapsed}
+                  key={`${target}-folder-${entry.path}`}
+                  title={entry.path}
+                  style={{ "--tree-indent": `${entry.depth * 15}px` } as CSSProperties}
+                  onClick={() =>
+                    setCollapsedFolders((current) => {
+                      const next = new Set(current);
+                      if (next.has(entry.path)) next.delete(entry.path);
+                      else next.add(entry.path);
+                      return next;
+                    })
+                  }
+                >
+                  <span
+                    className={`tree-chevron ${collapsed ? "collapsed" : ""}`}
+                    aria-hidden="true"
+                  >
+                    ⌄
+                  </span>
+                  <FolderIcon open={!collapsed} />
+                  <span>{entry.name}</span>
+                </button>
+              );
+            }
+            const change = entry.change;
             const partial =
               change.indexStatus !== "." &&
               change.indexStatus !== "?" &&
@@ -6409,6 +6645,8 @@ function VirtualChangeList({
                     : -1
                 }
                 key={`${target}-${change.path}-${change.indexStatus}-${change.worktreeStatus}`}
+                aria-label={change.path}
+                style={{ "--tree-indent": `${entry.depth * 15}px` } as CSSProperties}
                 data-selection-scope={`changes-${target}`}
                 data-selection-index={changes.indexOf(change)}
                 onMouseDown={(event) => {
@@ -6453,7 +6691,14 @@ function VirtualChangeList({
                     (index) => {
                       const list = event.currentTarget.closest<HTMLElement>(".change-list");
                       if (list) {
-                        list.scrollTop = Math.max(0, index * rowHeight - rowHeight);
+                        const nextPath = changes[index]?.path;
+                        const visualIndex = entries.findIndex(
+                          (item) => item.kind === "file" && item.change.path === nextPath,
+                        );
+                        list.scrollTop = Math.max(
+                          0,
+                          (visualIndex < 0 ? index : visualIndex) * rowHeight - rowHeight,
+                        );
                       }
                       focusSelectionIndex(event.currentTarget, index);
                     },
@@ -6470,7 +6715,10 @@ function VirtualChangeList({
                       ? change.indexStatus
                       : change.worktreeStatus}
                 </span>
-                <span className="change-path">{change.path}</span>
+                <FileIcon source={fileIcons[change.path]} />
+                <span className="change-path">
+                  {viewMode === "tree" ? fileName(change.path) : change.path}
+                </span>
                 {partial && <small>{t("partial")}</small>}
                 {!partial && change.submodule && <small>{t("submodule")}</small>}
               </button>
@@ -6910,6 +7158,7 @@ function HistoryView({
   const [selectedOid, setSelectedOid] = useState(tab.selectedCommit);
   const [loading, setLoading] = useState(true);
   const [commitFiles, setCommitFiles] = useState<CommitFileDto[]>([]);
+  const [commitFileIcons, setCommitFileIcons] = useState<Record<string, string>>({});
   const [showCommitFileSearch, setShowCommitFileSearch] = useState(false);
   const [commitFileFilter, setCommitFileFilter] = useState("");
   const [selectedFile, setSelectedFile] = useState<string>();
@@ -7030,6 +7279,7 @@ function HistoryView({
   useEffect(() => {
     let active = true;
     setCommitFiles([]);
+    setCommitFileIcons({});
     setShowCommitFileSearch(false);
     setCommitFileFilter("");
     setSelectedFile(undefined);
@@ -7048,6 +7298,25 @@ function HistoryView({
       active = false;
     };
   }, [snapshot.repository.id, selected?.oid]);
+
+  useEffect(() => {
+    let active = true;
+    setCommitFileIcons({});
+    if (commitFiles.length === 0) return;
+    getSystemFileIcons(
+      snapshot.repository.worktreePath,
+      commitFiles.map((file) => file.path),
+    )
+      .then((icons) => {
+        if (active) setCommitFileIcons(icons);
+      })
+      .catch((reason: unknown) => {
+        console.warn("System file icons are unavailable", reason);
+      });
+    return () => {
+      active = false;
+    };
+  }, [commitFiles, snapshot.repository.worktreePath]);
 
   useEffect(() => {
     let active = true;
@@ -7571,6 +7840,7 @@ function HistoryView({
                           >
                             ›
                           </span>
+                          <FileIcon source={commitFileIcons[file.path]} />
                           <span>{file.path}</span>
                         </button>
                         {expanded && (
