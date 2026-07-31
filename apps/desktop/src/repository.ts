@@ -81,6 +81,10 @@ export type SessionTabDto = {
   repoId: string;
   worktreeId: string;
   worktreePath: string;
+  openedFrom?: {
+    repositoryName: string;
+    worktreePath: string;
+  };
   active: boolean;
   page: "changes" | "history" | "operations";
   selectedPath?: string;
@@ -203,6 +207,11 @@ export type RepositorySidebarDto = {
     isCurrent: boolean;
     isLocked: boolean;
   }>;
+  submodules?: Array<{
+    path: string;
+    absolutePath: string;
+    initialized: boolean;
+  }>;
   branches: { total: number; items: string[] };
   remoteBranches: { total: number; items: string[] };
   tags: { total: number; items: string[] };
@@ -256,8 +265,11 @@ export async function chooseRepositoryDirectory(): Promise<string | null> {
   return path;
 }
 
-export function openRepository(path: string): Promise<SessionDto> {
-  return invoke<SessionDto>("repository_open", { path });
+export function openRepository(
+  path: string,
+  openedFrom?: { repositoryName: string; worktreePath: string },
+): Promise<SessionDto> {
+  return invoke<SessionDto>("repository_open", { path, openedFrom });
 }
 
 export async function chooseCloneParentDirectory(): Promise<string | null> {
@@ -436,6 +448,54 @@ export function removeRemote(
   name: string,
 ): Promise<RepositorySnapshotDto> {
   return invoke<RepositorySnapshotDto>("remote_remove", { repoId, revision, name });
+}
+
+export function addSubmodule(
+  repoId: string,
+  revision: number,
+  request: { url: string; path: string },
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("submodule_add", {
+    repoId,
+    revision,
+    request,
+  });
+}
+
+export function initializeSubmodule(
+  repoId: string,
+  revision: number,
+  path: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("submodule_initialize", {
+    repoId,
+    revision,
+    path,
+  });
+}
+
+export function deinitializeSubmodule(
+  repoId: string,
+  revision: number,
+  path: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("submodule_deinitialize", {
+    repoId,
+    revision,
+    path,
+  });
+}
+
+export function removeSubmodule(
+  repoId: string,
+  revision: number,
+  path: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("submodule_remove", {
+    repoId,
+    revision,
+    path,
+  });
 }
 
 export function createBranch(

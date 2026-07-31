@@ -18,10 +18,18 @@ use crate::AppError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySidebar {
     pub worktrees: Vec<WorktreeSummary>,
+    pub submodules: Vec<SubmoduleSummary>,
     pub branches: RefSummary,
     pub remote_branches: RefSummary,
     pub tags: RefSummary,
     pub stashes: Vec<StashSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmoduleSummary {
+    pub path: String,
+    pub absolute_path: String,
+    pub initialized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,6 +367,7 @@ impl RepositoryService {
         repository: &RepositoryDescriptor,
     ) -> Result<RepositorySidebar, AppError> {
         let worktrees = self.git_text(repository, ["worktree", "list", "--porcelain", "-z"])?;
+        let submodules = self.git_text(repository, ["submodule", "status"])?;
         let branches = self.git_text(
             repository,
             [
@@ -390,6 +399,7 @@ impl RepositoryService {
 
         Ok(RepositorySidebar {
             worktrees: parse_worktrees(&worktrees, &repository.worktree_path),
+            submodules: parse_submodules(&submodules, &repository.worktree_path),
             branches: summarize_refs(&branches),
             remote_branches: summarize_refs(&remote_branches),
             tags: summarize_refs(&tags),
@@ -508,6 +518,230 @@ impl RepositoryService {
                 OsString::from(name),
             ],
         )
+    }
+
+    pub fn add_submodule(
+        &self,
+        repository: &RepositoryDescriptor,
+        url: &str,
+        path: &str,
+    ) -> Result<(), AppError> {
+        let url = validate_submodule_url(url)?;
+        let path = validate_submodule_path(path)?;
+        let mut request = GitRequest::new([
+            OsString::from("-c"),
+            OsString::from("protocol.file.allow=always"),
+            OsString::from("submodule"),
+            OsString::from("add"),
+            OsString::from("--"),
+            OsString::from(url),
+            OsString::from(&path),
+        ]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(300);
+        ensure_success(self.run(request)?).map(|_| ())
+    }
+
+    pub fn initialize_submodule(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &str,
+    ) -> Result<(), AppError> {
+        let path = self.managed_submodule_path(repository, path)?;
+        let mut request = GitRequest::new([
+            OsString::from("-c"),
+            OsString::from("protocol.file.allow=always"),
+            OsString::from("submodule"),
+            OsString::from("update"),
+            OsString::from("--init"),
+            OsString::from("--"),
+            OsString::from(path),
+        ]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(300);
+        ensure_success(self.run(request)?).map(|_| ())
+    }
+
+    pub fn deinitialize_submodule(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &str,
+    ) -> Result<(), AppError> {
+        let path = self.managed_submodule_path(repository, path)?;
+        let submodule = self
+            .sidebar(repository)?
+            .submodules
+            .into_iter()
+            .find(|submodule| submodule.path == path)
+            .ok_or_else(|| {
+                AppError::InvalidRequest("The selected path is not a managed submodule".to_owned())
+            })?;
+        if !submodule.initialized {
+            return Err(AppError::InvalidRequest(
+                "The selected submodule is already deinitialized".to_owned(),
+            ));
+        }
+        let mut status_request = GitRequest::new([
+            OsString::from("status"),
+            OsString::from("--porcelain=v1"),
+            OsString::from("--untracked-files=normal"),
+        ]);
+        status_request.working_directory = Some(PathBuf::from(submodule.absolute_path));
+        let status = ensure_success(self.run(status_request)?)?;
+        if !status.stdout.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "The submodule has local changes and cannot be deinitialized".to_owned(),
+            ));
+        }
+        let mut request = GitRequest::new([
+            OsString::from("submodule"),
+            OsString::from("deinit"),
+            OsString::from("-f"),
+            OsString::from("--"),
+            OsString::from(path),
+        ]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(300);
+        ensure_success(self.run(request)?).map(|_| ())
+    }
+
+    pub fn remove_submodule(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &str,
+    ) -> Result<(), AppError> {
+        let path = self.managed_submodule_path(repository, path)?;
+        let initialized = self
+            .sidebar(repository)?
+            .submodules
+            .into_iter()
+            .find(|submodule| submodule.path == path)
+            .is_some_and(|submodule| submodule.initialized);
+        if initialized {
+            self.deinitialize_submodule(repository, &path)?;
+        }
+        self.git_unit(
+            repository,
+            [
+                OsString::from("rm"),
+                OsString::from("-f"),
+                OsString::from("--"),
+                OsString::from(path),
+            ],
+        )
+    }
+
+    pub fn with_submodule_update<T>(
+        &self,
+        repository: &RepositoryDescriptor,
+        supports_native_recurse: bool,
+        operation: impl FnOnce(bool) -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        let previous_head = self.current_head_oid(repository)?;
+        let clean_submodules = self.clean_initialized_submodules(repository)?;
+        let initialized_submodules = self
+            .sidebar(repository)?
+            .submodules
+            .into_iter()
+            .filter(|submodule| submodule.initialized)
+            .count();
+        let use_native_recurse =
+            supports_native_recurse && initialized_submodules == clean_submodules.len();
+        let result = operation(use_native_recurse)?;
+        let current_head = self.current_head_oid(repository)?;
+        if use_native_recurse
+            || previous_head == current_head
+            || current_head.is_none()
+            || self.rebase_in_progress(repository)
+            || repository.git_dir.join("MERGE_HEAD").is_file()
+        {
+            return Ok(result);
+        }
+
+        for submodule in self.sidebar(repository)?.submodules {
+            if !submodule.initialized || !clean_submodules.contains(&submodule.path) {
+                continue;
+            }
+            let mut request = GitRequest::new([
+                OsString::from("-c"),
+                OsString::from("protocol.file.allow=always"),
+                OsString::from("submodule"),
+                OsString::from("update"),
+                OsString::from("--"),
+                OsString::from(&submodule.path),
+            ]);
+            request.working_directory = Some(repository.worktree_path.clone());
+            request.timeout = Duration::from_secs(300);
+            ensure_success(self.run(request)?)?;
+        }
+        Ok(result)
+    }
+
+    fn current_head_oid(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<Option<String>, AppError> {
+        let mut request = GitRequest::new(["rev-parse", "--verify", "HEAD^{commit}"]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        let output = self.run(request)?;
+        if output.exit_code != 0 {
+            return Ok(None);
+        }
+        let oid = String::from_utf8(output.stdout)
+            .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
+        Ok(Some(oid.trim().to_owned()))
+    }
+
+    fn clean_initialized_submodules(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<HashSet<String>, AppError> {
+        let mut clean = HashSet::new();
+        for submodule in self.sidebar(repository)?.submodules {
+            if !submodule.initialized
+                || !self.submodule_matches_index(repository, &submodule.path, false)?
+                || !self.submodule_matches_index(repository, &submodule.path, true)?
+            {
+                continue;
+            }
+            let mut request = GitRequest::new([
+                OsString::from("status"),
+                OsString::from("--porcelain=v1"),
+                OsString::from("--untracked-files=normal"),
+            ]);
+            request.working_directory = Some(PathBuf::from(&submodule.absolute_path));
+            let output = ensure_success(self.run(request)?)?;
+            if output.stdout.is_empty() {
+                clean.insert(submodule.path);
+            }
+        }
+        Ok(clean)
+    }
+
+    fn submodule_matches_index(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &str,
+        cached: bool,
+    ) -> Result<bool, AppError> {
+        let mut args = vec![OsString::from("diff")];
+        if cached {
+            args.push(OsString::from("--cached"));
+        }
+        args.extend([
+            OsString::from("--quiet"),
+            OsString::from("--ignore-submodules=none"),
+            OsString::from("--"),
+            OsString::from(path),
+        ]);
+        let mut request = GitRequest::new(args);
+        request.working_directory = Some(repository.worktree_path.clone());
+        let output = self.run(request)?;
+        match output.exit_code {
+            0 => Ok(true),
+            1 => Ok(false),
+            _ => ensure_success(output).map(|_| true),
+        }
     }
 
     pub fn remote_tags(
@@ -717,6 +951,27 @@ impl RepositoryService {
         is_tag: bool,
         auto_stash: bool,
     ) -> Result<(), AppError> {
+        self.with_submodule_update(repository, true, |recurse_submodules| {
+            self.checkout_branch_inner(
+                repository,
+                name,
+                is_remote,
+                is_tag,
+                auto_stash,
+                recurse_submodules,
+            )
+        })
+    }
+
+    fn checkout_branch_inner(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+        is_remote: bool,
+        is_tag: bool,
+        auto_stash: bool,
+        recurse_submodules: bool,
+    ) -> Result<(), AppError> {
         let references = self.references(repository)?;
         let reference_kind = if is_tag {
             ReferenceKind::Tag
@@ -753,12 +1008,19 @@ impl RepositoryService {
         let created_stash =
             auto_stash && stash_before != stash_after && stash_after.as_deref() != Some("");
 
+        let recurse_arg = recurse_submodules.then_some("--recurse-submodules");
         let checkout_result = if is_tag {
-            self.git_unit(repository, ["switch", "--detach", name])
+            let mut args = vec!["switch"];
+            args.extend(recurse_arg);
+            args.extend(["--detach", name]);
+            self.git_unit(repository, args)
         } else if is_remote {
-            self.checkout_remote_branch(repository, name, &references)
+            self.checkout_remote_branch(repository, name, &references, recurse_submodules)
         } else {
-            self.git_unit(repository, ["switch", name])
+            let mut args = vec!["switch"];
+            args.extend(recurse_arg);
+            args.push(name);
+            self.git_unit(repository, args)
         };
         if let Err(error) = checkout_result {
             if created_stash {
@@ -791,12 +1053,17 @@ impl RepositoryService {
         repository: &RepositoryDescriptor,
         name: &str,
         references: &[GitReference],
+        recurse_submodules: bool,
     ) -> Result<(), AppError> {
+        let recurse_arg = recurse_submodules.then_some("--recurse-submodules");
         if let Some(local) = references.iter().find(|reference| {
             reference.kind == ReferenceKind::LocalBranch
                 && reference.upstream.as_deref() == Some(name)
         }) {
-            return self.git_unit(repository, ["switch", &local.short_name]);
+            let mut args = vec!["switch"];
+            args.extend(recurse_arg);
+            args.push(&local.short_name);
+            return self.git_unit(repository, args);
         }
         if self
             .remote_names(repository)?
@@ -809,7 +1076,10 @@ impl RepositoryService {
                 "Remote branch {name} is invalid"
             )));
         }
-        self.git_unit(repository, ["switch", "--track", name])
+        let mut args = vec!["switch"];
+        args.extend(recurse_arg);
+        args.extend(["--track", name]);
+        self.git_unit(repository, args)
     }
 
     pub fn delete_branch(
@@ -1313,6 +1583,24 @@ impl RepositoryService {
         Ok(name.to_owned())
     }
 
+    fn managed_submodule_path(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &str,
+    ) -> Result<String, AppError> {
+        let path = validate_submodule_path(path)?;
+        self.sidebar(repository)?
+            .submodules
+            .into_iter()
+            .find(|submodule| {
+                normalized_path(Path::new(&submodule.path)) == normalized_path(Path::new(&path))
+            })
+            .map(|submodule| submodule.path)
+            .ok_or_else(|| {
+                AppError::InvalidRequest("The selected path is not a managed submodule".to_owned())
+            })
+    }
+
     pub fn diff(
         &self,
         repository: &RepositoryDescriptor,
@@ -1791,6 +2079,36 @@ fn validate_remote_name(name: &str) -> Result<&str, AppError> {
     Ok(name)
 }
 
+fn validate_submodule_url(url: &str) -> Result<&str, AppError> {
+    let url = url.trim();
+    if url.is_empty() || url.contains(['\0', '\r', '\n']) || url.starts_with('-') {
+        return Err(AppError::InvalidRequest(
+            "Submodule URL must not be empty, start with '-', or contain line breaks".to_owned(),
+        ));
+    }
+    Ok(url)
+}
+
+fn validate_submodule_path(path: &str) -> Result<String, AppError> {
+    use std::path::Component;
+
+    let path = path.trim().trim_end_matches(['/', '\\']);
+    let value = Path::new(path);
+    if path.is_empty()
+        || path.contains(['\0', '\r', '\n'])
+        || path.starts_with('-')
+        || value.is_absolute()
+        || value
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(AppError::InvalidRequest(
+            "Submodule path must be a relative path inside the repository".to_owned(),
+        ));
+    }
+    Ok(path.to_owned())
+}
+
 fn build_selected_patch(
     document: &DiffDocument,
     selections: &[PatchSelection],
@@ -1933,6 +2251,35 @@ fn parse_worktrees(output: &str, current_path: &Path) -> Vec<WorktreeSummary> {
                 head,
                 branch,
                 is_locked: locked,
+            })
+        })
+        .collect()
+}
+
+fn parse_submodules(output: &str, worktree_path: &Path) -> Vec<SubmoduleSummary> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_end();
+            let state = line.chars().next()?;
+            let initialized = state != '-';
+            let remainder = if matches!(state, ' ' | '-' | '+' | 'U') {
+                line.get(state.len_utf8()..)?
+            } else {
+                line
+            };
+            let (_, path_and_description) = remainder.split_once(char::is_whitespace)?;
+            let path = path_and_description
+                .rsplit_once(" (")
+                .map_or(path_and_description, |(path, _)| path)
+                .trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(SubmoduleSummary {
+                path: path.to_owned(),
+                absolute_path: worktree_path.join(path).to_string_lossy().into_owned(),
+                initialized,
             })
         })
         .collect()
@@ -2198,7 +2545,7 @@ mod tests {
     use super::{
         GitVersion, InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
         ReferenceKind, parse_git_version, parse_interactive_rebase_commits, parse_references,
-        parse_stashes, parse_worktrees, summarize_refs, validate_rebase_plan,
+        parse_stashes, parse_submodules, parse_worktrees, summarize_refs, validate_rebase_plan,
     };
 
     #[test]
@@ -2230,6 +2577,26 @@ mod tests {
         let stashes = parse_stashes(b"stash@{0}\0WIP one\0\nstash@{1}\0WIP two\0\n");
         assert_eq!(stashes.len(), 2);
         assert_eq!(stashes[0].reference, "stash@{0}");
+    }
+
+    #[test]
+    fn parses_initialized_and_uninitialized_submodules() {
+        let submodules = parse_submodules(
+            " 1111111111111111111111111111111111111111 vendor/ready (heads/main)\n-2222222222222222222222222222222222222222 vendor/not ready\n+3333333333333333333333333333333333333333 vendor/changed (v1.0-2-g3333333)\n",
+            Path::new("C:/repo"),
+        );
+
+        assert_eq!(submodules.len(), 3);
+        assert_eq!(submodules[0].path, "vendor/ready");
+        assert!(submodules[0].initialized);
+        assert_eq!(submodules[1].path, "vendor/not ready");
+        assert!(!submodules[1].initialized);
+        assert_eq!(
+            submodules[2].absolute_path,
+            Path::new("C:/repo")
+                .join("vendor/changed")
+                .to_string_lossy()
+        );
     }
 
     #[test]

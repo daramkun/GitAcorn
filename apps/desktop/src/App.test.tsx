@@ -10,6 +10,7 @@ import {
 } from "./windowControls";
 import {
   abortRebase,
+  addSubmodule,
   applyPatchSelection,
   applyStash,
   addRemote,
@@ -25,6 +26,7 @@ import {
   continueRebase,
   deleteBranch,
   deleteTag,
+  deinitializeSubmodule,
   discardPath,
   dropStash,
   fastForwardBranch,
@@ -39,6 +41,7 @@ import {
   getRemoteTags,
   getRepositorySidebar,
   getRepositorySnapshot,
+  initializeSubmodule,
   listenForRepositoryChanges,
   mergeBranch,
   openRepository,
@@ -46,6 +49,7 @@ import {
   renameBranch,
   reorderSessionTabs,
   removeRemote,
+  removeSubmodule,
   resolveConflict,
   restoreSession,
   skipRebase,
@@ -73,6 +77,7 @@ vi.mock("./windowControls", () => ({
 
 vi.mock("./repository", () => ({
   abortRebase: vi.fn(),
+  addSubmodule: vi.fn(),
   applyPatchSelection: vi.fn(),
   addRemote: vi.fn(),
   abortMerge: vi.fn(),
@@ -91,6 +96,7 @@ vi.mock("./repository", () => ({
   continueRebase: vi.fn(),
   deleteBranch: vi.fn(),
   deleteTag: vi.fn(),
+  deinitializeSubmodule: vi.fn(),
   discardPath: vi.fn(),
   dropStash: vi.fn(),
   fastForwardBranch: vi.fn(),
@@ -105,8 +111,10 @@ vi.mock("./repository", () => ({
   getReferences: vi.fn(),
   getRemoteTags: vi.fn(),
   getRepositorySidebar: vi.fn(),
+  initializeSubmodule: vi.fn(),
   reorderSessionTabs: vi.fn(),
   removeRemote: vi.fn(),
+  removeSubmodule: vi.fn(),
   resolveConflict: vi.fn(),
   updateGlobalGitIdentity: vi.fn(),
   updateRepositoryGitIdentity: vi.fn(),
@@ -141,6 +149,7 @@ const mockedMinimizeAppWindow = vi.mocked(minimizeAppWindow);
 const mockedToggleMaximizeAppWindow = vi.mocked(toggleMaximizeAppWindow);
 const mockedChooseRepository = vi.mocked(chooseRepositoryDirectory);
 const mockedOpenRepository = vi.mocked(openRepository);
+const mockedAddSubmodule = vi.mocked(addSubmodule);
 const mockedPreviewInteractiveRebase = vi.mocked(previewInteractiveRebase);
 const mockedRestoreSession = vi.mocked(restoreSession);
 const mockedActivateTab = vi.mocked(activateSessionTab);
@@ -153,6 +162,9 @@ const mockedGetSidebar = vi.mocked(getRepositorySidebar);
 const mockedReorderTabs = vi.mocked(reorderSessionTabs);
 const mockedUpdateTab = vi.mocked(updateSessionTab);
 const mockedGetSnapshot = vi.mocked(getRepositorySnapshot);
+const mockedInitializeSubmodule = vi.mocked(initializeSubmodule);
+const mockedDeinitializeSubmodule = vi.mocked(deinitializeSubmodule);
+const mockedRemoveSubmodule = vi.mocked(removeSubmodule);
 const mockedGetDiff = vi.mocked(getDiff);
 const mockedGetCommitDiff = vi.mocked(getCommitDiff);
 const mockedGetCommitFiles = vi.mocked(getCommitFiles);
@@ -282,6 +294,10 @@ describe("App", () => {
       effective: {},
     });
     mockedGetSnapshot.mockResolvedValue(snapshot);
+    mockedAddSubmodule.mockResolvedValue({ ...snapshot, revision: 2 });
+    mockedInitializeSubmodule.mockResolvedValue({ ...snapshot, revision: 2 });
+    mockedDeinitializeSubmodule.mockResolvedValue({ ...snapshot, revision: 2 });
+    mockedRemoveSubmodule.mockResolvedValue({ ...snapshot, revision: 2 });
     mockedGetDiff.mockResolvedValue({
       schemaVersion: 1,
       binary: false,
@@ -830,6 +846,359 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: /tracked\.txt/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /staged file\.txt/ })).toBeInTheDocument();
     expect(mockedOpenRepository).toHaveBeenCalledWith("C:\\Code\\acorn-demo");
+  });
+
+  it("lists submodules and opens an initialized submodule on double-click", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      submodules: [
+        {
+          path: "vendor/core",
+          absolutePath: "C:\\Code\\acorn-demo\\vendor\\core",
+          initialized: true,
+        },
+        {
+          path: "vendor/pending",
+          absolutePath: "C:\\Code\\acorn-demo\\vendor\\pending",
+          initialized: false,
+        },
+      ],
+      branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const initialized = await screen.findByRole("button", {
+      name: "vendor/core",
+    });
+    const uninitialized = screen.getByRole("button", {
+      name: /vendor\/pending.*not initialized/,
+    });
+    expect(uninitialized).toBeEnabled();
+
+    fireEvent.doubleClick(initialized);
+
+    await waitFor(() =>
+      expect(mockedOpenRepository).toHaveBeenCalledWith(
+        "C:\\Code\\acorn-demo\\vendor\\core",
+        {
+          repositoryName: "acorn-demo",
+          worktreePath: "C:\\Code\\acorn-demo",
+        },
+      ),
+    );
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const initializeButton = screen.getByRole("button", {
+      name: "Initialize submodule vendor/pending",
+    });
+    fireEvent.click(initializeButton);
+    expect(confirm).toHaveBeenCalledWith(
+      "Initialize submodule vendor/pending?",
+    );
+    expect(mockedInitializeSubmodule).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(
+      initializeButton,
+    );
+    await waitFor(() =>
+      expect(mockedInitializeSubmodule).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "vendor/pending",
+      ),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Remove submodule vendor/core",
+      }),
+    );
+    await waitFor(() =>
+      expect(mockedRemoveSubmodule).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        2,
+        "vendor/core",
+      ),
+    );
+    expect(confirm).toHaveBeenLastCalledWith(
+      "Remove submodule vendor/core? Its worktree will be removed and the deletion staged.",
+    );
+    confirm.mockRestore();
+  });
+
+  it("asks before initializing and opening an uninitialized submodule", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      submodules: [
+        {
+          path: "vendor/pending",
+          absolutePath: "C:\\Code\\acorn-demo\\vendor\\pending",
+          initialized: false,
+        },
+      ],
+      branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<App />);
+
+    const pending = await screen.findByRole("button", {
+      name: /vendor\/pending.*not initialized/,
+    });
+    fireEvent.doubleClick(pending);
+    expect(confirm).toHaveBeenCalledWith(
+      "Initialize submodule vendor/pending and open it as a repository?",
+    );
+    expect(mockedInitializeSubmodule).not.toHaveBeenCalled();
+    expect(mockedOpenRepository).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    fireEvent.doubleClick(pending);
+
+    await waitFor(() =>
+      expect(mockedInitializeSubmodule).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "vendor/pending",
+      ),
+    );
+    await waitFor(() =>
+      expect(mockedOpenRepository).toHaveBeenCalledWith(
+        "C:\\Code\\acorn-demo\\vendor\\pending",
+        {
+          repositoryName: "acorn-demo",
+          worktreePath: "C:\\Code\\acorn-demo",
+        },
+      ),
+    );
+    confirm.mockRestore();
+  });
+
+  it("closes an open submodule tab before removing its worktree", async () => {
+    const submodulePath = "C:\\Code\\acorn-demo\\vendor\\core";
+    const refreshedSnapshot = { ...snapshot, revision: snapshot.revision + 1 };
+    mockedRestoreSession.mockResolvedValue({
+      schemaVersion: 1,
+      tabs: [
+        ...sessionWithSnapshot.tabs,
+        {
+          ...sessionWithSnapshot.tabs[0],
+          repoId: "submodule-repository",
+          worktreeId: "submodule-worktree",
+          worktreePath: submodulePath,
+          openedFrom: {
+            repositoryName: snapshot.repository.name,
+            worktreePath: snapshot.repository.worktreePath,
+          },
+          active: false,
+          snapshot: {
+            ...snapshot,
+            repository: {
+              ...snapshot.repository,
+              id: "submodule-repository",
+              name: "core",
+              worktreePath: submodulePath,
+            },
+          },
+        },
+      ],
+    });
+    mockedCloseTab.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSnapshot.mockResolvedValue(refreshedSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      submodules: [
+        {
+          path: "vendor/core",
+          absolutePath: submodulePath,
+          initialized: true,
+        },
+      ],
+      branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Remove submodule vendor/core",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedCloseTab).toHaveBeenCalledWith("submodule-repository"),
+    );
+    await waitFor(() =>
+      expect(mockedGetSnapshot).toHaveBeenCalledWith(snapshot.repository.id),
+    );
+    await waitFor(() =>
+      expect(mockedRemoveSubmodule).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        refreshedSnapshot.revision,
+        "vendor/core",
+      ),
+    );
+    expect(mockedCloseTab.mock.invocationCallOrder[0]).toBeLessThan(
+      mockedGetSnapshot.mock.invocationCallOrder[0],
+    );
+    expect(mockedGetSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      mockedRemoveSubmodule.mock.invocationCallOrder[0],
+    );
+    confirm.mockRestore();
+  });
+
+  it("shows state-specific actions in the submodule context menu", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      submodules: [
+        {
+          path: "vendor/core",
+          absolutePath: "C:\\Code\\acorn-demo\\vendor\\core",
+          initialized: true,
+        },
+        {
+          path: "vendor/pending",
+          absolutePath: "C:\\Code\\acorn-demo\\vendor\\pending",
+          initialized: false,
+        },
+      ],
+      branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const pending = await screen.findByRole("button", {
+      name: /vendor\/pending.*not initialized/,
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.contextMenu(pending, { clientX: 40, clientY: 50 });
+    let menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Initialize" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Open" })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Deinitialize" })).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Initialize" }));
+    expect(confirm).toHaveBeenCalledWith(
+      "Initialize submodule vendor/pending?",
+    );
+    await waitFor(() =>
+      expect(mockedInitializeSubmodule).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "vendor/pending",
+      ),
+    );
+
+    const initialized = await screen.findByRole("button", { name: "vendor/core" });
+    fireEvent.contextMenu(initialized, { clientX: 60, clientY: 70 });
+    menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Open" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Deinitialize" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Initialize" })).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open" }));
+    await waitFor(() =>
+      expect(mockedOpenRepository).toHaveBeenCalledWith(
+        "C:\\Code\\acorn-demo\\vendor\\core",
+        {
+          repositoryName: "acorn-demo",
+          worktreePath: "C:\\Code\\acorn-demo",
+        },
+      ),
+    );
+
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: "vendor/core" }),
+      { clientX: 60, clientY: 70 },
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Deinitialize" }));
+    expect(confirm).toHaveBeenCalledWith(
+      "Deinitialize submodule vendor/core? Its worktree will be removed.",
+    );
+    await waitFor(() =>
+      expect(mockedDeinitializeSubmodule).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "vendor/core",
+      ),
+    );
+    confirm.mockRestore();
+  });
+
+  it("shows the parent repository on a submodule repository tab", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [
+        {
+          ...sessionWithSnapshot.tabs[0],
+          openedFrom: {
+            repositoryName: "primary",
+            worktreePath: "C:\\Code\\primary",
+          },
+        },
+      ],
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("Submodule of primary")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("Submodule of primary (C:\\Code\\primary)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Scroll repository tabs left" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Scroll repository tabs right" }),
+    ).toBeInTheDocument();
+  });
+
+  it("adds a submodule from the sidebar dialog", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /Add submodule/ }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add submodule" });
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Repository URL" }),
+      { target: { value: "https://example.com/team/core.git" } },
+    );
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Path in repository" }),
+      { target: { value: "vendor/core" } },
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Add submodule" }),
+    );
+
+    await waitFor(() =>
+      expect(mockedAddSubmodule).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        {
+          url: "https://example.com/team/core.git",
+          path: "vendor/core",
+        },
+      ),
+    );
   });
 
   it("reorders repository tabs by dragging without move buttons", async () => {

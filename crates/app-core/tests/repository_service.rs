@@ -196,6 +196,174 @@ fn reads_real_repository_sidebar_context() {
 }
 
 #[test]
+fn adds_initializes_and_removes_a_submodule() {
+    let fixture = TestRepository::init();
+    let child = TestRepository::init();
+    let service = RepositoryService::new(GitExecutor::default());
+    let repository = service.discover(fixture.path()).expect("discover");
+    let child_url = child.path().to_string_lossy().into_owned();
+
+    service
+        .add_submodule(&repository, &child_url, "vendor/child")
+        .expect("add submodule");
+    let added = service.sidebar(&repository).expect("read added submodule");
+    assert_eq!(added.submodules.len(), 1);
+    assert_eq!(added.submodules[0].path, "vendor/child");
+    assert!(added.submodules[0].initialized);
+
+    fixture.git(["submodule", "deinit", "-f", "--", "vendor/child"]);
+    let deinitialized = service
+        .sidebar(&repository)
+        .expect("read deinitialized submodule");
+    assert!(!deinitialized.submodules[0].initialized);
+
+    service
+        .initialize_submodule(&repository, "vendor/child")
+        .expect("initialize submodule");
+    assert!(
+        service
+            .sidebar(&repository)
+            .expect("read initialized submodule")
+            .submodules[0]
+            .initialized
+    );
+
+    fs::write(
+        fixture.path().join("vendor/child/tracked.txt"),
+        "dirty submodule\n",
+    )
+    .expect("dirty submodule worktree");
+    assert!(
+        service
+            .deinitialize_submodule(&repository, "vendor/child")
+            .is_err(),
+        "dirty submodule must not be deinitialized"
+    );
+    assert!(
+        service
+            .remove_submodule(&repository, "vendor/child")
+            .is_err(),
+        "dirty submodule must not be removed"
+    );
+    fixture.git(["-C", "vendor/child", "restore", "tracked.txt"]);
+
+    service
+        .deinitialize_submodule(&repository, "vendor/child")
+        .expect("deinitialize submodule");
+    assert!(
+        !service
+            .sidebar(&repository)
+            .expect("read deinitialized submodule")
+            .submodules[0]
+            .initialized
+    );
+    service
+        .initialize_submodule(&repository, "vendor/child")
+        .expect("reinitialize submodule");
+
+    fs::write(
+        fixture.path().join("vendor/child/tracked.txt"),
+        "clean local submodule commit\n",
+    )
+    .expect("change submodule for local commit");
+    fixture.git(["-C", "vendor/child", "add", "tracked.txt"]);
+    fixture.git([
+        "-C",
+        "vendor/child",
+        "-c",
+        "user.name=GitAcorn Test",
+        "-c",
+        "user.email=test@gitacorn.local",
+        "commit",
+        "-m",
+        "local submodule commit",
+    ]);
+
+    service
+        .remove_submodule(&repository, "vendor/child")
+        .expect("remove clean submodule with a changed gitlink");
+    assert!(
+        service
+            .sidebar(&repository)
+            .expect("read removed submodule")
+            .submodules
+            .is_empty()
+    );
+    assert!(!fixture.path().join("vendor/child").exists());
+}
+
+#[test]
+fn updates_clean_submodules_after_head_changes_and_preserves_dirty_ones() {
+    let fixture = TestRepository::init();
+    let child = TestRepository::init();
+    let service = RepositoryService::new(GitExecutor::default());
+    let repository = service.discover(fixture.path()).expect("discover");
+    let child_url = child.path().to_string_lossy().into_owned();
+    let first_child_oid = String::from_utf8(child.git_output(["rev-parse", "HEAD"]))
+        .expect("first child oid")
+        .trim()
+        .to_owned();
+
+    service
+        .add_submodule(&repository, &child_url, "vendor/child")
+        .expect("add submodule");
+    fixture.git(["commit", "-m", "add child submodule"]);
+    fixture.git(["branch", "old-submodule"]);
+
+    child.write("tracked.txt", "child v2\n");
+    child.git(["add", "tracked.txt"]);
+    child.git(["commit", "-m", "child v2"]);
+    let second_child_oid = String::from_utf8(child.git_output(["rev-parse", "HEAD"]))
+        .expect("second child oid")
+        .trim()
+        .to_owned();
+    fixture.git(["-C", "vendor/child", "fetch", "origin"]);
+    fixture.git(["-C", "vendor/child", "checkout", &second_child_oid]);
+    fixture.git(["add", "vendor/child"]);
+    fixture.git(["commit", "-m", "update child submodule"]);
+
+    service
+        .checkout_branch(&repository, "old-submodule", false, false, false)
+        .expect("checkout old submodule pointer");
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["-C", "vendor/child", "rev-parse", "HEAD"]))
+            .expect("updated child oid")
+            .trim(),
+        first_child_oid
+    );
+
+    service
+        .checkout_branch(&repository, "main", false, false, false)
+        .expect("checkout new submodule pointer");
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["-C", "vendor/child", "rev-parse", "HEAD"]))
+            .expect("restored child oid")
+            .trim(),
+        second_child_oid
+    );
+
+    fs::write(
+        fixture.path().join("vendor/child/tracked.txt"),
+        "dirty child\n",
+    )
+    .expect("dirty child worktree");
+    service
+        .checkout_branch(&repository, "old-submodule", false, false, false)
+        .expect("checkout while child is dirty");
+    assert_eq!(
+        String::from_utf8(fixture.git_output(["-C", "vendor/child", "rev-parse", "HEAD"]))
+            .expect("preserved dirty child oid")
+            .trim(),
+        second_child_oid
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.path().join("vendor/child/tracked.txt"))
+            .expect("preserved dirty child file"),
+        "dirty child\n"
+    );
+}
+
+#[test]
 fn pages_history_and_manages_branches_without_implicit_checkout() {
     let fixture = TestRepository::init();
     for index in 1..=4 {

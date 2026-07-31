@@ -26,6 +26,8 @@ pub struct SessionTab {
     pub repo_id: String,
     pub worktree_id: String,
     pub worktree_path: String,
+    pub opened_from_repository_name: Option<String>,
+    pub opened_from_worktree_path: Option<String>,
     pub tab_order: i64,
     pub active: bool,
     pub page: String,
@@ -70,6 +72,8 @@ impl SessionStore {
                 repo_id TEXT PRIMARY KEY NOT NULL,
                 worktree_id TEXT NOT NULL DEFAULT '',
                 worktree_path TEXT NOT NULL,
+                opened_from_repository_name TEXT,
+                opened_from_worktree_path TEXT,
                 tab_order INTEGER NOT NULL,
                 active INTEGER NOT NULL DEFAULT 0,
                 page TEXT NOT NULL DEFAULT 'changes',
@@ -120,6 +124,20 @@ impl SessionStore {
                 .await?;
             }
         }
+        for column in ["opened_from_repository_name", "opened_from_worktree_path"] {
+            let exists: i64 = sqlx::query_scalar(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('session_tabs') WHERE name = '{column}'"
+            ))
+            .fetch_one(&pool)
+            .await?;
+            if exists == 0 {
+                sqlx::query(&format!(
+                    "ALTER TABLE session_tabs ADD COLUMN {column} TEXT"
+                ))
+                .execute(&pool)
+                .await?;
+            }
+        }
         Ok(Self { pool })
     }
 
@@ -134,6 +152,8 @@ impl SessionStore {
                 repo_id TEXT PRIMARY KEY NOT NULL,
                 worktree_id TEXT NOT NULL DEFAULT '',
                 worktree_path TEXT NOT NULL,
+                opened_from_repository_name TEXT,
+                opened_from_worktree_path TEXT,
                 tab_order INTEGER NOT NULL,
                 active INTEGER NOT NULL DEFAULT 0,
                 page TEXT NOT NULL DEFAULT 'changes',
@@ -233,7 +253,7 @@ impl SessionStore {
 
     pub async fn load_tabs(&self) -> Result<Vec<SessionTab>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width, history_cursor, selected_commit, history_filter
+            "SELECT repo_id, worktree_id, worktree_path, opened_from_repository_name, opened_from_worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width, history_cursor, selected_commit, history_filter
              FROM session_tabs ORDER BY tab_order",
         )
         .fetch_all(&self.pool)
@@ -244,6 +264,8 @@ impl SessionStore {
                 repo_id: row.get("repo_id"),
                 worktree_id: row.get("worktree_id"),
                 worktree_path: row.get("worktree_path"),
+                opened_from_repository_name: row.get("opened_from_repository_name"),
+                opened_from_worktree_path: row.get("opened_from_worktree_path"),
                 tab_order: row.get("tab_order"),
                 active: row.get::<i64, _>("active") != 0,
                 page: row.get("page"),
@@ -266,11 +288,13 @@ impl SessionStore {
         }
         sqlx::query(
             "INSERT INTO session_tabs
-                (repo_id, worktree_id, worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width, history_cursor, selected_commit, history_filter)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (repo_id, worktree_id, worktree_path, opened_from_repository_name, opened_from_worktree_path, tab_order, active, page, selected_path, selected_diff, panel_width, history_cursor, selected_commit, history_filter)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(repo_id) DO UPDATE SET
                 worktree_id = excluded.worktree_id,
                 worktree_path = excluded.worktree_path,
+                opened_from_repository_name = excluded.opened_from_repository_name,
+                opened_from_worktree_path = excluded.opened_from_worktree_path,
                 tab_order = excluded.tab_order,
                 active = excluded.active,
                 page = excluded.page,
@@ -284,6 +308,8 @@ impl SessionStore {
         .bind(&tab.repo_id)
         .bind(&tab.worktree_id)
         .bind(&tab.worktree_path)
+        .bind(&tab.opened_from_repository_name)
+        .bind(&tab.opened_from_worktree_path)
         .bind(tab.tab_order)
         .bind(tab.active)
         .bind(&tab.page)
@@ -367,6 +393,8 @@ mod tests {
                     repo_id: (*repo_id).to_owned(),
                     worktree_id: format!("{repo_id}-worktree"),
                     worktree_path: format!("C:/{repo_id}"),
+                    opened_from_repository_name: (*repo_id == "two").then(|| "parent".to_owned()),
+                    opened_from_worktree_path: (*repo_id == "two").then(|| "C:/parent".to_owned()),
                     tab_order: index as i64,
                     active: *repo_id == "two",
                     page: if *repo_id == "one" {
@@ -399,6 +427,14 @@ mod tests {
         assert_eq!(tabs[0].selected_diff, "staged");
         assert_eq!(tabs[0].history_cursor.as_deref(), Some("offset:50"));
         assert_eq!(tabs[0].selected_commit.as_deref(), Some("one-oid"));
+        assert_eq!(
+            tabs[1].opened_from_repository_name.as_deref(),
+            Some("parent")
+        );
+        assert_eq!(
+            tabs[1].opened_from_worktree_path.as_deref(),
+            Some("C:/parent")
+        );
     }
 
     #[tokio::test]
@@ -410,6 +446,8 @@ mod tests {
                     repo_id: (*repo_id).to_owned(),
                     worktree_id: format!("{repo_id}-worktree"),
                     worktree_path: format!("C:/{repo_id}"),
+                    opened_from_repository_name: None,
+                    opened_from_worktree_path: None,
                     tab_order: index as i64,
                     active: false,
                     page: "changes".to_owned(),

@@ -13,10 +13,10 @@ use crate::dto::{
     HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, OperationEventDto,
     OperationRecordDto, OperationStartedDto, PatchSelectionDto, ReferenceDto,
     RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
-    RepositoryGitIdentityDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
-    SessionTabUpdateDto, StashRequestDto,
+    RepositoryGitIdentityDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
+    SessionDto, SessionTabUpdateDto, StashRequestDto, SubmoduleAddRequestDto,
 };
-use crate::state::{ApplicationState, SessionTabUpdate};
+use crate::state::{ApplicationState, RepositoryOpenSource, SessionTabUpdate};
 
 #[tauri::command]
 pub fn app_info() -> AppInfoDto {
@@ -266,11 +266,16 @@ fn operation_event(
 #[tauri::command]
 pub async fn repository_open(
     path: String,
+    opened_from: Option<RepositoryOpenSourceDto>,
     app: AppHandle,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<SessionDto> {
+    let opened_from = opened_from.map(|source| RepositoryOpenSource {
+        repository_name: source.repository_name,
+        worktree_path: source.worktree_path,
+    });
     state
-        .open_repository(&PathBuf::from(path), &app)
+        .open_repository(&PathBuf::from(path), opened_from, &app)
         .await
         .map(SessionDto::from)
         .map_err(|error| AppErrorDto::from(&error))
@@ -482,6 +487,58 @@ pub fn remote_remove(
 ) -> CommandResult<RepositorySnapshotDto> {
     state
         .remove_remote(&repo_id, revision, &name)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn submodule_add(
+    repo_id: String,
+    revision: u64,
+    request: SubmoduleAddRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .add_submodule(&repo_id, revision, &request.url, &request.path)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn submodule_initialize(
+    repo_id: String,
+    revision: u64,
+    path: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .initialize_submodule(&repo_id, revision, &path)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn submodule_deinitialize(
+    repo_id: String,
+    revision: u64,
+    path: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .deinitialize_submodule(&repo_id, revision, &path)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn submodule_remove(
+    repo_id: String,
+    revision: u64,
+    path: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .remove_submodule(&repo_id, revision, &path)
         .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }

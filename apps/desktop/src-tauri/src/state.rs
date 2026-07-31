@@ -43,6 +43,12 @@ pub struct SessionTabUpdate {
     pub history_filter: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RepositoryOpenSource {
+    pub repository_name: String,
+    pub worktree_path: String,
+}
+
 pub struct RepositoryIdentityState {
     pub repo_id: String,
     pub repository_name: String,
@@ -75,6 +81,7 @@ impl ApplicationState {
     pub async fn open_repository(
         &self,
         path: &Path,
+        opened_from: Option<RepositoryOpenSource>,
         app: &AppHandle,
     ) -> Result<Vec<SessionTabState>, AppError> {
         let descriptor = self.service.discover(path)?;
@@ -101,6 +108,10 @@ impl ApplicationState {
                 repo_id: repo_id.to_string(),
                 worktree_id: descriptor.worktree_id.to_string(),
                 worktree_path: descriptor.worktree_path.to_string_lossy().into_owned(),
+                opened_from_repository_name: opened_from
+                    .as_ref()
+                    .map(|source| source.repository_name.clone()),
+                opened_from_worktree_path: opened_from.map(|source| source.worktree_path),
                 tab_order: existing
                     .map(|tab| tab.tab_order)
                     .unwrap_or(tabs.len() as i64),
@@ -158,7 +169,51 @@ impl ApplicationState {
                 Err(error) => return Err(error),
             }
         }
+        self.backfill_submodule_sources().await?;
         self.session_tabs(None).await
+    }
+
+    async fn backfill_submodule_sources(&self) -> Result<(), AppError> {
+        let repositories = self
+            .repositories
+            .lock()
+            .expect("repository registry lock poisoned")
+            .values()
+            .map(|repository| repository.descriptor.clone())
+            .collect::<Vec<_>>();
+        let mut sources_by_path = HashMap::new();
+        for repository in repositories {
+            let Ok(sidebar) = self.service.sidebar(&repository) else {
+                continue;
+            };
+            for submodule in sidebar.submodules {
+                sources_by_path.insert(
+                    worktree_path_key(Path::new(&submodule.absolute_path)),
+                    RepositoryOpenSource {
+                        repository_name: repository.name.clone(),
+                        worktree_path: repository.worktree_path.to_string_lossy().into_owned(),
+                    },
+                );
+            }
+        }
+
+        for mut tab in self.load_stored_tabs().await? {
+            if tab.opened_from_repository_name.is_some() {
+                continue;
+            }
+            let Some(source) =
+                sources_by_path.get(&worktree_path_key(Path::new(&tab.worktree_path)))
+            else {
+                continue;
+            };
+            tab.opened_from_repository_name = Some(source.repository_name.clone());
+            tab.opened_from_worktree_path = Some(source.worktree_path.clone());
+            self.session
+                .upsert_tab(&tab)
+                .await
+                .map_err(persistence_error)?;
+        }
+        Ok(())
     }
 
     pub fn repository_snapshot(&self, repo_id: &str) -> Result<RepositorySnapshot, AppError> {
@@ -313,6 +368,51 @@ impl ApplicationState {
     ) -> Result<RepositorySnapshot, AppError> {
         self.mutate(repo_id, revision, |service, repository| {
             service.remove_remote(repository, name)
+        })
+    }
+
+    pub fn add_submodule(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        url: &str,
+        path: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.add_submodule(repository, url, path)
+        })
+    }
+
+    pub fn initialize_submodule(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        path: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.initialize_submodule(repository, path)
+        })
+    }
+
+    pub fn deinitialize_submodule(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        path: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.deinitialize_submodule(repository, path)
+        })
+    }
+
+    pub fn remove_submodule(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        path: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.remove_submodule(repository, path)
         })
     }
 
@@ -481,7 +581,7 @@ impl ApplicationState {
         revision: u64,
         reference: &str,
     ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate(repo_id, revision, |service, repository| {
+        self.mutate_head(repo_id, revision, |service, repository| {
             service.rebase_onto(repository, reference)
         })
     }
@@ -514,7 +614,7 @@ impl ApplicationState {
         request: &InteractiveRebaseRequest,
         sequence_editor_executable: &Path,
     ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate(repo_id, revision, |service, repository| {
+        self.mutate_head(repo_id, revision, |service, repository| {
             service.start_interactive_rebase(repository, request, sequence_editor_executable)
         })
     }
@@ -524,7 +624,7 @@ impl ApplicationState {
         repo_id: &str,
         revision: u64,
     ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate(repo_id, revision, |service, repository| {
+        self.mutate_head(repo_id, revision, |service, repository| {
             service.continue_rebase(repository)
         })
     }
@@ -534,7 +634,7 @@ impl ApplicationState {
         repo_id: &str,
         revision: u64,
     ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate(repo_id, revision, |service, repository| {
+        self.mutate_head(repo_id, revision, |service, repository| {
             service.skip_rebase(repository)
         })
     }
@@ -544,7 +644,7 @@ impl ApplicationState {
         repo_id: &str,
         revision: u64,
     ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate(repo_id, revision, |service, repository| {
+        self.mutate_head(repo_id, revision, |service, repository| {
             service.abort_rebase(repository)
         })
     }
@@ -582,7 +682,7 @@ impl ApplicationState {
         revision: u64,
         reference: &str,
     ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate(repo_id, revision, |service, repository| {
+        self.mutate_head(repo_id, revision, |service, repository| {
             service.merge_reference(repository, reference)
         })
     }
@@ -593,7 +693,7 @@ impl ApplicationState {
         revision: u64,
         branch: &str,
     ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate(repo_id, revision, |service, repository| {
+        self.mutate_head(repo_id, revision, |service, repository| {
             service.fast_forward_branch(repository, branch)
         })
     }
@@ -861,6 +961,17 @@ impl ApplicationState {
         })
     }
 
+    fn mutate_head(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        operation: impl FnOnce(&RepositoryService, &RepositoryDescriptor) -> Result<(), AppError>,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.with_submodule_update(repository, false, |_| operation(service, repository))
+        })
+    }
+
     fn descriptor(&self, repo_id: RepoId) -> Result<RepositoryDescriptor, AppError> {
         self.repositories
             .lock()
@@ -1049,6 +1160,19 @@ impl ApplicationState {
 
 fn parse_repo_id(repo_id: &str) -> Result<RepoId, AppError> {
     RepoId::from_str(repo_id).map_err(|_| AppError::RepositoryNotOpen)
+}
+
+fn worktree_path_key(path: &Path) -> String {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = path.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        key.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        key
+    }
 }
 
 fn ensure_revision(expected: u64, actual: u64) -> Result<(), AppError> {

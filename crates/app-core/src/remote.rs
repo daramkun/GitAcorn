@@ -57,11 +57,21 @@ impl super::RepositoryService {
         cancellation: &CancellationToken,
         progress: impl FnMut(RemoteProgress),
     ) -> Result<(), AppError> {
-        let args = build_remote_args(request)?;
-        let mut git_request = GitRequest::new(args);
-        git_request.working_directory = Some(repository.worktree_path.clone());
-        git_request.timeout = Duration::from_secs(15 * 60);
-        run_remote(&self.executor, git_request, cancellation, progress)
+        if request.kind == RemoteOperationKind::Pull {
+            self.with_submodule_update(repository, true, |recurse_submodules| {
+                let args = build_remote_args(request, recurse_submodules)?;
+                let mut git_request = GitRequest::new(args);
+                git_request.working_directory = Some(repository.worktree_path.clone());
+                git_request.timeout = Duration::from_secs(15 * 60);
+                run_remote(&self.executor, git_request, cancellation, progress)
+            })
+        } else {
+            let args = build_remote_args(request, false)?;
+            let mut git_request = GitRequest::new(args);
+            git_request.working_directory = Some(repository.worktree_path.clone());
+            git_request.timeout = Duration::from_secs(15 * 60);
+            run_remote(&self.executor, git_request, cancellation, progress)
+        }
     }
 
     pub fn clone_repository(
@@ -83,7 +93,10 @@ impl super::RepositoryService {
     }
 }
 
-fn build_remote_args(request: &RemoteRequest) -> Result<Vec<OsString>, AppError> {
+fn build_remote_args(
+    request: &RemoteRequest,
+    recurse_submodules: bool,
+) -> Result<Vec<OsString>, AppError> {
     if request.fetch_tags && request.kind != RemoteOperationKind::Fetch {
         return Err(AppError::InvalidRequest(
             "Fetch tags is only valid for fetch".to_owned(),
@@ -103,6 +116,9 @@ fn build_remote_args(request: &RemoteRequest) -> Result<Vec<OsString>, AppError>
     }
 
     let mut args = vec![OsString::from(request.kind.label())];
+    if recurse_submodules {
+        args.push(OsString::from("--recurse-submodules"));
+    }
     if request.fetch_tags {
         args.push(OsString::from("--tags"));
     }
@@ -261,7 +277,7 @@ mod tests {
     }
 
     fn string_args(request: &RemoteRequest) -> Vec<String> {
-        build_remote_args(request)
+        build_remote_args(request, false)
             .expect("valid remote arguments")
             .into_iter()
             .map(|argument| argument.to_string_lossy().into_owned())
@@ -284,6 +300,17 @@ mod tests {
             string_args(&request),
             ["pull", "--autostash", "--ff-only", "upstream"]
         );
+    }
+
+    #[test]
+    fn enables_native_submodule_recursion_for_pull() {
+        let request = request(RemoteOperationKind::Pull);
+        let args = build_remote_args(&request, true)
+            .expect("valid recursive pull arguments")
+            .into_iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args, ["pull", "--recurse-submodules", "upstream"]);
     }
 
     #[test]

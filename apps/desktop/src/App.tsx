@@ -25,6 +25,7 @@ import {
 } from "./windowControls";
 import {
   applyPatchSelection,
+  addSubmodule,
   addRemote,
   abortMerge,
   abortRebase,
@@ -43,6 +44,7 @@ import {
   continueRebase,
   deleteBranch,
   deleteTag,
+  deinitializeSubmodule,
   discardPath,
   dropStash,
   fastForwardBranch,
@@ -58,6 +60,7 @@ import {
   getReferences,
   getRepositorySidebar,
   getRepositorySnapshot,
+  initializeSubmodule,
   listenForRepositoryChanges,
   normalizeAppError,
   openRepository,
@@ -65,6 +68,7 @@ import {
   rebaseBranch,
   renameBranch,
   reorderSessionTabs,
+  removeSubmodule,
   removeRemote,
   resolveConflict,
   restoreSession,
@@ -150,11 +154,18 @@ type ReferenceContextMenu =
   | { x: number; y: number; kind: "tag"; name: string };
 
 type StashItem = RepositorySidebarDto["stashes"][number];
+type SubmoduleItem = NonNullable<RepositorySidebarDto["submodules"]>[number];
 
 type StashContextMenu = {
   x: number;
   y: number;
   stash: StashItem;
+};
+
+type SubmoduleContextMenu = {
+  x: number;
+  y: number;
+  submodule: SubmoduleItem;
 };
 
 type ReferenceEditor =
@@ -366,6 +377,11 @@ export type ThemeSetting = "system" | "light" | "dark";
 export function App() {
   const [appInfo, setAppInfo] = useState<AppInfoState>({ status: "loading" });
   const [tabs, setTabs] = useState<SessionTabDto[]>([]);
+  const repositoryTabsRef = useRef<HTMLDivElement>(null);
+  const [tabScrollState, setTabScrollState] = useState({
+    canScrollLeft: false,
+    canScrollRight: false,
+  });
   const [draggedTabId, setDraggedTabId] = useState<string>();
   const draggedTabIdRef = useRef<string | undefined>(undefined);
   const suppressTabClickRef = useRef<string | undefined>(undefined);
@@ -385,6 +401,7 @@ export function App() {
     mode: "add" | "edit";
     remote?: GitRemoteDto;
   }>();
+  const [showSubmoduleAdd, setShowSubmoduleAdd] = useState(false);
   const [remoteDialog, setRemoteDialog] = useState<"fetch" | "pull" | "push">();
   const [remoteContextMenu, setRemoteContextMenu] = useState<{
     x: number;
@@ -395,6 +412,8 @@ export function App() {
     useState<ReferenceContextMenu>();
   const [stashContextMenu, setStashContextMenu] =
     useState<StashContextMenu>();
+  const [submoduleContextMenu, setSubmoduleContextMenu] =
+    useState<SubmoduleContextMenu>();
   const [stashDialog, setStashDialog] = useState<StashItem>();
   const [referenceEditor, setReferenceEditor] = useState<ReferenceEditor>();
   const [referenceDeleteDialog, setReferenceDeleteDialog] =
@@ -505,13 +524,15 @@ export function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (remoteEditor) setRemoteEditor(undefined);
+        if (showSubmoduleAdd) setShowSubmoduleAdd(false);
+        else if (remoteEditor) setRemoteEditor(undefined);
         else if (remoteDialog) setRemoteDialog(undefined);
         else if (checkoutTarget) setCheckoutTarget(undefined);
         else if (stashDialog) setStashDialog(undefined);
         else if (referenceDeleteDialog) setReferenceDeleteDialog(undefined);
         else if (referenceEditor) setReferenceEditor(undefined);
         else if (stashContextMenu) setStashContextMenu(undefined);
+        else if (submoduleContextMenu) setSubmoduleContextMenu(undefined);
         else if (referenceContextMenu) setReferenceContextMenu(undefined);
         else if (remoteContextMenu) setRemoteContextMenu(undefined);
         else if (showRepositorySettings) setShowRepositorySettings(false);
@@ -526,7 +547,9 @@ export function App() {
     referenceDeleteDialog,
     referenceEditor,
     checkoutTarget,
+    showSubmoduleAdd,
     stashContextMenu,
+    submoduleContextMenu,
     stashDialog,
     remoteContextMenu,
     remoteDialog,
@@ -545,6 +568,57 @@ export function App() {
   const activeRepositoryReady = Boolean(activeSnapshot);
   const page: Page = activeTab?.page === "history" ? "history" : "changes";
   const activeSidebar = activeTab ? sidebars[activeTab.repoId] : undefined;
+
+  useEffect(() => {
+    const tabsElement = repositoryTabsRef.current;
+    if (!tabsElement) return;
+    const updateScrollState = () => {
+      const maxScrollLeft = Math.max(
+        0,
+        tabsElement.scrollWidth - tabsElement.clientWidth,
+      );
+      setTabScrollState({
+        canScrollLeft: tabsElement.scrollLeft > 1,
+        canScrollRight: tabsElement.scrollLeft < maxScrollLeft - 1,
+      });
+    };
+    updateScrollState();
+    tabsElement.addEventListener("scroll", updateScrollState, {
+      passive: true,
+    });
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(updateScrollState);
+    observer?.observe(tabsElement);
+    const activeTabElement =
+      tabsElement.querySelector<HTMLElement>(".repository-tab.active");
+    if (activeTabElement) {
+      const tabLeft = activeTabElement.offsetLeft;
+      const tabRight = tabLeft + activeTabElement.offsetWidth;
+      if (tabLeft < tabsElement.scrollLeft) {
+        tabsElement.scrollTo({ left: tabLeft, behavior: "smooth" });
+      } else if (tabRight > tabsElement.scrollLeft + tabsElement.clientWidth) {
+        tabsElement.scrollTo({
+          left: tabRight - tabsElement.clientWidth,
+          behavior: "smooth",
+        });
+      }
+    }
+    return () => {
+      tabsElement.removeEventListener("scroll", updateScrollState);
+      observer?.disconnect();
+    };
+  }, [tabs]);
+
+  function scrollRepositoryTabs(direction: -1 | 1) {
+    const tabsElement = repositoryTabsRef.current;
+    if (!tabsElement) return;
+    tabsElement.scrollBy({
+      left: direction * Math.max(180, tabsElement.clientWidth * 0.6),
+      behavior: "smooth",
+    });
+  }
 
   const applyGitIdentity = useCallback((settings: GitIdentitySettingsDto) => {
     setGlobalIdentityName(settings.global.name ?? "");
@@ -783,6 +857,13 @@ export function App() {
       ),
     [activeSidebar?.worktrees, sidebarFilterQuery],
   );
+  const filteredSubmodules = useMemo(
+    () =>
+      (activeSidebar?.submodules ?? []).filter((submodule) =>
+        submodule.path.toLocaleLowerCase().includes(sidebarFilterQuery),
+      ),
+    [activeSidebar?.submodules, sidebarFilterQuery],
+  );
   const remoteSidebarEntries = useMemo(
     () =>
       remoteNames
@@ -999,11 +1080,17 @@ export function App() {
   }, [activeRepoId, activeRepositoryReady, reportError]);
 
   useEffect(() => {
-    if (!remoteContextMenu && !referenceContextMenu && !stashContextMenu) return;
+    if (
+      !remoteContextMenu &&
+      !referenceContextMenu &&
+      !stashContextMenu &&
+      !submoduleContextMenu
+    ) return;
     const close = () => {
       setRemoteContextMenu(undefined);
       setReferenceContextMenu(undefined);
       setStashContextMenu(undefined);
+      setSubmoduleContextMenu(undefined);
     };
     window.addEventListener("click", close);
     window.addEventListener("blur", close);
@@ -1011,7 +1098,7 @@ export function App() {
       window.removeEventListener("click", close);
       window.removeEventListener("blur", close);
     };
-  }, [referenceContextMenu, remoteContextMenu, stashContextMenu]);
+  }, [referenceContextMenu, remoteContextMenu, stashContextMenu, submoduleContextMenu]);
 
   useEffect(() => {
     let disposed = false;
@@ -1078,9 +1165,24 @@ export function App() {
     try {
       const path = await chooseRepositoryDirectory();
       if (!path) return;
+      await handleOpenRepositoryPath(path);
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+    } finally {
+      setSessionLoading(false);
+    }
+  }
+
+  async function handleOpenRepositoryPath(
+    path: string,
+    openedFrom?: { repositoryName: string; worktreePath: string },
+  ) {
+    try {
       setOpening(true);
       setError(undefined);
-      const session = await openRepository(path);
+      const session = openedFrom
+        ? await openRepository(path, openedFrom)
+        : await openRepository(path);
       setTabs(session.tabs);
     } catch (reason: unknown) {
       setError(normalizeAppError(reason));
@@ -1457,6 +1559,142 @@ export function App() {
     });
   }
 
+  function handleSubmoduleInitialize(path: string) {
+    if (
+      !activeSnapshot ||
+      !confirmRepositoryMutation(
+        t("Initialize submodule {path}?", { path }),
+      )
+    ) {
+      return;
+    }
+    void handleWorkspaceMutation(() =>
+      initializeSubmodule(
+        activeSnapshot.repository.id,
+        activeSnapshot.revision,
+        path,
+      ),
+    );
+  }
+
+  async function handleSubmoduleOpen(submodule: {
+    path: string;
+    absolutePath: string;
+    initialized: boolean;
+  }) {
+    if (!activeSnapshot) return;
+    const openedFrom = {
+      repositoryName: activeSnapshot.repository.name,
+      worktreePath: activeSnapshot.repository.worktreePath,
+    };
+
+    if (!submodule.initialized) {
+      if (
+        !confirmRepositoryMutation(
+          t("Initialize submodule {path} and open it as a repository?", {
+            path: submodule.path,
+          }),
+        )
+      ) {
+        return;
+      }
+      try {
+        setOpening(true);
+        setError(undefined);
+        const initialized = await initializeSubmodule(
+          activeSnapshot.repository.id,
+          activeSnapshot.revision,
+          submodule.path,
+        );
+        acceptWorkspaceSnapshot(initialized);
+      } catch (reason: unknown) {
+        setError(normalizeAppError(reason));
+        setOpening(false);
+        return;
+      }
+    }
+
+    await handleOpenRepositoryPath(submodule.absolutePath, openedFrom);
+  }
+
+  async function handleSubmoduleRemove(submodule: {
+    path: string;
+    absolutePath: string;
+  }) {
+    if (
+      !activeSnapshot ||
+      !confirmRepositoryMutation(
+        t("Remove submodule {path}? Its worktree will be removed and the deletion staged.", {
+          path: submodule.path,
+        }),
+      )
+    ) {
+      return;
+    }
+    try {
+      setError(undefined);
+      let mutationSnapshot = activeSnapshot;
+      const openTab = tabs.find(
+        (tab) => tab.worktreePath === submodule.absolutePath,
+      );
+      if (openTab) {
+        const session = await closeSessionTab(openTab.repoId);
+        setTabs(session.tabs);
+        mutationSnapshot = await getRepositorySnapshot(
+          activeSnapshot.repository.id,
+        );
+      }
+      acceptWorkspaceSnapshot(
+        await removeSubmodule(
+          mutationSnapshot.repository.id,
+          mutationSnapshot.revision,
+          submodule.path,
+        ),
+      );
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+    }
+  }
+
+  async function handleSubmoduleDeinitialize(submodule: {
+    path: string;
+    absolutePath: string;
+  }) {
+    if (
+      !activeSnapshot ||
+      !confirmRepositoryMutation(
+        t("Deinitialize submodule {path}? Its worktree will be removed.", {
+          path: submodule.path,
+        }),
+      )
+    ) {
+      return;
+    }
+    try {
+      setError(undefined);
+      let mutationSnapshot = activeSnapshot;
+      const openTab = tabs.find(
+        (tab) => tab.worktreePath === submodule.absolutePath,
+      );
+      if (openTab) {
+        const session = await closeSessionTab(openTab.repoId);
+        setTabs(session.tabs);
+        mutationSnapshot = await getRepositorySnapshot(
+          activeSnapshot.repository.id,
+        );
+      }
+      acceptWorkspaceSnapshot(
+        await deinitializeSubmodule(
+          mutationSnapshot.repository.id,
+          mutationSnapshot.revision,
+          submodule.path,
+        ),
+      );
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+    }
+  }
+
   async function handleWorkspaceMutation(
     action: () => Promise<RepositorySnapshotDto>,
   ) {
@@ -1701,20 +1939,45 @@ export function App() {
       </header>
 
       <div className="tabbar" aria-label={t("Repository tabs")}>
-        <div className="repository-tabs">
-          {tabs.length === 0 && (
-            <div className="tabbar-empty">
-              {sessionLoading ? t("Restoring session…") : t("No repositories open")}
-            </div>
-          )}
-          {tabs.map((tab) => (
-            <div
+        <div className="repository-tab-strip">
+          <button
+            className="tab-scroll-button"
+            type="button"
+            aria-label={t("Scroll repository tabs left")}
+            disabled={!tabScrollState.canScrollLeft}
+            onClick={() => scrollRepositoryTabs(-1)}
+          >
+            ‹
+          </button>
+          <div
+            className="repository-tabs"
+            ref={repositoryTabsRef}
+            onWheel={(event) => {
+              if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+              event.preventDefault();
+              event.currentTarget.scrollLeft += event.deltaY;
+            }}
+          >
+            {tabs.length === 0 && (
+              <div className="tabbar-empty">
+                {sessionLoading ? t("Restoring session…") : t("No repositories open")}
+              </div>
+            )}
+            {tabs.map((tab) => (
+              <div
               className={`repository-tab ${tab.active ? "active" : ""} ${tab.unavailable ? "unavailable" : ""} ${draggedTabId === tab.repoId ? "dragging" : ""} ${tabDropTarget?.repoId === tab.repoId && draggedTabId !== tab.repoId ? `drop-${tabDropTarget.edge}` : ""}`}
               data-repo-id={tab.repoId}
               key={tab.repoId}
-              title={t("Drag {name} to reorder", {
-                name: repositoryName(tab.worktreePath),
-              })}
+              title={
+                tab.openedFrom
+                  ? t("Submodule of {name} ({path})", {
+                      name: tab.openedFrom.repositoryName,
+                      path: tab.openedFrom.worktreePath,
+                    })
+                  : t("Drag {name} to reorder", {
+                      name: repositoryName(tab.worktreePath),
+                    })
+              }
             >
               <button
                 className="tab-main"
@@ -1730,14 +1993,33 @@ export function App() {
                 onMouseDown={(event) => beginTabDrag(tab.repoId, event)}
               >
                 <span className="repository-dot" aria-hidden="true" />
-                <strong>{tab.snapshot?.repository.name ?? repositoryName(tab.worktreePath)}</strong>
+                <span className="tab-label">
+                  <strong>{tab.snapshot?.repository.name ?? repositoryName(tab.worktreePath)}</strong>
+                  {tab.openedFrom && (
+                    <small>
+                      {t("Submodule of {name}", {
+                        name: tab.openedFrom.repositoryName,
+                      })}
+                    </small>
+                  )}
+                </span>
                 <span>{tab.unavailable ? "!" : (tab.snapshot?.changes.length ?? 0)}</span>
               </button>
               <div className="tab-controls">
                 <button type="button" aria-label={t("Close {name}", { name: repositoryName(tab.worktreePath) })} onClick={() => closeTab(tab.repoId)}>×</button>
               </div>
-            </div>
-          ))}
+              </div>
+            ))}
+          </div>
+          <button
+            className="tab-scroll-button"
+            type="button"
+            aria-label={t("Scroll repository tabs right")}
+            disabled={!tabScrollState.canScrollRight}
+            onClick={() => scrollRepositoryTabs(1)}
+          >
+            ›
+          </button>
         </div>
         <button className="control-button control-button--primary open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
           <span aria-hidden="true">＋</span>{" "}{opening ? t("Opening…") : t("Open a repository")}
@@ -1781,7 +2063,7 @@ export function App() {
                 className="control-input"
                 type="search"
                 aria-label={t("Filter sidebar")}
-                placeholder={t("Filter branches, tags, stashes, or worktrees")}
+                placeholder={t("Filter branches, tags, stashes, submodules, or worktrees")}
                 value={sidebarFilter}
                 onChange={(event) =>
                   setSidebarFilter(event.currentTarget.value)
@@ -1962,6 +2244,99 @@ export function App() {
                 setStashContextMenu({ stash, x, y })
               }
             />
+            <SidebarGroup
+              label={t("Submodules")}
+              count={filteredSubmodules.length}
+              initialLimit={999}
+            >
+              <button
+                className="submodule-add-button"
+                type="button"
+                disabled={!activeSnapshot}
+                onClick={() => setShowSubmoduleAdd(true)}
+              >
+                ＋ {t("Add submodule")}
+              </button>
+              {filteredSubmodules.map((submodule) => (
+                <div
+                  className="submodule-item"
+                  key={submodule.path}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setSubmoduleContextMenu({
+                      submodule,
+                      x: event.clientX,
+                      y: event.clientY,
+                    });
+                  }}
+                >
+                  <button
+                    className="submodule-main"
+                    type="button"
+                    title={
+                      submodule.initialized
+                        ? t("Double-click to open {path} as a repository", {
+                            path: submodule.absolutePath,
+                          })
+                        : t("Double-click to initialize and open {path} as a repository", {
+                            path: submodule.path,
+                          })
+                    }
+                    disabled={opening}
+                    onDoubleClick={() => {
+                      void handleSubmoduleOpen(submodule);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        void handleSubmoduleOpen(submodule);
+                      } else if (
+                        event.key === "ContextMenu" ||
+                        (event.shiftKey && event.key === "F10")
+                      ) {
+                        event.preventDefault();
+                        const bounds = event.currentTarget.getBoundingClientRect();
+                        setSubmoduleContextMenu({
+                          submodule,
+                          x: bounds.left + 12,
+                          y: bounds.top + 12,
+                        });
+                      }
+                    }}
+                  >
+                    <span className="submodule-icon" aria-hidden="true">◇</span>
+                    <span>{submodule.path}</span>
+                    {!submodule.initialized && (
+                      <small>{t("not initialized")}</small>
+                    )}
+                  </button>
+                  {!submodule.initialized && (
+                    <button
+                      className="submodule-action"
+                      type="button"
+                      aria-label={t("Initialize submodule {path}", {
+                        path: submodule.path,
+                      })}
+                      title={t("Initialize")}
+                      onClick={() => handleSubmoduleInitialize(submodule.path)}
+                    >
+                      ↻
+                    </button>
+                  )}
+                  <button
+                    className="submodule-action danger"
+                    type="button"
+                    aria-label={t("Remove submodule {path}", {
+                      path: submodule.path,
+                    })}
+                    title={t("Remove")}
+                    onClick={() => void handleSubmoduleRemove(submodule)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </SidebarGroup>
             <SidebarGroup
               label={t("Worktrees")}
               count={filteredWorktrees.length}
@@ -2433,6 +2808,53 @@ export function App() {
           </div>
         </div>
       )}
+      {submoduleContextMenu && activeSnapshot && (
+        <div
+          className="remote-context-menu"
+          role="menu"
+          style={{ left: submoduleContextMenu.x, top: submoduleContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {submoduleContextMenu.submodule.initialized ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const submodule = submoduleContextMenu.submodule;
+                  setSubmoduleContextMenu(undefined);
+                  void handleSubmoduleOpen(submodule);
+                }}
+              >
+                {t("Open")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const submodule = submoduleContextMenu.submodule;
+                  setSubmoduleContextMenu(undefined);
+                  void handleSubmoduleDeinitialize(submodule);
+                }}
+              >
+                {t("Deinitialize")}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const path = submoduleContextMenu.submodule.path;
+                setSubmoduleContextMenu(undefined);
+                handleSubmoduleInitialize(path);
+              }}
+            >
+              {t("Initialize")}
+            </button>
+          )}
+        </div>
+      )}
       {referenceContextMenu && activeSnapshot && (
         <div
           className="remote-context-menu"
@@ -2717,6 +3139,20 @@ export function App() {
           }
         />
       )}
+      {showSubmoduleAdd && activeSnapshot && (
+        <SubmoduleAddDialog
+          onClose={() => setShowSubmoduleAdd(false)}
+          onAdd={(url, path) =>
+            handleWorkspaceMutation(() =>
+              addSubmodule(
+                activeSnapshot.repository.id,
+                activeSnapshot.revision,
+                { url, path },
+              ),
+            )
+          }
+        />
+      )}
       {remoteDialog && activeSnapshot && (
         <RemoteOperationDialog
           kind={remoteDialog}
@@ -2802,6 +3238,89 @@ export function App() {
           }
         />
       )}
+    </div>
+  );
+}
+
+function SubmoduleAddDialog({
+  onClose,
+  onAdd,
+}: {
+  onClose: () => void;
+  onAdd: (url: string, path: string) => Promise<void>;
+}) {
+  const [url, setUrl] = useState("");
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="modal-overlay" onClick={onClose} role="presentation">
+      <div
+        className="settings-modal remote-manager-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="submodule-add-title"
+      >
+        <div className="settings-modal-header">
+          <h2 id="submodule-add-title">{t("Add submodule")}</h2>
+          <button
+            className="settings-close-btn"
+            type="button"
+            aria-label={t("Close add submodule dialog")}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="remote-manager-body">
+          <form
+            className="remote-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setBusy(true);
+              void onAdd(url.trim(), path.trim())
+                .then(onClose)
+                .catch(() => undefined)
+                .finally(() => setBusy(false));
+            }}
+          >
+            <label>
+              <span>{t("Repository URL")}</span>
+              <input
+                value={url}
+                onChange={(event) => setUrl(event.target.value)}
+                disabled={busy}
+                autoFocus
+                placeholder="https://host/owner/repository.git"
+              />
+            </label>
+            <label>
+              <span>{t("Path in repository")}</span>
+              <input
+                value={path}
+                onChange={(event) => setPath(event.target.value)}
+                disabled={busy}
+                placeholder="vendor/repository"
+              />
+            </label>
+            <small>
+              {t("The submodule and .gitmodules changes will be staged.")}
+            </small>
+            <div className="remote-form-actions">
+              <button type="button" disabled={busy} onClick={onClose}>
+                {t("Cancel")}
+              </button>
+              <button
+                type="submit"
+                disabled={busy || !url.trim() || !path.trim()}
+              >
+                {busy ? t("Adding…") : t("Add submodule")}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }

@@ -87,6 +87,13 @@ pub struct RemoteMutationRequestDto {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SubmoduleAddRequestDto {
+    pub url: String,
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteReferenceDeleteDto {
     pub remote: String,
     pub name: String,
@@ -359,12 +366,27 @@ pub struct SessionDto {
     pub tabs: Vec<SessionTabDto>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryOpenSourceDto {
+    pub repository_name: String,
+    pub worktree_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedFromRepositoryDto {
+    pub repository_name: String,
+    pub worktree_path: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionTabDto {
     pub repo_id: String,
     pub worktree_id: String,
     pub worktree_path: String,
+    pub opened_from: Option<OpenedFromRepositoryDto>,
     pub active: bool,
     pub page: String,
     pub selected_path: Option<String>,
@@ -594,6 +616,7 @@ pub struct RemoteTagDto {
 pub struct RepositorySidebarDto {
     pub schema_version: u16,
     pub worktrees: Vec<WorktreeDto>,
+    pub submodules: Vec<SubmoduleDto>,
     pub branches: RefSummaryDto,
     pub remote_branches: RefSummaryDto,
     pub tags: RefSummaryDto,
@@ -609,6 +632,14 @@ pub struct WorktreeDto {
     pub branch: Option<String>,
     pub is_current: bool,
     pub is_locked: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmoduleDto {
+    pub path: String,
+    pub absolute_path: String,
+    pub initialized: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -632,6 +663,14 @@ impl From<Vec<SessionTabState>> for SessionDto {
             tabs: tabs
                 .into_iter()
                 .map(|tab| SessionTabDto {
+                    opened_from: tab
+                        .stored
+                        .opened_from_repository_name
+                        .zip(tab.stored.opened_from_worktree_path)
+                        .map(|(repository_name, worktree_path)| OpenedFromRepositoryDto {
+                            repository_name,
+                            worktree_path,
+                        }),
                     repo_id: tab.stored.repo_id,
                     worktree_id: tab.stored.worktree_id,
                     worktree_path: tab.stored.worktree_path,
@@ -665,6 +704,15 @@ impl From<RepositorySidebar> for RepositorySidebarDto {
                     branch: worktree.branch,
                     is_current: worktree.is_current,
                     is_locked: worktree.is_locked,
+                })
+                .collect(),
+            submodules: sidebar
+                .submodules
+                .into_iter()
+                .map(|submodule| SubmoduleDto {
+                    path: submodule.path,
+                    absolute_path: submodule.absolute_path,
+                    initialized: submodule.initialized,
                 })
                 .collect(),
             branches: RefSummaryDto {
