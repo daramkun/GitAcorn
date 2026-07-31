@@ -10,7 +10,9 @@ use git_domain::{
 };
 use persistence::OperationRecord;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
+use crate::path_display::display_path;
 use crate::state::{RepositoryIdentityState, SessionTabState};
 
 #[derive(Debug, Default, Deserialize)]
@@ -455,12 +457,8 @@ impl From<RepositorySnapshot> for RepositorySnapshotDto {
             repository: RepositoryDto {
                 id: snapshot.repository.id.to_string(),
                 name: snapshot.repository.name,
-                worktree_path: snapshot
-                    .repository
-                    .worktree_path
-                    .to_string_lossy()
-                    .into_owned(),
-                git_dir: snapshot.repository.git_dir.to_string_lossy().into_owned(),
+                worktree_path: display_path(&snapshot.repository.worktree_path),
+                git_dir: display_path(&snapshot.repository.git_dir),
             },
             head,
             upstream: snapshot.status.upstream,
@@ -670,11 +668,11 @@ impl From<Vec<SessionTabState>> for SessionDto {
                         .zip(tab.stored.opened_from_worktree_path)
                         .map(|(repository_name, worktree_path)| OpenedFromRepositoryDto {
                             repository_name,
-                            worktree_path,
+                            worktree_path: display_path(Path::new(&worktree_path)),
                         }),
                     repo_id: tab.stored.repo_id,
                     worktree_id: tab.stored.worktree_id,
-                    worktree_path: tab.stored.worktree_path,
+                    worktree_path: display_path(Path::new(&tab.stored.worktree_path)),
                     active: tab.stored.active,
                     page: tab.stored.page,
                     selected_path: tab.stored.selected_path,
@@ -701,7 +699,7 @@ impl From<RepositorySidebar> for RepositorySidebarDto {
                 .into_iter()
                 .map(|worktree| WorktreeDto {
                     id: worktree.id.to_string(),
-                    path: worktree.path,
+                    path: display_path(Path::new(&worktree.path)),
                     head: worktree.head,
                     branch: worktree.branch,
                     is_current: worktree.is_current,
@@ -713,7 +711,7 @@ impl From<RepositorySidebar> for RepositorySidebarDto {
                 .into_iter()
                 .map(|submodule| SubmoduleDto {
                     path: submodule.path,
-                    absolute_path: submodule.absolute_path,
+                    absolute_path: display_path(Path::new(&submodule.absolute_path)),
                     initialized: submodule.initialized,
                 })
                 .collect(),

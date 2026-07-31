@@ -1,5 +1,6 @@
 mod commands;
 mod dto;
+mod path_display;
 mod state;
 mod system_icons;
 #[cfg(windows)]

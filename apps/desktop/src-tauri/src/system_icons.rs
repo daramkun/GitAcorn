@@ -5,6 +5,9 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+#[cfg(windows)]
+use crate::path_display::display_path;
+
 pub fn file_icons(worktree_path: &str, paths: &[String]) -> HashMap<String, String> {
     let worktree = Path::new(worktree_path);
     paths
@@ -210,15 +213,7 @@ fn platform_file_icon(path: &Path) -> Option<String> {
 
 #[cfg(windows)]
 fn windows_shell_path(path: &Path) -> String {
-    let path = path.to_string_lossy();
-    let path = if let Some(network_path) = path.strip_prefix(r"\\?\UNC\") {
-        format!(r"\\{network_path}")
-    } else if let Some(local_path) = path.strip_prefix(r"\\?\") {
-        local_path.to_owned()
-    } else {
-        path.into_owned()
-    };
-    path.replace('/', r"\")
+    display_path(path)
 }
 
 #[cfg(target_os = "macos")]
