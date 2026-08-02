@@ -1,8 +1,8 @@
 use app_core::{
     AppErrorDto, BranchRequest, CloneRequest, CommitFile, CommitRequest, GitIdentity, GitReference,
     GitRemote, InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
-    InteractiveRebaseRequest, PatchSelection, ReferenceKind, RemoteOperationKind, RemoteRequest,
-    RemoteTagSummary, RepositorySidebar,
+    InteractiveRebaseRequest, PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind,
+    RemoteRequest, RemoteTagSummary, RepositorySidebar,
 };
 use git_domain::{
     CommitSummary, DiffDocument, DiffLineKind, FileChange, HeadState, HistoryPage,
@@ -214,6 +214,8 @@ pub struct OperationRecordDto {
     pub diagnostic: Option<String>,
     pub started_at: String,
     pub finished_at: Option<String>,
+    pub recovery_action: Option<String>,
+    pub recovery_state: Option<String>,
 }
 
 impl From<OperationRecord> for OperationRecordDto {
@@ -228,6 +230,8 @@ impl From<OperationRecord> for OperationRecordDto {
             diagnostic: record.diagnostic,
             started_at: record.started_at,
             finished_at: record.finished_at,
+            recovery_action: record.recovery_action,
+            recovery_state: record.recovery_state,
         }
     }
 }
@@ -612,6 +616,22 @@ pub struct RemoteTagDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReflogEntryDto {
+    pub schema_version: u16,
+    pub selector: String,
+    pub oid: String,
+    pub message: String,
+    pub parents: Vec<String>,
+    pub author_name: String,
+    pub author_email: String,
+    pub authored_at: i64,
+    pub subject: String,
+    pub body: String,
+    pub reflog_only: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepositorySidebarDto {
     pub schema_version: u16,
     pub worktrees: Vec<WorktreeDto>,
@@ -889,6 +909,24 @@ impl From<RemoteTagSummary> for RemoteTagDto {
             remote: tag.remote,
             name: tag.name,
             oid: tag.oid,
+        }
+    }
+}
+
+impl From<ReflogEntry> for ReflogEntryDto {
+    fn from(entry: ReflogEntry) -> Self {
+        Self {
+            schema_version: 1,
+            selector: entry.selector,
+            oid: entry.oid,
+            message: entry.message,
+            parents: entry.parents,
+            author_name: entry.author_name,
+            author_email: entry.author_email,
+            authored_at: entry.authored_at,
+            subject: entry.subject,
+            body: entry.body,
+            reflog_only: entry.reflog_only,
         }
     }
 }

@@ -46,6 +46,334 @@ fn commit_independent_file(fixture: &TestRepository, path: &str, subject: &str) 
 }
 
 #[test]
+fn soft_head_recovery_undoes_and_redoes_a_commit_without_losing_the_index() {
+    let fixture = TestRepository::init();
+    let before = commit_independent_file(&fixture, "baseline.txt", "baseline");
+    fixture.write("change.txt", "recoverable\n");
+    fixture.git(["add", "change.txt"]);
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .commit(
+            &repository,
+            &CommitRequest {
+                summary: "recoverable commit".to_owned(),
+                description: String::new(),
+                amend: false,
+            },
+        )
+        .expect("commit");
+    let after = service
+        .current_head_oid(&repository)
+        .expect("read committed head")
+        .expect("committed head");
+
+    service
+        .move_head_soft(&repository, &after, &before)
+        .expect("undo commit");
+    assert_eq!(
+        service.current_head_oid(&repository).expect("undo head"),
+        Some(before.clone())
+    );
+    assert!(
+        String::from_utf8(fixture.git_output(["diff", "--cached", "--name-only"]))
+            .expect("cached paths")
+            .contains("change.txt")
+    );
+
+    service
+        .move_head_soft(&repository, &before, &after)
+        .expect("redo commit");
+    assert_eq!(
+        service.current_head_oid(&repository).expect("redo head"),
+        Some(after)
+    );
+}
+
+#[test]
+fn reset_modes_round_trip_with_the_matching_recovery_strategy() {
+    for mode in ["soft", "mixed", "hard"] {
+        let fixture = TestRepository::init();
+        let before = commit_independent_file(&fixture, "baseline.txt", "baseline");
+        let after = commit_independent_file(&fixture, "change.txt", "change");
+        let service = RepositoryService::default();
+        let repository = service.discover(fixture.path()).expect("discover");
+
+        service
+            .reset_head(&repository, &before, mode)
+            .expect("reset branch");
+        assert_eq!(
+            service.current_head_oid(&repository).expect("reset head"),
+            Some(before.clone())
+        );
+
+        match mode {
+            "soft" => service
+                .move_head_soft(&repository, &before, &after)
+                .expect("redo soft reset"),
+            "mixed" => service
+                .move_head_mixed(&repository, &before, &after)
+                .expect("redo mixed reset"),
+            "hard" => service
+                .move_head_hard(&repository, &before, &after)
+                .expect("redo hard reset"),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            service
+                .current_head_oid(&repository)
+                .expect("recovery head"),
+            Some(after)
+        );
+    }
+}
+
+#[test]
+fn interactive_rebase_recovery_round_trips_a_clean_reorder() {
+    let fixture = TestRepository::init();
+    let base_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("base oid")
+        .trim()
+        .to_owned();
+    let first_oid = commit_independent_file(&fixture, "first.txt", "First");
+    let second_oid = commit_independent_file(&fixture, "second.txt", "Second");
+    let helper_directory = tempfile::tempdir().expect("sequence editor directory");
+    let editor = sequence_editor_helper(helper_directory.path());
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .start_interactive_rebase(
+            &repository,
+            &InteractiveRebaseRequest {
+                base_oid,
+                expected_head_oid: second_oid.clone(),
+                items: vec![
+                    InteractiveRebaseItem {
+                        oid: second_oid.clone(),
+                        action: InteractiveRebaseAction::Pick,
+                        summary: None,
+                        description: None,
+                    },
+                    InteractiveRebaseItem {
+                        oid: first_oid,
+                        action: InteractiveRebaseAction::Pick,
+                        summary: None,
+                        description: None,
+                    },
+                ],
+                auto_stash: false,
+            },
+            &editor,
+        )
+        .expect("start interactive rebase");
+    let after = service
+        .current_head_oid(&repository)
+        .expect("rebased head")
+        .expect("born head");
+    assert_ne!(after, second_oid);
+
+    service
+        .move_head_hard(&repository, &after, &second_oid)
+        .expect("undo interactive rebase");
+    assert_eq!(
+        service.current_head_oid(&repository).expect("undo head"),
+        Some(second_oid.clone())
+    );
+    service
+        .move_head_hard(&repository, &second_oid, &after)
+        .expect("redo interactive rebase");
+    assert_eq!(
+        service.current_head_oid(&repository).expect("redo head"),
+        Some(after)
+    );
+}
+
+#[test]
+fn checkout_recovery_round_trips_branches_and_rejects_dirty_worktrees() {
+    let fixture = TestRepository::init();
+    fixture.git(["branch", "topic"]);
+    let main_oid = commit_independent_file(&fixture, "main.txt", "main work");
+    let topic_oid = String::from_utf8(fixture.git_output(["rev-parse", "topic"]))
+        .expect("topic oid")
+        .trim()
+        .to_owned();
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .checkout_branch(&repository, "topic", false, false, false)
+        .expect("checkout topic");
+    service
+        .checkout_for_recovery(&repository, &topic_oid, &main_oid, Some("main"))
+        .expect("undo checkout");
+    assert_eq!(
+        service.current_head_ref(&repository).expect("head ref"),
+        Some("main".to_owned())
+    );
+
+    service
+        .checkout_for_recovery(&repository, &main_oid, &topic_oid, Some("topic"))
+        .expect("redo checkout");
+    assert_eq!(
+        service.current_head_ref(&repository).expect("head ref"),
+        Some("topic".to_owned())
+    );
+
+    fixture.write("tracked.txt", "dirty after checkout\n");
+    let error = service
+        .checkout_for_recovery(&repository, &topic_oid, &main_oid, Some("main"))
+        .expect_err("dirty recovery must fail");
+    assert!(matches!(error, app_core::AppError::InvalidRequest(_)));
+}
+
+#[test]
+fn deleted_branch_recovery_round_trips_and_detects_external_ref_changes() {
+    let fixture = TestRepository::init();
+    fixture.git(["branch", "topic"]);
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let head_oid = service
+        .current_head_oid(&repository)
+        .expect("head oid")
+        .expect("born head");
+    let topic_oid = service
+        .local_branch_oid(&repository, "topic")
+        .expect("topic oid")
+        .expect("topic branch");
+
+    service
+        .delete_branch(&repository, "topic")
+        .expect("delete branch");
+    service
+        .restore_deleted_branch(&repository, &head_oid, "topic", &topic_oid)
+        .expect("restore branch");
+    assert_eq!(
+        service
+            .local_branch_oid(&repository, "topic")
+            .expect("restored oid"),
+        Some(topic_oid.clone())
+    );
+    service
+        .delete_restored_branch(&repository, &head_oid, "topic", &topic_oid)
+        .expect("delete branch again");
+    assert_eq!(
+        service
+            .local_branch_oid(&repository, "topic")
+            .expect("deleted ref"),
+        None
+    );
+
+    fixture.git(["branch", "topic"]);
+    let error = service
+        .restore_deleted_branch(&repository, &head_oid, "topic", &topic_oid)
+        .expect_err("recreated branch must block recovery");
+    assert!(matches!(error, app_core::AppError::InvalidRequest(_)));
+}
+
+#[test]
+fn reads_reflog_and_restores_selected_commits_as_new_refs() {
+    let fixture = TestRepository::init();
+    let recovered_oid = commit_independent_file(&fixture, "lost.txt", "temporarily lost");
+    fixture.git(["reset", "--hard", "HEAD~1"]);
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let current_head = service
+        .current_head_oid(&repository)
+        .expect("current head")
+        .expect("born head");
+
+    let reflog = service.reflog(&repository, 50).expect("read reflog");
+    let recovered_entry = reflog
+        .iter()
+        .find(|entry| entry.oid == recovered_oid)
+        .expect("lost commit remains in reflog");
+    assert_eq!(recovered_entry.subject, "temporarily lost");
+    assert!(!recovered_entry.author_name.is_empty());
+    assert!(!recovered_entry.author_email.is_empty());
+    assert!(recovered_entry.authored_at > 0);
+    assert_eq!(recovered_entry.parents.len(), 1);
+    assert!(recovered_entry.reflog_only);
+
+    service
+        .restore_reflog_reference(&repository, &recovered_oid, "recovered-work", false)
+        .expect("restore branch");
+    service
+        .restore_reflog_reference(&repository, &recovered_oid, "recovered-v1", true)
+        .expect("restore tag");
+    let references = service
+        .references(&repository)
+        .expect("restored references");
+    assert!(references.iter().any(|reference| {
+        reference.kind == ReferenceKind::LocalBranch
+            && reference.short_name == "recovered-work"
+            && reference.oid == recovered_oid
+    }));
+    let restored_reflog = service
+        .reflog(&repository, 50)
+        .expect("read restored reflog");
+    assert!(
+        restored_reflog
+            .iter()
+            .find(|entry| entry.oid == recovered_oid)
+            .is_some_and(|entry| !entry.reflog_only)
+    );
+    assert!(references.iter().any(|reference| {
+        reference.kind == ReferenceKind::Tag
+            && reference.short_name == "recovered-v1"
+            && reference.oid == recovered_oid
+    }));
+    assert_eq!(
+        service
+            .current_head_oid(&repository)
+            .expect("unchanged head"),
+        Some(current_head)
+    );
+}
+
+#[test]
+fn hard_head_recovery_undoes_and_redoes_a_clean_rebase() {
+    let fixture = TestRepository::init();
+    fixture.git(["branch", "topic"]);
+    commit_independent_file(&fixture, "main.txt", "main change");
+    fixture.git(["switch", "topic"]);
+    let before = commit_independent_file(&fixture, "topic.txt", "topic change");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .rebase_onto(&repository, "main")
+        .expect("clean rebase");
+    let after = service
+        .current_head_oid(&repository)
+        .expect("rebased head")
+        .expect("born head");
+    assert_ne!(before, after);
+
+    service
+        .move_head_hard(&repository, &after, &before)
+        .expect("undo rebase");
+    assert_eq!(
+        service.current_head_oid(&repository).expect("undo head"),
+        Some(before.clone())
+    );
+    service
+        .move_head_hard(&repository, &before, &after)
+        .expect("redo rebase");
+    assert_eq!(
+        service.current_head_oid(&repository).expect("redo head"),
+        Some(after.clone())
+    );
+
+    fixture.write("tracked.txt", "dirty after rebase\n");
+    let error = service
+        .move_head_hard(&repository, &after, &before)
+        .expect_err("dirty recovery must fail");
+    assert!(matches!(error, app_core::AppError::InvalidRequest(_)));
+}
+
+#[test]
 fn reads_and_updates_global_and_repository_git_identity() {
     let fixture = TestRepository::init();
     let global_directory = tempfile::tempdir().expect("global Git config directory");

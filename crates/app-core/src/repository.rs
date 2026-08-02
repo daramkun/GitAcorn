@@ -62,6 +62,20 @@ pub struct RemoteTagSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflogEntry {
+    pub selector: String,
+    pub oid: String,
+    pub message: String,
+    pub parents: Vec<String>,
+    pub author_name: String,
+    pub author_email: String,
+    pub authored_at: i64,
+    pub subject: String,
+    pub body: String,
+    pub reflog_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitRemote {
     pub name: String,
     pub url: String,
@@ -425,6 +439,57 @@ impl RepositoryService {
         parse_references(&output)
     }
 
+    pub fn reflog(
+        &self,
+        repository: &RepositoryDescriptor,
+        limit: usize,
+    ) -> Result<Vec<ReflogEntry>, AppError> {
+        let output = self.git_bytes(
+            repository,
+            [
+                OsString::from("reflog"),
+                OsString::from("show"),
+                OsString::from("--all"),
+                OsString::from(format!("--max-count={}", limit.clamp(1, 500))),
+                OsString::from(
+                    "--format=%gD%x00%H%x00%gs%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%b%x00%x1e",
+                ),
+            ],
+        )?;
+        let mut entries = parse_reflog_entries(&output)?;
+        let reachable = self
+            .git_text(repository, ["rev-list", "--all"])?
+            .lines()
+            .map(str::to_owned)
+            .collect::<HashSet<_>>();
+        for entry in &mut entries {
+            entry.reflog_only = !reachable.contains(&entry.oid);
+        }
+        Ok(entries)
+    }
+
+    pub fn restore_reflog_reference(
+        &self,
+        repository: &RepositoryDescriptor,
+        oid: &str,
+        name: &str,
+        is_tag: bool,
+    ) -> Result<(), AppError> {
+        validate_object_id(oid)?;
+        self.git_unit(repository, ["cat-file", "-e", &format!("{oid}^{{commit}}")])?;
+        if is_tag {
+            self.create_tag(repository, name, oid)
+        } else {
+            self.create_branch(
+                repository,
+                &BranchRequest {
+                    name: name.to_owned(),
+                    start_point: Some(oid.to_owned()),
+                },
+            )
+        }
+    }
+
     pub fn remote_names(&self, repository: &RepositoryDescriptor) -> Result<Vec<String>, AppError> {
         let output = self.git_text(repository, ["remote"])?;
         Ok(output
@@ -677,7 +742,7 @@ impl RepositoryService {
         Ok(result)
     }
 
-    fn current_head_oid(
+    pub fn current_head_oid(
         &self,
         repository: &RepositoryDescriptor,
     ) -> Result<Option<String>, AppError> {
@@ -690,6 +755,141 @@ impl RepositoryService {
         let oid = String::from_utf8(output.stdout)
             .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
         Ok(Some(oid.trim().to_owned()))
+    }
+
+    pub fn current_head_ref(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<Option<String>, AppError> {
+        let mut request = GitRequest::new(["symbolic-ref", "--quiet", "--short", "HEAD"]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        let output = self.run(request)?;
+        if output.exit_code != 0 {
+            return Ok(None);
+        }
+        let reference = String::from_utf8(output.stdout)
+            .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
+        Ok(Some(reference.trim().to_owned()))
+    }
+
+    pub fn is_worktree_clean(&self, repository: &RepositoryDescriptor) -> Result<bool, AppError> {
+        Ok(self
+            .git_bytes(
+                repository,
+                ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            )?
+            .is_empty())
+    }
+
+    pub fn move_head_soft(
+        &self,
+        repository: &RepositoryDescriptor,
+        expected_head_oid: &str,
+        target_head_oid: &str,
+    ) -> Result<(), AppError> {
+        let current_head = self.current_head_oid(repository)?;
+        if current_head.as_deref() != Some(expected_head_oid) {
+            return Err(AppError::InvalidRequest(
+                "HEAD changed after this operation; refresh before attempting recovery".to_owned(),
+            ));
+        }
+        self.git_unit(repository, ["reset", "--soft", target_head_oid])
+    }
+
+    pub fn move_head_mixed(
+        &self,
+        repository: &RepositoryDescriptor,
+        expected_head_oid: &str,
+        target_head_oid: &str,
+    ) -> Result<(), AppError> {
+        let current_head = self.current_head_oid(repository)?;
+        if current_head.as_deref() != Some(expected_head_oid) {
+            return Err(AppError::InvalidRequest(
+                "HEAD changed after this operation; refresh before attempting recovery".to_owned(),
+            ));
+        }
+        self.git_unit(repository, ["reset", "--mixed", target_head_oid])
+    }
+
+    pub fn reset_head(
+        &self,
+        repository: &RepositoryDescriptor,
+        target_head_oid: &str,
+        mode: &str,
+    ) -> Result<(), AppError> {
+        validate_object_id(target_head_oid)?;
+        if self.current_head_ref(repository)?.is_none() {
+            return Err(AppError::InvalidRequest(
+                "Reset requires a checked out local branch".to_owned(),
+            ));
+        }
+        self.git_unit(
+            repository,
+            ["cat-file", "-e", &format!("{target_head_oid}^{{commit}}")],
+        )?;
+        let flag = match mode {
+            "soft" => "--soft",
+            "mixed" => "--mixed",
+            "hard" => "--hard",
+            _ => {
+                return Err(AppError::InvalidRequest(
+                    "Reset mode must be soft, mixed, or hard".to_owned(),
+                ));
+            }
+        };
+        self.git_unit(repository, ["reset", flag, target_head_oid])
+    }
+
+    pub fn move_head_hard(
+        &self,
+        repository: &RepositoryDescriptor,
+        expected_head_oid: &str,
+        target_head_oid: &str,
+    ) -> Result<(), AppError> {
+        if self.current_head_oid(repository)?.as_deref() != Some(expected_head_oid) {
+            return Err(AppError::InvalidRequest(
+                "HEAD changed after this operation; refresh before attempting recovery".to_owned(),
+            ));
+        }
+        if !self.is_worktree_clean(repository)? {
+            return Err(AppError::InvalidRequest(
+                "The working tree changed after this operation; stash or commit changes before recovery"
+                    .to_owned(),
+            ));
+        }
+        self.git_unit(repository, ["reset", "--hard", target_head_oid])
+    }
+
+    pub fn checkout_for_recovery(
+        &self,
+        repository: &RepositoryDescriptor,
+        expected_head_oid: &str,
+        target_head_oid: &str,
+        target_head_ref: Option<&str>,
+    ) -> Result<(), AppError> {
+        if self.current_head_oid(repository)?.as_deref() != Some(expected_head_oid) {
+            return Err(AppError::InvalidRequest(
+                "HEAD changed after this operation; refresh before attempting recovery".to_owned(),
+            ));
+        }
+        if !self.is_worktree_clean(repository)? {
+            return Err(AppError::InvalidRequest(
+                "The working tree changed after this operation; stash or commit changes before recovery"
+                    .to_owned(),
+            ));
+        }
+        match target_head_ref {
+            Some(reference) => {
+                if self.local_branch_oid(repository, reference)?.as_deref() != Some(target_head_oid)
+                {
+                    return Err(AppError::InvalidRequest(format!(
+                        "Branch {reference} changed after this operation"
+                    )));
+                }
+                self.git_unit(repository, ["switch", reference])
+            }
+            None => self.git_unit(repository, ["switch", "--detach", target_head_oid]),
+        }
     }
 
     fn clean_initialized_submodules(
@@ -1089,6 +1289,67 @@ impl RepositoryService {
     ) -> Result<(), AppError> {
         let name = self.validate_branch_name(repository, name)?;
         self.git_unit(repository, ["branch", "--delete", &name])
+    }
+
+    pub fn local_branch_oid(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+    ) -> Result<Option<String>, AppError> {
+        let name = self.validate_branch_name(repository, name)?;
+        Ok(self
+            .references(repository)?
+            .into_iter()
+            .find(|reference| {
+                reference.kind == ReferenceKind::LocalBranch && reference.short_name == name
+            })
+            .map(|reference| reference.oid))
+    }
+
+    pub fn restore_deleted_branch(
+        &self,
+        repository: &RepositoryDescriptor,
+        expected_head_oid: &str,
+        name: &str,
+        oid: &str,
+    ) -> Result<(), AppError> {
+        if self.current_head_oid(repository)?.as_deref() != Some(expected_head_oid) {
+            return Err(AppError::InvalidRequest(
+                "HEAD changed after this operation; refresh before attempting recovery".to_owned(),
+            ));
+        }
+        if self.local_branch_oid(repository, name)?.is_some() {
+            return Err(AppError::InvalidRequest(format!(
+                "Branch {name} was recreated or changed after deletion"
+            )));
+        }
+        self.create_branch(
+            repository,
+            &BranchRequest {
+                name: name.to_owned(),
+                start_point: Some(oid.to_owned()),
+            },
+        )
+    }
+
+    pub fn delete_restored_branch(
+        &self,
+        repository: &RepositoryDescriptor,
+        expected_head_oid: &str,
+        name: &str,
+        oid: &str,
+    ) -> Result<(), AppError> {
+        if self.current_head_oid(repository)?.as_deref() != Some(expected_head_oid) {
+            return Err(AppError::InvalidRequest(
+                "HEAD changed after this operation; refresh before attempting recovery".to_owned(),
+            ));
+        }
+        if self.local_branch_oid(repository, name)?.as_deref() != Some(oid) {
+            return Err(AppError::InvalidRequest(format!(
+                "Branch {name} changed after it was restored"
+            )));
+        }
+        self.delete_branch(repository, name)
     }
 
     pub fn delete_remote_branch(
@@ -2371,6 +2632,46 @@ fn parse_references(output: &[u8]) -> Result<Vec<GitReference>, AppError> {
                 upstream: (!upstream.is_empty()).then_some(upstream),
                 ahead: count("ahead"),
                 behind: count("behind"),
+            })
+        })
+        .collect()
+}
+
+fn parse_reflog_entries(output: &[u8]) -> Result<Vec<ReflogEntry>, AppError> {
+    output
+        .split(|byte| *byte == 0x1e)
+        .filter(|record| !record.iter().all(u8::is_ascii_whitespace))
+        .map(|record| {
+            let record = record.strip_prefix(b"\n").unwrap_or(record);
+            let fields = record.split(|byte| *byte == 0).collect::<Vec<_>>();
+            if fields.len() < 9 {
+                return Err(AppError::InvalidGitOutput(
+                    "reflog record is incomplete".to_owned(),
+                ));
+            }
+            let selector = String::from_utf8_lossy(fields[0]).trim().to_owned();
+            let oid = String::from_utf8_lossy(fields[1]).trim().to_owned();
+            validate_object_id(&oid)?;
+            let authored_at = String::from_utf8_lossy(fields[6])
+                .trim()
+                .parse::<i64>()
+                .map_err(|_| {
+                    AppError::InvalidGitOutput("reflog timestamp is invalid".to_owned())
+                })?;
+            Ok(ReflogEntry {
+                selector,
+                oid,
+                message: String::from_utf8_lossy(fields[2]).trim().to_owned(),
+                parents: String::from_utf8_lossy(fields[3])
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect(),
+                author_name: String::from_utf8_lossy(fields[4]).trim().to_owned(),
+                author_email: String::from_utf8_lossy(fields[5]).trim().to_owned(),
+                authored_at,
+                subject: String::from_utf8_lossy(fields[7]).trim().to_owned(),
+                body: String::from_utf8_lossy(fields[8]).trim().to_owned(),
+                reflog_only: false,
             })
         })
         .collect()

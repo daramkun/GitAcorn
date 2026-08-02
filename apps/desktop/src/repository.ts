@@ -170,6 +170,20 @@ export type RemoteTagDto = {
   oid: string;
 };
 
+export type ReflogEntryDto = {
+  schemaVersion: 1;
+  selector: string;
+  oid: string;
+  message: string;
+  parents: string[];
+  authorName: string;
+  authorEmail: string;
+  authoredAt: number;
+  subject: string;
+  body: string;
+  reflogOnly: boolean;
+};
+
 export type GitRemoteDto = {
   name: string;
   url: string;
@@ -247,6 +261,16 @@ export type OperationRecordDto = {
   diagnostic?: string;
   startedAt: string;
   finishedAt?: string;
+    recoveryAction?:
+      | "commit"
+      | "checkout"
+      | "branch-delete"
+      | "rebase"
+      | "interactive-rebase"
+      | "reset-soft"
+      | "reset-mixed"
+      | "reset-hard";
+  recoveryState?: "ready" | "undone";
 };
 
 export type RemoteOperationOptions = {
@@ -373,6 +397,26 @@ export function getHistoryPage(
 
 export function getReferences(repoId: string): Promise<ReferenceDto[]> {
   return invoke<ReferenceDto[]>("references_list", { repoId });
+}
+
+export function getReflog(repoId: string): Promise<ReflogEntryDto[]> {
+  return invoke<ReflogEntryDto[]>("reflog_list", { repoId });
+}
+
+export function restoreReflogReference(
+  repoId: string,
+  revision: number,
+  oid: string,
+  name: string,
+  isTag: boolean,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("reflog_restore", {
+    repoId,
+    revision,
+    oid,
+    name,
+    isTag,
+  });
 }
 
 export function getCommitFiles(
@@ -567,6 +611,20 @@ export function rebaseBranch(
   });
 }
 
+export function resetBranch(
+  repoId: string,
+  revision: number,
+  targetOid: string,
+  mode: "soft" | "mixed" | "hard",
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("branch_reset", {
+    repoId,
+    revision,
+    targetOid,
+    mode,
+  });
+}
+
 export function previewInteractiveRebase(
   repoId: string,
   revision: number,
@@ -712,6 +770,22 @@ export function abortMerge(
 
 export function getOperationHistory(): Promise<OperationRecordDto[]> {
   return invoke("operation_history");
+}
+
+export function undoOperation(
+  operationId: string,
+  repoId: string,
+  revision: number,
+): Promise<RepositorySnapshotDto> {
+  return invoke("operation_undo", { operationId, repoId, revision });
+}
+
+export function redoOperation(
+  operationId: string,
+  repoId: string,
+  revision: number,
+): Promise<RepositorySnapshotDto> {
+  return invoke("operation_redo", { operationId, repoId, revision });
 }
 
 export function getDiagnostics(): Promise<string> {

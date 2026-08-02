@@ -55,6 +55,7 @@ import {
   getGitIdentity,
   getDiagnostics,
   getOperationHistory,
+  getReflog,
   getRemotes,
   getRemoteTags,
   getReferences,
@@ -66,18 +67,22 @@ import {
   openRepository,
   previewInteractiveRebase,
   rebaseBranch,
+  resetBranch,
   renameBranch,
   reorderSessionTabs,
   removeSubmodule,
   removeRemote,
+  redoOperation,
   resolveConflict,
   restoreSession,
+  restoreReflogReference,
   startClone,
   startInteractiveRebase,
   startRemoteOperation,
   skipRebase,
   stagePaths,
   unstagePaths,
+  undoOperation,
   updateSessionTab,
   updateRemote,
   updateGlobalGitIdentity,
@@ -101,6 +106,7 @@ import {
   type RepositorySnapshotDto,
   type RepositorySidebarDto,
   type ReferenceDto,
+  type ReflogEntryDto,
   type SessionTabDto,
 } from "./repository";
 import { updateRepositoryOperation } from "./remote-operations";
@@ -113,6 +119,8 @@ import {
 } from "./gravatar";
 
 type Page = "changes" | "history";
+
+type ResetMode = "soft" | "mixed" | "hard";
 type AppInfoState =
   | { status: "loading" }
   | { status: "ready"; value: AppInfoDto }
@@ -497,6 +505,20 @@ export function App() {
     }
     return false;
   });
+  const [showReflogByRepository, setShowReflogByRepository] = useState<
+    Record<string, boolean>
+  >(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return JSON.parse(
+          localStorage.getItem("gitacorn_show_reflog_by_repository") ?? "{}",
+        ) as Record<string, boolean>;
+      } catch {
+        // ignore
+      }
+    }
+    return {};
+  });
 
   useEffect(() => {
     try {
@@ -516,6 +538,17 @@ export function App() {
       // ignore
     }
   }, [compactCommitGraph]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "gitacorn_show_reflog_by_repository",
+        JSON.stringify(showReflogByRepository),
+      );
+    } catch {
+      // ignore
+    }
+  }, [showReflogByRepository]);
 
   useEffect(() => {
     try {
@@ -2529,7 +2562,12 @@ export function App() {
           {appInfo.status === "error" && <ErrorBanner title={t("Could not reach the GitAcorn core.")} message={appInfo.message} />}
           {appInfo.status !== "error" && error && <ErrorBanner title={t("Repository session needs attention.")} message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? t("Choose another folder") : undefined} onAction={handleOpenRepository} />}
           {alphaFeaturesEnabled && showOperationCenter ? (
-            <OperationsView onError={reportError} />
+            <OperationsView
+              repoId={activeTab?.repoId}
+              revision={activeSnapshot?.revision}
+              onRecovered={acceptWorkspaceSnapshot}
+              onError={reportError}
+            />
           ) : activeTab?.loading ? (
             <div className="repository-loading-state" role="status">
               <span>{t("Loading repository")}</span>
@@ -2596,6 +2634,7 @@ export function App() {
                 snapshot={activeSnapshot}
                 showGravatars={showGravatars}
                 compactCommitGraph={compactCommitGraph}
+                showReflog={Boolean(showReflogByRepository[activeTab.repoId])}
                 onPersist={(patch) => updateActiveTab(patch)}
                 onSnapshot={(snapshot) => {
                   setTabs((current) =>
@@ -2810,6 +2849,34 @@ export function App() {
               </button>
             </div>
             <div className="settings-modal-body">
+              <div className="settings-section">
+                <h3>{t("Commit history")}</h3>
+                <label className="settings-toggle-row">
+                  <span>
+                    <strong>{t("Show reflog in history")}</strong>
+                    <small>
+                      {t(
+                        "Shows commits referenced by this repository's reflog in the history graph.",
+                      )}
+                    </small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(
+                      activeRepoId && showReflogByRepository[activeRepoId],
+                    )}
+                    disabled={!activeRepoId}
+                    onChange={(event) => {
+                      if (!activeRepoId) return;
+                      const checked = event.target.checked;
+                      setShowReflogByRepository((current) => ({
+                        ...current,
+                        [activeRepoId]: checked,
+                      }));
+                    }}
+                  />
+                </label>
+              </div>
               <div className="settings-section git-identity-settings">
                 <h3>{t("Git author identity")}</h3>
                 <p className="settings-section-desc">
@@ -4852,20 +4919,43 @@ function StashControls({
   );
 }
 
-function OperationsView({ onError }: { onError: (error: unknown) => void }) {
+function OperationsView({
+  repoId,
+  revision,
+  onRecovered,
+  onError,
+}: {
+  repoId?: string;
+  revision?: number;
+  onRecovered: (snapshot: RepositorySnapshotDto) => void;
+  onError: (error: unknown) => void;
+}) {
   const [operations, setOperations] = useState<OperationRecordDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [copyState, setCopyState] = useState("");
+  const [recovering, setRecovering] = useState<string>();
+  const [reflog, setReflog] = useState<ReflogEntryDto[]>([]);
+  const [restoreTarget, setRestoreTarget] = useState<{
+    entry: ReflogEntryDto;
+    kind: "branch" | "tag";
+  }>();
+  const [restoreName, setRestoreName] = useState("");
 
   function refresh() {
     setLoading(true);
-    getOperationHistory()
-      .then(setOperations)
+    Promise.all([
+      getOperationHistory(),
+      repoId ? getReflog(repoId) : Promise.resolve([]),
+    ])
+      .then(([nextOperations, nextReflog]) => {
+        setOperations(nextOperations);
+        setReflog(nextReflog);
+      })
       .catch(onError)
       .finally(() => setLoading(false));
   }
 
-  useEffect(refresh, [onError]);
+  useEffect(refresh, [onError, repoId]);
 
   async function copyDiagnostics() {
     try {
@@ -4877,6 +4967,54 @@ function OperationsView({ onError }: { onError: (error: unknown) => void }) {
     }
   }
 
+  async function recover(operation: OperationRecordDto, redo: boolean) {
+    if (!repoId || revision === undefined) return;
+    setRecovering(operation.id);
+    try {
+      const snapshot = redo
+        ? await redoOperation(operation.id, repoId, revision)
+        : await undoOperation(operation.id, repoId, revision);
+      onRecovered(snapshot);
+      setOperations(await getOperationHistory());
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setRecovering(undefined);
+    }
+  }
+
+  function openReflogRestore(entry: ReflogEntryDto, kind: "branch" | "tag") {
+    setRestoreTarget({ entry, kind });
+    setRestoreName(`recovered-${entry.oid.slice(0, 8)}`);
+  }
+
+  async function submitReflogRestore(event: FormEvent) {
+    event.preventDefault();
+    if (!repoId || revision === undefined || !restoreTarget || !restoreName.trim()) return;
+    setRecovering(restoreTarget.entry.selector);
+    try {
+      const snapshot = await restoreReflogReference(
+        repoId,
+        revision,
+        restoreTarget.entry.oid,
+        restoreName.trim(),
+        restoreTarget.kind === "tag",
+      );
+      onRecovered(snapshot);
+      setRestoreTarget(undefined);
+      const [nextOperations, nextReflog] = await Promise.all([
+        getOperationHistory(),
+        getReflog(repoId),
+      ]);
+      setOperations(nextOperations);
+      setReflog(nextReflog);
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setRecovering(undefined);
+    }
+  }
+
   return (
     <section className="operations-view" aria-labelledby="operations-title">
       <div className="operations-heading">
@@ -4884,12 +5022,12 @@ function OperationsView({ onError }: { onError: (error: unknown) => void }) {
           <span className="eyebrow">{t("Recovery and diagnostics")}</span>
           <h1 id="operations-title">{t("Operation center")}</h1>
         </div>
-        <div>
-          <button type="button" onClick={refresh}>{t("Refresh")}</button>
-          <button type="button" onClick={() => void copyDiagnostics()}>{t("Copy diagnostics")}</button>
+        <div className="operations-heading-actions">
+          <button className="control-button control-button--secondary" type="button" onClick={refresh}>{t("Refresh")}</button>
+          <button className="control-button control-button--secondary" type="button" onClick={() => void copyDiagnostics()}>{t("Copy diagnostics")}</button>
         </div>
       </div>
-      {copyState && <p role="status">{copyState}</p>}
+      {copyState && <p className="operations-copy-status" role="status">{copyState}</p>}
       {loading ? (
         <div className="history-state" role="status">{t("Loading operations…")}</div>
       ) : operations.length === 0 ? (
@@ -4902,12 +5040,129 @@ function OperationsView({ onError }: { onError: (error: unknown) => void }) {
               <div>
                 <strong>{operationTerm(operation.kind)}</strong>
                 <span>{operation.summary}</span>
-                {operation.diagnostic && <code>{operation.diagnostic}</code>}
+                {operation.diagnostic && <code className="operation-diagnostic">{operation.diagnostic}</code>}
+                {operation.recoveryAction && operation.repoId === repoId && (
+                  <button
+                    className="control-button control-button--primary operation-recovery-button"
+                    type="button"
+                    disabled={Boolean(recovering) || revision === undefined}
+                    onClick={() => void recover(operation, operation.recoveryState === "undone")}
+                  >
+                    {recoveryButtonLabel(operation, operation.recoveryState === "undone")}
+                  </button>
+                )}
               </div>
-              <time>{operation.startedAt}</time>
+              <time dateTime={operation.startedAt}>{formatOperationDate(operation.startedAt)}</time>
             </li>
           ))}
         </ol>
+      )}
+      <div className="operations-heading reflog-heading">
+        <div>
+          <span className="eyebrow">{t("Reference recovery")}</span>
+          <h2>{t("Reflog")}</h2>
+        </div>
+      </div>
+      {!repoId ? (
+        <div className="history-state">{t("Open a repository to inspect its reflog.")}</div>
+      ) : reflog.length === 0 ? (
+        <div className="history-state">{t("No reflog entries are available.")}</div>
+      ) : (
+        <ol className="operation-list reflog-list">
+          {reflog.map((entry) => (
+            <li key={`${entry.selector}:${entry.oid}`}>
+              <code>{entry.oid.slice(0, 10)}</code>
+              <div>
+                <strong>{entry.selector}</strong>
+                <span>{entry.message}</span>
+                <div className="reflog-actions">
+                  <button
+                    className="control-button control-button--secondary"
+                    type="button"
+                    disabled={Boolean(recovering) || revision === undefined}
+                    onClick={() => openReflogRestore(entry, "branch")}
+                  >
+                    {t("Restore as branch…")}
+                  </button>
+                  <button
+                    className="control-button control-button--secondary"
+                    type="button"
+                    disabled={Boolean(recovering) || revision === undefined}
+                    onClick={() => openReflogRestore(entry, "tag")}
+                  >
+                    {t("Restore as tag…")}
+                  </button>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {restoreTarget && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => !recovering && setRestoreTarget(undefined)}
+        >
+          <form
+            className="settings-modal reflog-restore-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reflog-restore-title"
+            onSubmit={(event) => void submitReflogRestore(event)}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div>
+                <h2 id="reflog-restore-title">
+                  {restoreTarget.kind === "tag"
+                    ? t("Restore reflog entry as tag")
+                    : t("Restore reflog entry as branch")}
+                </h2>
+                <small>{restoreTarget.entry.oid}</small>
+              </div>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close reflog restore")}
+                disabled={Boolean(recovering)}
+                onClick={() => setRestoreTarget(undefined)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body reflog-restore-body">
+              <label className="reflog-restore-field">
+                {restoreTarget.kind === "tag" ? t("Tag name") : t("Branch name")}
+                <input
+                  className="control-input"
+                  value={restoreName}
+                  autoFocus
+                  disabled={Boolean(recovering)}
+                  onChange={(event) => setRestoreName(event.currentTarget.value)}
+                />
+              </label>
+              <p className="reflog-restore-note">{t("This creates a new reference without changing HEAD or the working tree.")}</p>
+              <div className="remote-form-actions">
+                <button
+                  className="control-button control-button--secondary"
+                  type="button"
+                  disabled={Boolean(recovering)}
+                  onClick={() => setRestoreTarget(undefined)}
+                >
+                  {t("Cancel")}
+                </button>
+                <button
+                  className="control-button control-button--primary"
+                  type="submit"
+                  disabled={Boolean(recovering) || !restoreName.trim()}
+                >
+                  {recovering ? t("Restoring…") : t("Restore reference")}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
       )}
     </section>
   );
@@ -7126,11 +7381,80 @@ function ChangesEmpty({ onOpen, opening }: { onOpen: () => void; opening: boolea
   );
 }
 
+type HistoryCommit = CommitDto & {
+  reflogSelectors?: string[];
+  reflogMessage?: string;
+  reflogOnly?: boolean;
+};
+
+function mergeHistoryWithReflog(
+  commits: CommitDto[],
+  entries: ReflogEntryDto[],
+  query: string,
+): HistoryCommit[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const byOid = new Map<string, HistoryCommit>(
+    commits.map((commit) => [commit.oid, { ...commit }]),
+  );
+
+  for (const entry of entries) {
+    if (!entry.reflogOnly) continue;
+    if (
+      normalizedQuery &&
+      ![
+        entry.subject,
+        entry.body,
+        entry.message,
+        entry.selector,
+        entry.authorName,
+        entry.authorEmail,
+      ].some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
+    ) {
+      continue;
+    }
+
+    const existing = byOid.get(entry.oid);
+    const selectors = Array.from(
+      new Set([...(existing?.reflogSelectors ?? []), entry.selector]),
+    );
+    if (existing?.reflogOnly) {
+      byOid.set(entry.oid, {
+        ...existing,
+        reflogSelectors: selectors,
+        reflogMessage: existing.reflogMessage ?? entry.message,
+      });
+      continue;
+    }
+    if (existing) continue;
+
+    byOid.set(entry.oid, {
+      oid: entry.oid,
+      parents: entry.parents,
+      authorName: entry.authorName,
+      authorEmail: entry.authorEmail,
+      authoredAt: entry.authoredAt,
+      subject: entry.subject,
+      body: entry.body,
+      references: [],
+      lane: 0,
+      laneCount: 1,
+      reflogSelectors: selectors,
+      reflogMessage: entry.message,
+      reflogOnly: entry.reflogOnly,
+    });
+  }
+
+  return Array.from(byOid.values()).sort(
+    (left, right) => right.authoredAt - left.authoredAt,
+  );
+}
+
 function HistoryView({
   tab,
   snapshot,
   showGravatars,
   compactCommitGraph,
+  showReflog,
   onPersist,
   onSnapshot,
   onError,
@@ -7140,6 +7464,7 @@ function HistoryView({
   snapshot: RepositorySnapshotDto;
   showGravatars: boolean;
   compactCommitGraph: boolean;
+  showReflog: boolean;
   onPersist: (
     patch: Partial<
       Pick<SessionTabDto, "historyCursor" | "selectedCommit" | "historyFilter">
@@ -7151,6 +7476,7 @@ function HistoryView({
 }) {
   const savedFilter = parseHistoryFilter(tab.historyFilter);
   const [commits, setCommits] = useState<CommitDto[]>([]);
+  const [reflogEntries, setReflogEntries] = useState<ReflogEntryDto[]>([]);
   const [query, setQuery] = useState(savedFilter.query);
   const [draftQuery, setDraftQuery] = useState(savedFilter.query);
   const [showHistorySearch, setShowHistorySearch] = useState(false);
@@ -7167,10 +7493,13 @@ function HistoryView({
   const [loadingCommitFiles, setLoadingCommitFiles] = useState(false);
   const [loadingCommitDiff, setLoadingCommitDiff] = useState(false);
   const [rebaseMenu, setRebaseMenu] = useState<{
-    commit: CommitDto;
+    commit: HistoryCommit;
     x: number;
     y: number;
   }>();
+  const [resetPreview, setResetPreview] = useState<HistoryCommit>();
+  const [resetMode, setResetMode] = useState<ResetMode>("mixed");
+  const [resetBusy, setResetBusy] = useState(false);
   const [rebasePreview, setRebasePreview] =
     useState<InteractiveRebasePreviewDto>();
   const [rebasePlan, setRebasePlan] = useState<
@@ -7193,7 +7522,16 @@ function HistoryView({
   const selectedRowRef = useRef<HTMLButtonElement | null>(null);
   const historySearchInputRef = useRef<HTMLInputElement>(null);
   const commitFileSearchInputRef = useRef<HTMLInputElement>(null);
-  const selected = commits.find((commit) => commit.oid === selectedOid) ?? commits[0];
+  const visibleCommits = useMemo<HistoryCommit[]>(
+    () =>
+      showReflog
+        ? mergeHistoryWithReflog(commits, reflogEntries, query)
+        : commits.map((commit) => ({ ...commit })),
+    [commits, query, reflogEntries, showReflog],
+  );
+  const selected =
+    visibleCommits.find((commit) => commit.oid === selectedOid) ??
+    visibleCommits[0];
   const commitFileFilterQuery = commitFileFilter.trim().toLocaleLowerCase();
   const filteredCommitFiles = useMemo(
     () =>
@@ -7206,10 +7544,10 @@ function HistoryView({
     () =>
       layoutCommitGraph(
         query
-          ? commits.map((commit) => ({ oid: commit.oid, parents: [] }))
-          : commits,
+          ? visibleCommits.map((commit) => ({ oid: commit.oid, parents: [] }))
+          : visibleCommits,
       ),
-    [commits, query],
+    [query, visibleCommits],
   );
   const graphWidth = Math.max(44, graph.laneCount * 16 + 16);
 
@@ -7223,7 +7561,21 @@ function HistoryView({
         block: "nearest",
       });
     }
-  }, [selected?.oid, commits]);
+  }, [selected?.oid, visibleCommits]);
+
+  useEffect(() => {
+    if (!showReflog) {
+      setReflogEntries([]);
+      return;
+    }
+    let active = true;
+    getReflog(snapshot.repository.id)
+      .then((entries) => active && setReflogEntries(entries))
+      .catch(onError);
+    return () => {
+      active = false;
+    };
+  }, [onError, showReflog, snapshot.head.oid, snapshot.repository.id]);
 
   useEffect(() => {
     if (tab.selectedCommit) {
@@ -7432,6 +7784,32 @@ function HistoryView({
       await navigator.clipboard.writeText(commit.oid);
     } catch (reason: unknown) {
       onError(reason);
+    }
+  }
+
+  function openResetPreview(commit: HistoryCommit) {
+    setRebaseMenu(undefined);
+    setResetMode("mixed");
+    setResetPreview(commit);
+  }
+
+  async function runReset() {
+    if (!resetPreview) return;
+    onClearError();
+    setResetBusy(true);
+    try {
+      const next = await resetBranch(
+        snapshot.repository.id,
+        snapshot.revision,
+        resetPreview.oid,
+        resetMode,
+      );
+      onSnapshot(next);
+      setResetPreview(undefined);
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setResetBusy(false);
     }
   }
 
@@ -7647,14 +8025,14 @@ function HistoryView({
         )}
         {loading && commits.length === 0 ? (
           <div className="history-state" role="status">{t("Loading history…")}</div>
-        ) : commits.length === 0 ? (
+        ) : visibleCommits.length === 0 ? (
           <div className="history-state">{t("No commits match this filter.")}</div>
         ) : (
           <div
             className={`commit-list${compactCommitGraph ? " compact" : ""}`}
             style={{ "--graph-width": `${graphWidth}px` } as CSSProperties}
           >
-            {commits.map((commit, index) => (
+            {visibleCommits.map((commit, index) => (
               <button
                 type="button"
                 key={commit.oid}
@@ -7662,6 +8040,7 @@ function HistoryView({
                 className={[
                   "commit-row",
                   commit.remoteOnly ? "remote-only" : "",
+                  commit.reflogOnly ? "reflog-only" : "",
                   selected?.oid === commit.oid ? "selected" : "",
                 ].filter(Boolean).join(" ")}
                 aria-current={selected?.oid === commit.oid ? "true" : undefined}
@@ -7722,6 +8101,9 @@ function HistoryView({
                 </span>
                 <span className="commit-refs">
                   {commit.references.slice(0, 2).map((item) => <small key={item}>{shortRef(item)}</small>)}
+                  {commit.reflogSelectors?.slice(0, Math.max(1, 2 - commit.references.length)).map((selector) => (
+                    <small className="reflog-reference" key={selector}>Reflog · {selector}</small>
+                  ))}
                 </span>
                 <code>{commit.oid.slice(0, 8)}</code>
               </button>
@@ -7755,7 +8137,13 @@ function HistoryView({
               {selected.body && <pre>{selected.body}</pre>}
               <div className="detail-refs">
                 {selected.references.map((item) => <span key={item}>{shortRef(item)}</span>)}
+                {selected.reflogSelectors?.map((selector) => (
+                  <span className="reflog-reference" key={selector}>Reflog · {selector}</span>
+                ))}
               </div>
+              {selected.reflogMessage && (
+                <p className="reflog-detail-message">{selected.reflogMessage}</p>
+              )}
             </div>
             <section
               className="commit-files"
@@ -7914,6 +8302,100 @@ function HistoryView({
           >
             {t("Interactively rebase commits after this…")}
           </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={
+              resetBusy ||
+              rebaseBusy ||
+              Boolean(snapshot.operation) ||
+              snapshot.head.kind !== "branch" ||
+              snapshot.head.oid === rebaseMenu.commit.oid ||
+              Boolean(rebaseMenu.commit.remoteOnly) ||
+              Boolean(rebaseMenu.commit.reflogOnly)
+            }
+            onClick={() => openResetPreview(rebaseMenu.commit)}
+          >
+            {t("Reset current branch to this…")}
+          </button>
+        </div>
+      )}
+      {resetPreview && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => !resetBusy && setResetPreview(undefined)}
+        >
+          <div
+            className="settings-modal reset-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div>
+                <h2 id="reset-title">{t("Reset current branch")}</h2>
+                <small>
+                  {snapshot.head.name} · {resetPreview.oid.slice(0, 8)} · {resetPreview.subject}
+                </small>
+              </div>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close reset dialog")}
+                disabled={resetBusy}
+                onClick={() => setResetPreview(undefined)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="reset-body">
+              <p>{t("Choose how to move the current branch. Undo is available only when the worktree was clean before reset.")}</p>
+              <label>
+                <span>{t("Reset mode")}</span>
+                <select
+                  className="control-input"
+                  aria-label={t("Reset mode")}
+                  value={resetMode}
+                  disabled={resetBusy}
+                  onChange={(event) => setResetMode(event.target.value as ResetMode)}
+                >
+                  <option value="soft">{t("Soft — keep index and working tree")}</option>
+                  <option value="mixed">{t("Mixed — reset index, keep working tree")}</option>
+                  <option value="hard">{t("Hard — reset index and working tree")}</option>
+                </select>
+              </label>
+              {resetMode === "hard" && (
+                <p className="rebase-warning">{t("Hard reset discards uncommitted changes. Ensure they are backed up before continuing.")}</p>
+              )}
+              <div className="remote-form-actions">
+                <button
+                  className="control-button control-button--secondary"
+                  type="button"
+                  disabled={resetBusy}
+                  onClick={() => setResetPreview(undefined)}
+                >
+                  {t("Cancel")}
+                </button>
+                <button
+                  className="control-button control-button--primary"
+                  type="button"
+                  disabled={resetBusy}
+                  onClick={() => {
+                    if (confirmRepositoryMutation(t("Reset branch to {oid} using {mode} mode?", {
+                      oid: resetPreview.oid.slice(0, 8),
+                      mode: resetMode,
+                    }))) {
+                      void runReset();
+                    }
+                  }}
+                >
+                  {resetBusy ? t("Resetting…") : t("Reset branch")}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
       {rebasePreview && (
@@ -8325,7 +8807,12 @@ function operationTerm(value: string): string {
     case "fetch": return t("Fetch");
     case "pull": return t("Pull");
     case "push": return t("Push");
-    case "clone": return t("clone");
+      case "clone": return t("clone");
+      case "reset":
+      case "reset-soft":
+      case "reset-mixed":
+      case "reset-hard": return t("Reset branch");
+      case "interactive-rebase": return t("Interactive rebase");
     case "queued": return t("queued");
     case "running": return t("running");
     case "succeeded": return t("succeeded");
@@ -8333,6 +8820,32 @@ function operationTerm(value: string): string {
     case "cancelled": return t("cancelled");
     case "interrupted": return t("interrupted");
     default: return value;
+  }
+}
+
+function formatOperationDate(value: string) {
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+    ? `${value.replace(" ", "T")}Z`
+    : value;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(localeTag());
+}
+
+function recoveryButtonLabel(operation: OperationRecordDto, redo: boolean) {
+  switch (operation.recoveryAction) {
+    case "checkout":
+      return redo ? t("Redo checkout") : t("Undo checkout");
+    case "branch-delete":
+      return redo ? t("Delete branch again") : t("Restore deleted branch");
+      case "rebase":
+      case "interactive-rebase":
+        return redo ? t("Redo rebase") : t("Undo rebase");
+      case "reset-soft":
+      case "reset-mixed":
+      case "reset-hard":
+        return redo ? t("Redo reset") : t("Undo reset");
+    default:
+      return redo ? t("Redo commit") : t("Undo commit");
   }
 }
 

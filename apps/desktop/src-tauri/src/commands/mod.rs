@@ -11,12 +11,14 @@ use crate::dto::{
     AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto, CommitRequestDto,
     DiffDto, GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto,
     HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, OperationEventDto,
-    OperationRecordDto, OperationStartedDto, PatchSelectionDto, ReferenceDto,
+    OperationRecordDto, OperationStartedDto, PatchSelectionDto, ReferenceDto, ReflogEntryDto,
     RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
     RepositoryGitIdentityDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
     SessionDto, SessionTabUpdateDto, StashRequestDto, SubmoduleAddRequestDto,
 };
-use crate::state::{ApplicationState, RepositoryOpenSource, SessionTabUpdate};
+use crate::state::{
+    ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
+};
 
 #[tauri::command]
 pub fn app_info() -> AppInfoDto {
@@ -434,6 +436,42 @@ pub fn references_list(
 }
 
 #[tauri::command]
+pub fn reflog_list(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<Vec<ReflogEntryDto>> {
+    state
+        .repository_reflog(&repo_id)
+        .map(|entries| entries.into_iter().map(Into::into).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn reflog_restore(
+    repo_id: String,
+    revision: u64,
+    oid: String,
+    name: String,
+    is_tag: bool,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let kind = if is_tag {
+        "reflog-restore-tag"
+    } else {
+        "reflog-restore-branch"
+    };
+    let summary = if is_tag {
+        "Restored reflog entry as tag"
+    } else {
+        "Restored reflog entry as branch"
+    };
+    recorded_mutation(&state, &repo_id, kind, summary, || {
+        state.restore_reflog_reference(&repo_id, revision, &oid, &name, is_tag)
+    })
+    .await
+}
+
+#[tauri::command]
 pub fn remote_tags_list(
     repo_id: String,
     remote: Option<String>,
@@ -568,7 +606,7 @@ pub fn branch_create(
 }
 
 #[tauri::command]
-pub fn branch_checkout(
+pub async fn branch_checkout(
     repo_id: String,
     revision: u64,
     name: String,
@@ -577,14 +615,22 @@ pub fn branch_checkout(
     auto_stash: bool,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<RepositorySnapshotDto> {
-    state
-        .checkout_branch(&repo_id, revision, &name, is_remote, is_tag, auto_stash)
-        .map(RepositorySnapshotDto::from)
-        .map_err(|error| AppErrorDto::from(&error))
+    recorded_recoverable_mutation(
+        &state,
+        &repo_id,
+        "checkout",
+        "Checked out reference",
+        || {
+            state.checkout_branch_with_recovery(
+                &repo_id, revision, &name, is_remote, is_tag, auto_stash,
+            )
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn branch_delete(
+pub async fn branch_delete(
     repo_id: String,
     revision: u64,
     name: String,
@@ -595,10 +641,10 @@ pub fn branch_delete(
         .into_iter()
         .map(|reference| (reference.remote, reference.name))
         .collect::<Vec<_>>();
-    state
-        .delete_branch(&repo_id, revision, &name, &remote_references)
-        .map(RepositorySnapshotDto::from)
-        .map_err(|error| AppErrorDto::from(&error))
+    recorded_recoverable_mutation(&state, &repo_id, "branch-delete", "Deleted branch", || {
+        state.delete_branch_with_recovery(&repo_id, revision, &name, &remote_references)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -617,16 +663,30 @@ pub fn branch_rename(
 }
 
 #[tauri::command]
-pub fn branch_rebase(
+pub async fn branch_rebase(
     repo_id: String,
     revision: u64,
     reference: String,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<RepositorySnapshotDto> {
-    state
-        .rebase_onto(&repo_id, revision, &reference)
-        .map(RepositorySnapshotDto::from)
-        .map_err(|error| AppErrorDto::from(&error))
+    recorded_recoverable_mutation(&state, &repo_id, "rebase", "Rebased branch", || {
+        state.rebase_onto_with_recovery(&repo_id, revision, &reference)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn branch_reset(
+    repo_id: String,
+    revision: u64,
+    target_oid: String,
+    mode: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    recorded_recoverable_mutation(&state, &repo_id, "reset", "Reset branch", || {
+        state.reset_with_recovery(&repo_id, revision, &target_oid, &mode)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -643,7 +703,7 @@ pub fn interactive_rebase_preview(
 }
 
 #[tauri::command]
-pub fn interactive_rebase_start(
+pub async fn interactive_rebase_start(
     repo_id: String,
     revision: u64,
     request: InteractiveRebaseRequestDto,
@@ -657,10 +717,14 @@ pub fn interactive_rebase_start(
             "Could not locate the GitAcorn executable: {error}"
         )))
     })?;
-    state
-        .start_interactive_rebase(&repo_id, revision, &request, &executable)
-        .map(RepositorySnapshotDto::from)
-        .map_err(|error| AppErrorDto::from(&error))
+    recorded_recoverable_mutation(
+        &state,
+        &repo_id,
+        "interactive-rebase",
+        "Interactive rebase",
+        || state.start_interactive_rebase_with_recovery(&repo_id, revision, &request, &executable),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -858,16 +922,30 @@ pub fn discard_path(
 }
 
 #[tauri::command]
-pub fn commit_create(
+pub async fn commit_create(
     repo_id: String,
     revision: u64,
     request: CommitRequestDto,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<RepositorySnapshotDto> {
-    state
-        .commit(&repo_id, revision, &request.into())
-        .map(RepositorySnapshotDto::from)
-        .map_err(|error| AppErrorDto::from(&error))
+    let request = request.into();
+    recorded_recoverable_mutation(&state, &repo_id, "commit", "Created commit", || {
+        state
+            .commit_with_recovery(&repo_id, revision, &request)
+            .map(|(snapshot, recovery)| {
+                let recovery = recovery.map(|(before, after)| OperationRecoveryData {
+                    action: "commit".to_owned(),
+                    before_head_oid: Some(before),
+                    after_head_oid: Some(after),
+                    before_head_ref: None,
+                    after_head_ref: None,
+                    recovery_ref: None,
+                    recovery_oid: None,
+                });
+                (snapshot, recovery)
+            })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -962,6 +1040,26 @@ pub async fn operation_history(
 }
 
 #[tauri::command]
+pub async fn operation_undo(
+    operation_id: String,
+    repo_id: String,
+    revision: u64,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    recover_operation(&state, &operation_id, &repo_id, revision, false).await
+}
+
+#[tauri::command]
+pub async fn operation_redo(
+    operation_id: String,
+    repo_id: String,
+    revision: u64,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    recover_operation(&state, &operation_id, &repo_id, revision, true).await
+}
+
+#[tauri::command]
 pub async fn diagnostics_copy(state: State<'_, ApplicationState>) -> CommandResult<String> {
     let operations = state
         .operation_history()
@@ -1017,6 +1115,136 @@ async fn recorded_mutation(
     result
         .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
+}
+
+async fn recorded_recoverable_mutation(
+    state: &ApplicationState,
+    repo_id: &str,
+    kind: &str,
+    success_summary: &str,
+    action: impl FnOnce() -> Result<(RepositorySnapshot, Option<OperationRecoveryData>), AppError>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let operation_id = Uuid::new_v4().to_string();
+    state
+        .start_operation_record(&operation_id, Some(repo_id), kind, "Operation started")
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
+    let result = action();
+    match result {
+        Ok((snapshot, recovery)) => {
+            state
+                .finish_operation_record(&operation_id, "succeeded", success_summary, None)
+                .await
+                .map_err(|error| AppErrorDto::from(&error))?;
+            if let Some(recovery) = recovery {
+                state
+                    .attach_operation_recovery(&operation_id, &recovery)
+                    .await
+                    .map_err(|error| AppErrorDto::from(&error))?;
+            }
+            Ok(snapshot.into())
+        }
+        Err(error) => {
+            let dto = AppErrorDto::from(&error);
+            state
+                .finish_operation_record(
+                    &operation_id,
+                    "failed",
+                    &dto.message,
+                    dto.details.as_deref(),
+                )
+                .await
+                .map_err(|persistence| AppErrorDto::from(&persistence))?;
+            Err(dto)
+        }
+    }
+}
+
+async fn recover_operation(
+    state: &ApplicationState,
+    operation_id: &str,
+    repo_id: &str,
+    revision: u64,
+    redo: bool,
+) -> CommandResult<RepositorySnapshotDto> {
+    let record = state
+        .operation_record(operation_id)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?
+        .ok_or_else(|| {
+            AppErrorDto::from(&AppError::InvalidRequest(
+                "Recovery record no longer exists".to_owned(),
+            ))
+        })?;
+    if record.repo_id.as_deref() != Some(repo_id) || record.recovery_action.is_none() {
+        return Err(AppErrorDto::from(&AppError::InvalidRequest(
+            "This operation cannot be recovered in the selected repository".to_owned(),
+        )));
+    }
+    let required_state = if redo { "undone" } else { "ready" };
+    if record.recovery_state.as_deref() != Some(required_state) {
+        return Err(AppErrorDto::from(&AppError::InvalidRequest(
+            "This recovery action is no longer available".to_owned(),
+        )));
+    }
+    let before = record.before_head_oid.as_deref().ok_or_else(|| {
+        AppErrorDto::from(&AppError::InvalidRequest(
+            "Recovery metadata is incomplete".to_owned(),
+        ))
+    })?;
+    let after = record.after_head_oid.as_deref().ok_or_else(|| {
+        AppErrorDto::from(&AppError::InvalidRequest(
+            "Recovery metadata is incomplete".to_owned(),
+        ))
+    })?;
+    let (expected, target, next_state) = if redo {
+        (before, after, "ready")
+    } else {
+        (after, before, "undone")
+    };
+    let snapshot = match record.recovery_action.as_deref() {
+        Some("commit") | Some("reset-soft") => {
+            state.move_head_soft(repo_id, revision, expected, target)
+        }
+        Some("reset-mixed") => state.move_head_mixed(repo_id, revision, expected, target),
+        Some("checkout") => {
+            let target_ref = if redo {
+                record.after_head_ref.as_deref()
+            } else {
+                record.before_head_ref.as_deref()
+            };
+            state.checkout_for_recovery(repo_id, revision, expected, target, target_ref)
+        }
+        Some("rebase") | Some("reset-hard") | Some("interactive-rebase") => {
+            state.move_head_hard(repo_id, revision, expected, target)
+        }
+        Some("branch-delete") => {
+            let name = record.recovery_ref.as_deref().ok_or_else(|| {
+                AppErrorDto::from(&AppError::InvalidRequest(
+                    "Recovery metadata is incomplete".to_owned(),
+                ))
+            })?;
+            let oid = record.recovery_oid.as_deref().ok_or_else(|| {
+                AppErrorDto::from(&AppError::InvalidRequest(
+                    "Recovery metadata is incomplete".to_owned(),
+                ))
+            })?;
+            if redo {
+                state.delete_restored_branch(repo_id, revision, expected, name, oid)
+            } else {
+                state.restore_deleted_branch(repo_id, revision, expected, name, oid)
+            }
+        }
+        _ => Err(AppError::InvalidRequest(
+            "This operation cannot be recovered in the selected repository".to_owned(),
+        )),
+    }
+    .map_err(|error| AppErrorDto::from(&error))?;
+    state
+        .set_operation_recovery_state(operation_id, next_state)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
+    Ok(snapshot.into())
 }
 
 fn parse_diff_target(value: &str) -> Result<DiffTarget, AppErrorDto> {

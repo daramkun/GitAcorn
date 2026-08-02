@@ -23,13 +23,16 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 ### P0.1 Operation recovery와 Undo/Redo
 
-- [ ] 쓰기 작업 직전 HEAD, branch, index/tree 상태와 관련 ref를 복구 레코드로 저장
-- [ ] 작업별 복구 가능 여부와 예상 복구 명령을 Operations 화면에 표시
-- [ ] commit, checkout, discard, branch 삭제, reset, rebase의 안전한 undo 지원
-- [ ] 직전에 undo한 작업의 redo 지원
-- [ ] 앱 외부에서 ref가 변경되었거나 복구 전제조건이 깨지면 실행을 거부
-- [ ] reflog 탐색과 선택 항목에서 branch/tag 복구 기능 제공
-- [ ] 자격 증명, 파일 내용, remote secret이 복구 기록에 포함되지 않는지 검증
+- [x] commit 직전·직후 HEAD를 복구 레코드로 저장
+- [x] commit의 복구 가능 여부와 Undo/Redo를 Operations 화면에 표시
+- [x] clean checkout과 로컬 branch 삭제의 안전한 Undo/Redo 지원
+- [x] 복구 불가능한 discard는 실행 전에 Undo 불가로 명확히 구분
+- [x] clean non-interactive rebase의 안전한 Undo/Redo 지원
+- [x] reset과 interactive rebase의 안전한 Undo/Redo 지원
+- [x] commit을 undo한 직후 redo 지원
+- [x] 앱 외부에서 HEAD가 변경되었거나 복구 전제조건이 깨지면 실행을 거부
+- [x] reflog 탐색과 선택 항목에서 branch/tag 복구 기능 제공
+- [x] 자격 증명, 파일 내용, remote secret이 복구 기록에 포함되지 않는지 allowlist schema test로 검증
 
 완료 조건:
 
@@ -139,7 +142,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 | 항목 | 상태 | 비고 |
 | --- | --- | --- |
-| P0.1 Operation recovery와 Undo/Redo | 예정 | 첫 구현 대상 |
+| P0.1 Operation recovery와 Undo/Redo | 완료 | commit/checkout/branch 삭제/clean rebase/reset/interactive rebase Undo/Redo, reflog ref 복구, recovery schema allowlist 검증 |
 | P0.2 Cherry-pick, Revert, Reset | 예정 | P0.1 복구 기반 사용 |
 | P0.3 Blame과 File/Directory History | 예정 | 읽기 전용 기능으로 병렬 설계 가능 |
 | P0.4 Worktree 전체 lifecycle | 예정 | 현재 조회·전환 기능 확장 |
