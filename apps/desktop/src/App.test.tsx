@@ -37,6 +37,7 @@ import {
   getHistoryPage,
   getGitIdentity,
   getOperationHistory,
+  getReflog,
   getRemotes,
   getReferences,
   getRemoteTags,
@@ -51,13 +52,16 @@ import {
   reorderSessionTabs,
   removeRemote,
   removeSubmodule,
+  redoOperation,
   resolveConflict,
   restoreSession,
+  restoreReflogReference,
   skipRebase,
   stagePaths,
   startInteractiveRebase,
   startRemoteOperation,
   unstagePaths,
+  undoOperation,
   updateGlobalGitIdentity,
   updateRepositoryGitIdentity,
   updateSessionTab,
@@ -89,6 +93,7 @@ vi.mock("./repository", () => ({
   chooseRepositoryDirectory: vi.fn(),
   openRepository: vi.fn(),
   restoreSession: vi.fn(),
+  restoreReflogReference: vi.fn(),
   activateSessionTab: vi.fn(),
   activateWorktree: vi.fn(),
   applyStash: vi.fn(),
@@ -112,6 +117,7 @@ vi.mock("./repository", () => ({
   getGitIdentity: vi.fn(),
   getDiagnostics: vi.fn(),
   getOperationHistory: vi.fn(),
+  getReflog: vi.fn(),
   getRemotes: vi.fn(),
   getReferences: vi.fn(),
   getRemoteTags: vi.fn(),
@@ -120,6 +126,7 @@ vi.mock("./repository", () => ({
   reorderSessionTabs: vi.fn(),
   removeRemote: vi.fn(),
   removeSubmodule: vi.fn(),
+  redoOperation: vi.fn(),
   resolveConflict: vi.fn(),
   updateGlobalGitIdentity: vi.fn(),
   updateRepositoryGitIdentity: vi.fn(),
@@ -129,6 +136,7 @@ vi.mock("./repository", () => ({
   stagePaths: vi.fn(),
   startRemoteOperation: vi.fn(),
   unstagePaths: vi.fn(),
+  undoOperation: vi.fn(),
   listenForRepositoryChanges: vi.fn(),
   mergeBranch: vi.fn(),
   previewInteractiveRebase: vi.fn(),
@@ -205,6 +213,10 @@ const mockedUpdateRepositoryGitIdentity = vi.mocked(
   updateRepositoryGitIdentity,
 );
 const mockedGetOperationHistory = vi.mocked(getOperationHistory);
+const mockedGetReflog = vi.mocked(getReflog);
+const mockedRestoreReflogReference = vi.mocked(restoreReflogReference);
+const mockedUndoOperation = vi.mocked(undoOperation);
+const mockedRedoOperation = vi.mocked(redoOperation);
 const mockedListenForChanges = vi.mocked(listenForRepositoryChanges);
 const mockedGetSystemFileIcons = vi.mocked(getSystemFileIcons);
 
@@ -432,6 +444,8 @@ describe("App", () => {
     mockedDropStash.mockResolvedValue(snapshot);
     mockedResolveConflict.mockResolvedValue(snapshot);
     mockedGetOperationHistory.mockResolvedValue([]);
+    mockedGetReflog.mockResolvedValue([]);
+    mockedRestoreReflogReference.mockResolvedValue({ ...snapshot, revision: 2 });
     mockedListenForChanges.mockResolvedValue(vi.fn());
   });
 
@@ -3227,6 +3241,138 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("undoes and redoes a recoverable commit from the operation center", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    const ready = {
+      schemaVersion: 1,
+      id: "commit-operation",
+      repoId: snapshot.repository.id,
+      kind: "commit",
+      state: "succeeded" as const,
+      summary: "Created commit",
+      startedAt: "2026-08-02 01:00:00",
+      recoveryAction: "commit" as const,
+      recoveryState: "ready" as const,
+    };
+    mockedGetOperationHistory
+      .mockResolvedValueOnce([ready])
+      .mockResolvedValueOnce([{ ...ready, recoveryState: "undone" }])
+      .mockResolvedValueOnce([ready]);
+    mockedUndoOperation.mockResolvedValue({ ...snapshot, revision: 2 });
+    mockedRedoOperation.mockResolvedValue({ ...snapshot, revision: 3 });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show operation history" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo commit" }));
+    await waitFor(() =>
+      expect(mockedUndoOperation).toHaveBeenCalledWith(
+        "commit-operation",
+        snapshot.repository.id,
+        snapshot.revision,
+      ),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Redo commit" }));
+    await waitFor(() =>
+      expect(mockedRedoOperation).toHaveBeenCalledWith(
+        "commit-operation",
+        snapshot.repository.id,
+        2,
+      ),
+    );
+  });
+
+  it("labels checkout and deleted-branch recovery actions explicitly", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetOperationHistory.mockResolvedValue([
+      {
+        schemaVersion: 1,
+        id: "checkout-operation",
+        repoId: snapshot.repository.id,
+        kind: "checkout",
+        state: "succeeded",
+        summary: "Checked out reference",
+        startedAt: "2026-08-02 02:00:00",
+        recoveryAction: "checkout",
+        recoveryState: "ready",
+      },
+      {
+        schemaVersion: 1,
+        id: "delete-operation",
+        repoId: snapshot.repository.id,
+        kind: "branch-delete",
+        state: "succeeded",
+        summary: "Deleted branch",
+        startedAt: "2026-08-02 02:01:00",
+        recoveryAction: "branch-delete",
+        recoveryState: "ready",
+      },
+      {
+        schemaVersion: 1,
+        id: "rebase-operation",
+        repoId: snapshot.repository.id,
+        kind: "rebase",
+        state: "succeeded",
+        summary: "Rebased branch",
+        startedAt: "2026-08-02 02:02:00",
+        recoveryAction: "rebase",
+        recoveryState: "ready",
+      },
+    ]);
+    mockedUndoOperation.mockResolvedValue({ ...snapshot, revision: 2 });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show operation history" }));
+    expect(await screen.findByRole("button", { name: "Undo checkout" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Undo rebase" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Restore deleted branch" }));
+
+    await waitFor(() =>
+      expect(mockedUndoOperation).toHaveBeenCalledWith(
+        "delete-operation",
+        snapshot.repository.id,
+        snapshot.revision,
+      ),
+    );
+  });
+
+  it("restores a selected reflog entry as a new branch", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetReflog.mockResolvedValue([
+      {
+        schemaVersion: 1,
+        selector: "HEAD@{1}",
+        oid: "1234567890abcdef1234567890abcdef12345678",
+        message: "reset: moving to HEAD~1",
+        parents: [],
+        authorName: "Ada",
+        authorEmail: "ada@example.com",
+        authoredAt: 1_699_999_900,
+        subject: "Recovered commit",
+        body: "",
+        reflogOnly: true,
+      },
+    ]);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show operation history" }));
+    expect(await screen.findByText("reset: moving to HEAD~1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Restore as branch…" }));
+    const name = screen.getByLabelText("Branch name");
+    fireEvent.change(name, { target: { value: "recovered-work" } });
+    fireEvent.click(screen.getByRole("button", { name: "Restore reference" }));
+
+    await waitFor(() =>
+      expect(mockedRestoreReflogReference).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "1234567890abcdef1234567890abcdef12345678",
+        "recovered-work",
+        false,
+      ),
+    );
+  });
+
   it("resizes the sidebar and persists width in localStorage", async () => {
     localStorage.clear();
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
@@ -3665,6 +3811,79 @@ describe("App", () => {
       ),
     );
     expect(await screen.findByTitle(/Grace Hopper.*Gravatar/i)).toBeInTheDocument();
+  });
+
+  it("shows reflog commits in history when enabled for the repository", async () => {
+    const reflogOid = "1234567890abcdef1234567890abcdef12345678";
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetReflog.mockResolvedValue([
+      {
+        schemaVersion: 1,
+        selector: "HEAD@{1}",
+        oid: reflogOid,
+        message: "reset: moving to HEAD~1",
+        parents: [],
+        authorName: "Grace",
+        authorEmail: "grace@example.com",
+        authoredAt: 1_699_999_900,
+        subject: "Recovered reflog commit",
+        body: "Lost work",
+        reflogOnly: true,
+      },
+      {
+        schemaVersion: 1,
+        selector: "HEAD@{0}",
+        oid: "abcdef123456",
+        message: "commit: Initial commit",
+        parents: [],
+        authorName: "Ada",
+        authorEmail: "ada@example.com",
+        authoredAt: 1_700_000_000,
+        subject: "Initial commit",
+        body: "",
+        reflogOnly: false,
+      },
+    ]);
+
+    render(<App />);
+    await screen.findByText(snapshot.repository.name);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Repository settings|저장소 설정/i,
+      }),
+    );
+    const toggle = await screen.findByRole("checkbox", {
+      name: /Show reflog in history|기록에서 Reflog 보기/i,
+    });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(
+        JSON.parse(
+          localStorage.getItem("gitacorn_show_reflog_by_repository") ?? "{}",
+        ),
+      ).toEqual({ [snapshot.repository.id]: true }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Close repository settings|저장소 설정 닫기/i,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+
+    const reflogCommit = await screen.findByRole("button", {
+      name: /Recovered reflog commit/,
+    });
+    expect(reflogCommit).toHaveTextContent("Reflog · HEAD@{1}");
+    expect(reflogCommit).toHaveClass("commit-row", "reflog-only");
+    expect(
+      screen.getByRole("button", { name: /Initial commit/ }),
+    ).not.toHaveClass("reflog-only");
+    expect(
+      screen.getByRole("button", { name: /Initial commit/ }),
+    ).not.toHaveTextContent("Reflog");
+    expect(mockedGetReflog).toHaveBeenCalledWith(snapshot.repository.id);
   });
 });
 

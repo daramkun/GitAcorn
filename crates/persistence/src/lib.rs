@@ -50,6 +50,25 @@ pub struct OperationRecord {
     pub diagnostic: Option<String>,
     pub started_at: String,
     pub finished_at: Option<String>,
+    pub recovery_action: Option<String>,
+    pub recovery_state: Option<String>,
+    pub before_head_oid: Option<String>,
+    pub after_head_oid: Option<String>,
+    pub before_head_ref: Option<String>,
+    pub after_head_ref: Option<String>,
+    pub recovery_ref: Option<String>,
+    pub recovery_oid: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationRecovery<'a> {
+    pub action: &'a str,
+    pub before_head_oid: Option<&'a str>,
+    pub after_head_oid: Option<&'a str>,
+    pub before_head_ref: Option<&'a str>,
+    pub after_head_ref: Option<&'a str>,
+    pub recovery_ref: Option<&'a str>,
+    pub recovery_oid: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -215,7 +234,9 @@ impl SessionStore {
 
     pub async fn list_operations(&self, limit: usize) -> Result<Vec<OperationRecord>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, repo_id, kind, state, summary, diagnostic, started_at, finished_at
+            "SELECT id, repo_id, kind, state, summary, diagnostic, started_at, finished_at,
+                    recovery_action, recovery_state, before_head_oid, after_head_oid,
+                    before_head_ref, after_head_ref, recovery_ref, recovery_oid
              FROM operation_history
              ORDER BY started_at DESC, rowid DESC
              LIMIT ?",
@@ -234,8 +255,81 @@ impl SessionStore {
                 diagnostic: row.get("diagnostic"),
                 started_at: row.get("started_at"),
                 finished_at: row.get("finished_at"),
+                recovery_action: row.get("recovery_action"),
+                recovery_state: row.get("recovery_state"),
+                before_head_oid: row.get("before_head_oid"),
+                after_head_oid: row.get("after_head_oid"),
+                before_head_ref: row.get("before_head_ref"),
+                after_head_ref: row.get("after_head_ref"),
+                recovery_ref: row.get("recovery_ref"),
+                recovery_oid: row.get("recovery_oid"),
             })
             .collect())
+    }
+
+    pub async fn operation(&self, id: &str) -> Result<Option<OperationRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, repo_id, kind, state, summary, diagnostic, started_at, finished_at,
+                    recovery_action, recovery_state, before_head_oid, after_head_oid,
+                    before_head_ref, after_head_ref, recovery_ref, recovery_oid
+             FROM operation_history WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| OperationRecord {
+            id: row.get("id"),
+            repo_id: row.get("repo_id"),
+            kind: row.get("kind"),
+            state: row.get("state"),
+            summary: row.get("summary"),
+            diagnostic: row.get("diagnostic"),
+            started_at: row.get("started_at"),
+            finished_at: row.get("finished_at"),
+            recovery_action: row.get("recovery_action"),
+            recovery_state: row.get("recovery_state"),
+            before_head_oid: row.get("before_head_oid"),
+            after_head_oid: row.get("after_head_oid"),
+            before_head_ref: row.get("before_head_ref"),
+            after_head_ref: row.get("after_head_ref"),
+            recovery_ref: row.get("recovery_ref"),
+            recovery_oid: row.get("recovery_oid"),
+        }))
+    }
+
+    pub async fn attach_recovery(
+        &self,
+        id: &str,
+        recovery: &OperationRecovery<'_>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE operation_history
+             SET recovery_action = ?, recovery_state = 'ready',
+                 before_head_oid = ?, after_head_oid = ?,
+                 before_head_ref = ?, after_head_ref = ?,
+                 recovery_ref = ?, recovery_oid = ?
+             WHERE id = ?",
+        )
+        .bind(recovery.action)
+        .bind(recovery.before_head_oid)
+        .bind(recovery.after_head_oid)
+        .bind(recovery.before_head_ref)
+        .bind(recovery.after_head_ref)
+        .bind(recovery.recovery_ref)
+        .bind(recovery.recovery_oid)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_recovery_state(&self, id: &str, state: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE operation_history SET recovery_state = ? WHERE id = ?")
+            .bind(state)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn recover_interrupted_operations(&self) -> Result<u64, sqlx::Error> {
@@ -372,12 +466,39 @@ async fn create_operation_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+    for column in [
+        "recovery_action TEXT",
+        "recovery_state TEXT",
+        "before_head_oid TEXT",
+        "after_head_oid TEXT",
+        "before_head_ref TEXT",
+        "after_head_ref TEXT",
+        "recovery_ref TEXT",
+        "recovery_oid TEXT",
+    ] {
+        let name = column.split_whitespace().next().unwrap_or_default();
+        let exists: i64 = sqlx::query_scalar(&format!(
+            "SELECT COUNT(*) FROM pragma_table_info('operation_history') WHERE name = '{name}'"
+        ))
+        .fetch_one(pool)
+        .await?;
+        if exists == 0 {
+            sqlx::query(&format!(
+                "ALTER TABLE operation_history ADD COLUMN {column}"
+            ))
+            .execute(pool)
+            .await?;
+        }
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PersistenceSettings, SessionStore, SessionTab, SqliteConnectOptions, SqlitePool};
+    use super::{
+        OperationRecovery, PersistenceSettings, SessionStore, SessionTab, SqliteConnectOptions,
+        SqlitePool,
+    };
 
     #[test]
     fn settings_start_at_schema_version_one() {
@@ -537,5 +658,98 @@ mod tests {
         let operations = store.list_operations(20).await.expect("list operations");
         assert_eq!(operations[0].state, "interrupted");
         assert!(operations[0].finished_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn persists_and_transitions_typed_recovery_metadata() {
+        let store = SessionStore::memory().await.expect("memory store");
+        store
+            .start_operation("commit-one", Some("repo"), "commit", "Creating commit")
+            .await
+            .expect("start operation");
+        store
+            .finish_operation("commit-one", "succeeded", "Created commit", None)
+            .await
+            .expect("finish operation");
+        store
+            .attach_recovery(
+                "commit-one",
+                &OperationRecovery {
+                    action: "checkout",
+                    before_head_oid: Some("before"),
+                    after_head_oid: Some("after"),
+                    before_head_ref: Some("main"),
+                    after_head_ref: Some("topic"),
+                    recovery_ref: None,
+                    recovery_oid: None,
+                },
+            )
+            .await
+            .expect("attach recovery");
+
+        let ready = store
+            .operation("commit-one")
+            .await
+            .expect("read operation")
+            .expect("operation");
+        assert_eq!(ready.recovery_action.as_deref(), Some("checkout"));
+        assert_eq!(ready.recovery_state.as_deref(), Some("ready"));
+        assert_eq!(ready.before_head_oid.as_deref(), Some("before"));
+        assert_eq!(ready.after_head_oid.as_deref(), Some("after"));
+        assert_eq!(ready.before_head_ref.as_deref(), Some("main"));
+        assert_eq!(ready.after_head_ref.as_deref(), Some("topic"));
+
+        store
+            .set_recovery_state("commit-one", "undone")
+            .await
+            .expect("mark undone");
+        assert_eq!(
+            store
+                .operation("commit-one")
+                .await
+                .expect("read operation")
+                .expect("operation")
+                .recovery_state
+                .as_deref(),
+            Some("undone")
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_schema_only_allows_head_and_reference_metadata() {
+        use sqlx::Row;
+
+        let store = SessionStore::memory().await.expect("memory store");
+        let columns = sqlx::query("SELECT name FROM pragma_table_info('operation_history')")
+            .fetch_all(&store.pool)
+            .await
+            .expect("operation columns")
+            .into_iter()
+            .map(|row| row.get::<String, _>("name"))
+            .filter(|name| {
+                name.starts_with("recovery_")
+                    || name.ends_with("_head_oid")
+                    || name.ends_with("_head_ref")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            columns,
+            [
+                "recovery_action",
+                "recovery_state",
+                "before_head_oid",
+                "after_head_oid",
+                "before_head_ref",
+                "after_head_ref",
+                "recovery_ref",
+                "recovery_oid",
+            ]
+        );
+        assert!(columns.iter().all(|name| {
+            !["credential", "secret", "content", "remote_url", "file_path"]
+                .iter()
+                .any(|forbidden| name.contains(forbidden))
+        }));
     }
 }

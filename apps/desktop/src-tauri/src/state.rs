@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 use app_core::{
     AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
     GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
-    InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection, RemoteProgress,
-    RemoteRequest, RemoteTagSummary, RepositoryScheduler, RepositoryService, RepositorySidebar,
-    StashRequest,
+    InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection, ReflogEntry,
+    RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler, RepositoryService,
+    RepositorySidebar, StashRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -18,7 +18,7 @@ use git_domain::{
     WorktreeId,
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use persistence::{OperationRecord, SessionStore, SessionTab};
+use persistence::{OperationRecord, OperationRecovery, SessionStore, SessionTab};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
@@ -54,6 +54,17 @@ pub struct RepositoryIdentityState {
     pub repo_id: String,
     pub repository_name: String,
     pub settings: GitIdentitySettings,
+}
+
+#[derive(Debug, Clone)]
+pub struct OperationRecoveryData {
+    pub action: String,
+    pub before_head_oid: Option<String>,
+    pub after_head_oid: Option<String>,
+    pub before_head_ref: Option<String>,
+    pub after_head_ref: Option<String>,
+    pub recovery_ref: Option<String>,
+    pub recovery_oid: Option<String>,
 }
 
 pub struct ApplicationState {
@@ -263,6 +274,26 @@ impl ApplicationState {
         let descriptor = self.descriptor(repo_id)?;
         self.scheduler
             .read(repo_id, || self.service.references(&descriptor))
+    }
+
+    pub fn repository_reflog(&self, repo_id: &str) -> Result<Vec<ReflogEntry>, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.reflog(&descriptor, 200))
+    }
+
+    pub fn restore_reflog_reference(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        oid: &str,
+        name: &str,
+        is_tag: bool,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.restore_reflog_reference(repository, oid, name, is_tag)
+        })
     }
 
     pub fn repository_remote_tags(
@@ -511,14 +542,65 @@ impl ApplicationState {
         })
     }
 
-    pub fn commit(
+    pub fn commit_with_recovery(
         &self,
         repo_id: &str,
         revision: u64,
         request: &CommitRequest,
+    ) -> Result<(RepositorySnapshot, Option<(String, String)>), AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, repository.revision)?;
+                repository.descriptor.clone()
+            };
+            let before = self.service.current_head_oid(&descriptor)?;
+            self.service.commit(&descriptor, request)?;
+            let after = self.service.current_head_oid(&descriptor)?;
+            let next_revision = {
+                let mut repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get_mut(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                repository.revision += 1;
+                repository.revision
+            };
+            let snapshot = self.service.snapshot(&descriptor, next_revision)?;
+            Ok((snapshot, before.zip(after)))
+        })
+    }
+
+    pub fn move_head_soft(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        expected_head_oid: &str,
+        target_head_oid: &str,
     ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate(repo_id, revision, |service, repository| {
-            service.commit(repository, request)
+        self.mutate_head(repo_id, revision, |service, repository| {
+            service.move_head_soft(repository, expected_head_oid, target_head_oid)
+        })
+    }
+
+    pub fn move_head_hard(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        expected_head_oid: &str,
+        target_head_oid: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate_head(repo_id, revision, |service, repository| {
+            service.move_head_hard(repository, expected_head_oid, target_head_oid)
         })
     }
 
@@ -533,7 +615,7 @@ impl ApplicationState {
         })
     }
 
-    pub fn checkout_branch(
+    pub fn checkout_branch_with_recovery(
         &self,
         repo_id: &str,
         revision: u64,
@@ -541,24 +623,137 @@ impl ApplicationState {
         is_remote: bool,
         is_tag: bool,
         auto_stash: bool,
-    ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate(repo_id, revision, |service, repository| {
-            service.checkout_branch(repository, name, is_remote, is_tag, auto_stash)
+    ) -> Result<(RepositorySnapshot, Option<OperationRecoveryData>), AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, repository.revision)?;
+                repository.descriptor.clone()
+            };
+            let clean_before = self.service.is_worktree_clean(&descriptor)?;
+            let before_head_oid = self.service.current_head_oid(&descriptor)?;
+            let before_head_ref = self.service.current_head_ref(&descriptor)?;
+            self.service
+                .checkout_branch(&descriptor, name, is_remote, is_tag, auto_stash)?;
+            let after_head_oid = self.service.current_head_oid(&descriptor)?;
+            let after_head_ref = self.service.current_head_ref(&descriptor)?;
+            let next_revision = self.advance_revision(repo_id)?;
+            let snapshot = self.service.snapshot(&descriptor, next_revision)?;
+            let changed = before_head_oid != after_head_oid || before_head_ref != after_head_ref;
+            let recovery =
+                (clean_before && changed && snapshot.status.changes.is_empty()).then(|| {
+                    OperationRecoveryData {
+                        action: "checkout".to_owned(),
+                        before_head_oid,
+                        after_head_oid,
+                        before_head_ref,
+                        after_head_ref,
+                        recovery_ref: None,
+                        recovery_oid: None,
+                    }
+                });
+            Ok((snapshot, recovery))
         })
     }
 
-    pub fn delete_branch(
+    pub fn delete_branch_with_recovery(
         &self,
         repo_id: &str,
         revision: u64,
         name: &str,
         remote_references: &[(String, String)],
+    ) -> Result<(RepositorySnapshot, Option<OperationRecoveryData>), AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, repository.revision)?;
+                repository.descriptor.clone()
+            };
+            let head_oid = self.service.current_head_oid(&descriptor)?;
+            let branch_oid = self.service.local_branch_oid(&descriptor, name)?;
+            for (remote, remote_name) in remote_references {
+                self.service
+                    .delete_remote_branch(&descriptor, remote, remote_name)?;
+            }
+            self.service.delete_branch(&descriptor, name)?;
+            let after_head_oid = self.service.current_head_oid(&descriptor)?;
+            let next_revision = self.advance_revision(repo_id)?;
+            let snapshot = self.service.snapshot(&descriptor, next_revision)?;
+            let recovery = if remote_references.is_empty() {
+                head_oid
+                    .clone()
+                    .zip(branch_oid)
+                    .map(|(head_oid, branch_oid)| OperationRecoveryData {
+                        action: "branch-delete".to_owned(),
+                        before_head_oid: Some(head_oid),
+                        after_head_oid,
+                        before_head_ref: None,
+                        after_head_ref: None,
+                        recovery_ref: Some(name.to_owned()),
+                        recovery_oid: Some(branch_oid),
+                    })
+            } else {
+                None
+            };
+            Ok((snapshot, recovery))
+        })
+    }
+
+    pub fn checkout_for_recovery(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        expected_head_oid: &str,
+        target_head_oid: &str,
+        target_head_ref: Option<&str>,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate_head(repo_id, revision, |service, repository| {
+            service.checkout_for_recovery(
+                repository,
+                expected_head_oid,
+                target_head_oid,
+                target_head_ref,
+            )
+        })
+    }
+
+    pub fn restore_deleted_branch(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        expected_head_oid: &str,
+        name: &str,
+        oid: &str,
     ) -> Result<RepositorySnapshot, AppError> {
         self.mutate(repo_id, revision, |service, repository| {
-            for (remote, remote_name) in remote_references {
-                service.delete_remote_branch(repository, remote, remote_name)?;
-            }
-            service.delete_branch(repository, name)
+            service.restore_deleted_branch(repository, expected_head_oid, name, oid)
+        })
+    }
+
+    pub fn delete_restored_branch(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        expected_head_oid: &str,
+        name: &str,
+        oid: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.delete_restored_branch(repository, expected_head_oid, name, oid)
         })
     }
 
@@ -575,14 +770,48 @@ impl ApplicationState {
         })
     }
 
-    pub fn rebase_onto(
+    pub fn rebase_onto_with_recovery(
         &self,
         repo_id: &str,
         revision: u64,
         reference: &str,
-    ) -> Result<RepositorySnapshot, AppError> {
-        self.mutate_head(repo_id, revision, |service, repository| {
-            service.rebase_onto(repository, reference)
+    ) -> Result<(RepositorySnapshot, Option<OperationRecoveryData>), AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, repository.revision)?;
+                repository.descriptor.clone()
+            };
+            let clean_before = self.service.is_worktree_clean(&descriptor)?;
+            let before_head_oid = self.service.current_head_oid(&descriptor)?;
+            self.service
+                .with_submodule_update(&descriptor, false, |_| {
+                    self.service.rebase_onto(&descriptor, reference)
+                })?;
+            let after_head_oid = self.service.current_head_oid(&descriptor)?;
+            let next_revision = self.advance_revision(repo_id)?;
+            let snapshot = self.service.snapshot(&descriptor, next_revision)?;
+            let recovery = (clean_before
+                && before_head_oid != after_head_oid
+                && snapshot.operation.is_none()
+                && snapshot.status.changes.is_empty())
+            .then(|| OperationRecoveryData {
+                action: "rebase".to_owned(),
+                before_head_oid,
+                after_head_oid,
+                before_head_ref: None,
+                after_head_ref: None,
+                recovery_ref: None,
+                recovery_oid: None,
+            });
+            Ok((snapshot, recovery))
         })
     }
 
@@ -786,6 +1015,43 @@ impl ApplicationState {
             .map_err(persistence_error)
     }
 
+    pub async fn operation_record(&self, id: &str) -> Result<Option<OperationRecord>, AppError> {
+        self.session.operation(id).await.map_err(persistence_error)
+    }
+
+    pub async fn attach_operation_recovery(
+        &self,
+        id: &str,
+        recovery: &OperationRecoveryData,
+    ) -> Result<(), AppError> {
+        self.session
+            .attach_recovery(
+                id,
+                &OperationRecovery {
+                    action: &recovery.action,
+                    before_head_oid: recovery.before_head_oid.as_deref(),
+                    after_head_oid: recovery.after_head_oid.as_deref(),
+                    before_head_ref: recovery.before_head_ref.as_deref(),
+                    after_head_ref: recovery.after_head_ref.as_deref(),
+                    recovery_ref: recovery.recovery_ref.as_deref(),
+                    recovery_oid: recovery.recovery_oid.as_deref(),
+                },
+            )
+            .await
+            .map_err(persistence_error)
+    }
+
+    pub async fn set_operation_recovery_state(
+        &self,
+        id: &str,
+        recovery_state: &str,
+    ) -> Result<(), AppError> {
+        self.session
+            .set_recovery_state(id, recovery_state)
+            .await
+            .map_err(persistence_error)
+    }
+
     pub async fn activate_worktree(
         &self,
         repo_id: &str,
@@ -926,6 +1192,18 @@ impl ApplicationState {
         self.session.load_tabs().await.map_err(persistence_error)
     }
 
+    fn advance_revision(&self, repo_id: RepoId) -> Result<u64, AppError> {
+        let mut repositories = self
+            .repositories
+            .lock()
+            .expect("repository registry lock poisoned");
+        let repository = repositories
+            .get_mut(&repo_id)
+            .ok_or(AppError::RepositoryNotOpen)?;
+        repository.revision += 1;
+        Ok(repository.revision)
+    }
+
     fn mutate(
         &self,
         repo_id: &str,
@@ -946,17 +1224,7 @@ impl ApplicationState {
                 repository.descriptor.clone()
             };
             operation(&self.service, &descriptor)?;
-            let next_revision = {
-                let mut repositories = self
-                    .repositories
-                    .lock()
-                    .expect("repository registry lock poisoned");
-                let repository = repositories
-                    .get_mut(&repo_id)
-                    .ok_or(AppError::RepositoryNotOpen)?;
-                repository.revision += 1;
-                repository.revision
-            };
+            let next_revision = self.advance_revision(repo_id)?;
             self.service.snapshot(&descriptor, next_revision)
         })
     }
