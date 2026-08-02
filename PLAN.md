@@ -1,0 +1,147 @@
+# GitAcorn 경쟁 기능 보강 계획
+
+> 기준일: 2026-08-02  
+> 비교 대상: Fork, GitKraken Desktop  
+> 원칙: 각 항목은 UI, Tauri IPC, 애플리케이션 서비스, 실제 Git fixture 테스트를 포함하는 하나의 수직 기능으로 완성한다.
+
+## 현재 기준선
+
+GitAcorn은 다음 핵심 흐름을 이미 지원한다.
+
+- 여러 저장소 탭과 세션 복원, 저장소 열기와 clone
+- working tree 상태, 파일·hunk·선택 라인 stage/unstage/discard
+- commit/amend, commit graph와 history/reference 검색
+- branch/tag/remote/submodule 관리
+- fetch/pull/push와 작업 진행률·취소·진단
+- stash 생성·적용·삭제, 기본 merge conflict 해결
+- merge, fast-forward, rebase와 interactive rebase
+- worktree 조회와 전환
+
+## P0 — 핵심 Git 클라이언트 격차
+
+아래 순서대로 구현한다. 위험한 history 변경보다 복구 기반을 먼저 마련하고, 공통 preview/confirmation 모델을 재사용한다.
+
+### P0.1 Operation recovery와 Undo/Redo
+
+- [ ] 쓰기 작업 직전 HEAD, branch, index/tree 상태와 관련 ref를 복구 레코드로 저장
+- [ ] 작업별 복구 가능 여부와 예상 복구 명령을 Operations 화면에 표시
+- [ ] commit, checkout, discard, branch 삭제, reset, rebase의 안전한 undo 지원
+- [ ] 직전에 undo한 작업의 redo 지원
+- [ ] 앱 외부에서 ref가 변경되었거나 복구 전제조건이 깨지면 실행을 거부
+- [ ] reflog 탐색과 선택 항목에서 branch/tag 복구 기능 제공
+- [ ] 자격 증명, 파일 내용, remote secret이 복구 기록에 포함되지 않는지 검증
+
+완료 조건:
+
+- 실제 저장소 fixture에서 지원 작업별 undo/redo 왕복 테스트가 통과한다.
+- 복구 불가능한 discard 등은 실행 전에 명확히 구분되며 거짓 Undo를 제공하지 않는다.
+
+### P0.2 Cherry-pick, Revert, Reset
+
+- [ ] 단일·다중 commit cherry-pick과 실행 전 충돌 가능성 preview
+- [ ] revert와 revert 진행 중 continue/abort
+- [ ] soft/mixed/hard reset의 변경 범위 preview
+- [ ] hard reset은 대상 OID, 삭제될 working tree/index 변경과 복구 ref를 확인
+- [ ] 진행 중 cherry-pick의 continue/skip/abort
+- [ ] commit graph context menu와 키보드 접근성 제공
+
+완료 조건:
+
+- clean/conflict/empty commit/merge commit fixture를 포함한다.
+- 모든 destructive 동작이 P0.1 복구 레코드와 연결된다.
+
+### P0.3 Blame과 File/Directory History
+
+- [ ] 선택 commit 또는 working tree 기준 file blame
+- [ ] line별 author, commit, timestamp 표시와 commit graph 이동
+- [ ] rename 추적을 포함한 file history
+- [ ] directory/path history와 path filter
+- [ ] 큰 파일에서 취소 가능한 비동기 로딩과 가상화
+
+완료 조건:
+
+- rename, non-UTF-8 path, merge history fixture에서 결과가 Git CLI와 일치한다.
+
+### P0.4 Worktree 전체 lifecycle
+
+- [ ] branch 또는 remote branch에서 worktree 생성
+- [ ] 기존 worktree 열기·전환과 새 탭으로 열기
+- [ ] worktree lock/unlock
+- [ ] 안전한 remove와 `--force`가 필요한 상태의 명시적 확인
+- [ ] worktree 제거와 branch 삭제를 결합한 선택적 흐름
+- [ ] submodule이 포함된 worktree와 같은 이름의 폴더를 구분
+
+완료 조건:
+
+- main/linked worktree 간 동일 저장소 ID와 독립 index가 유지된다.
+- dirty/locked/missing/prunable worktree fixture를 모두 처리한다.
+
+### P0.5 고급 Diff와 비교
+
+- [ ] unified/split 전환, word diff, syntax highlighting과 word wrap
+- [ ] 임의의 두 commit, branch, tag, WIP 간 비교
+- [ ] image side-by-side/overlay diff와 binary metadata 표시
+- [ ] hunk 탐색, diff 내 검색, large/minified file 보호
+- [ ] 외부 diff/merge tool 설정과 실행
+- [ ] text patch 생성·저장·적용 및 적용 전 검증
+
+완료 조건:
+
+- text, rename, binary, image, large file fixture의 렌더링과 메모리 제한을 검증한다.
+
+### P0.6 Git LFS와 서명 상태
+
+- [ ] 저장소의 LFS 사용 여부와 tracked/pointer 상태 표시
+- [ ] LFS fetch/pull/prune와 진행률·취소
+- [ ] LFS lock 목록, lock/unlock과 소유자 표시
+- [ ] commit/tag의 GPG·SSH 서명 상태 표시
+- [ ] 시스템 Git 설정을 존중하는 commit/tag 서명 옵션
+
+완료 조건:
+
+- LFS가 설치되지 않은 환경과 인증 실패를 복구 가능한 오류로 안내한다.
+- GitAcorn은 개인 키나 credential을 직접 저장하지 않는다.
+
+## P1 — 생산성 및 forge 연동
+
+- [ ] built-in 3-way merge editor와 hunk 단위 conflict resolution
+- [ ] 저장소 init, `.gitignore`/license template 선택
+- [ ] bisect 시각화와 good/bad/skip 흐름
+- [ ] command palette, repository terminal, 사용자 정의 command
+- [ ] GitHub/GitLab/Bitbucket/Azure DevOps 계정과 저장소 탐색
+- [ ] PR/MR 생성·조회·checkout·merge와 review/CI 상태
+- [ ] 여러 저장소 Workspace와 일괄 clone/fetch/pull
+- [ ] 다중 계정/profile, SSH key 및 Git identity profile
+- [ ] Git-flow와 branch naming preset
+
+## P2 — 협업 및 지능형 기능
+
+- [ ] PR·issue·CI를 모은 개인/팀 dashboard와 알림
+- [ ] cloud/shared patch 또는 호환 가능한 자체 호스팅 patch 공유
+- [ ] worktree 기반 coding-agent session 관리
+- [ ] 선택 가능한 provider를 사용하는 AI commit/PR 문안 생성
+- [ ] commit/branch 설명과 opt-in AI code review
+- [ ] AI conflict resolution은 항상 patch preview와 사용자 승인을 거쳐 적용
+- [ ] Linux 패키징과 배포 검증
+
+## 공통 품질 게이트
+
+각 수직 기능은 다음 조건을 충족해야 완료로 표시한다.
+
+- [ ] 위험도, 실행할 Git 명령, 변경 범위와 복구 경로가 UI에 표시된다.
+- [ ] 저장소별 write 직렬화와 stale revision 검증을 통과한다.
+- [ ] 명령 인수는 shell 문자열이 아닌 배열로 전달되고 민감 정보가 마스킹된다.
+- [ ] Rust unit/integration test와 React UI test가 추가된다.
+- [ ] Windows와 macOS의 플랫폼 차이를 문서화하고 해당 CI를 통과한다.
+- [ ] 저장소 루트에서 `pnpm check`가 통과한다.
+
+## 구현 진행 기록
+
+| 항목 | 상태 | 비고 |
+| --- | --- | --- |
+| P0.1 Operation recovery와 Undo/Redo | 예정 | 첫 구현 대상 |
+| P0.2 Cherry-pick, Revert, Reset | 예정 | P0.1 복구 기반 사용 |
+| P0.3 Blame과 File/Directory History | 예정 | 읽기 전용 기능으로 병렬 설계 가능 |
+| P0.4 Worktree 전체 lifecycle | 예정 | 현재 조회·전환 기능 확장 |
+| P0.5 고급 Diff와 비교 | 예정 | 기존 partial staging renderer 확장 |
+| P0.6 Git LFS와 서명 상태 | 예정 | 시스템 Git·credential 정책 유지 |
