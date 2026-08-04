@@ -12,7 +12,7 @@ use uuid::Uuid;
 pub use remote::{CloneRequest, RemoteOperationKind, RemoteProgress, RemoteRequest};
 pub use repository::{
     BranchRequest, CommitFile, CommitRequest, DiffTarget, GitIdentity, GitIdentitySettings,
-    GitReference, GitRemote, GitVersion, HistoryFilter, InteractiveRebaseAction,
+    GitReference, GitRemote, GitVersion, HistoryFilter, HistoryOperation, InteractiveRebaseAction,
     InteractiveRebaseCommit, InteractiveRebaseItem, InteractiveRebasePreview,
     InteractiveRebaseRequest, PatchSelection, RefSummary, ReferenceKind, ReflogEntry,
     RemoteTagSummary, RepositoryService, RepositorySidebar, StashSummary, WorktreeSummary,

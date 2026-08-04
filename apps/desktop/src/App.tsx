@@ -28,6 +28,7 @@ import {
   addSubmodule,
   addRemote,
   abortMerge,
+  abortHistory,
   abortRebase,
   activateSessionTab,
   activateWorktree,
@@ -41,6 +42,7 @@ import {
   createCommit,
   createStash,
   createTag,
+  continueHistory,
   continueRebase,
   deleteBranch,
   deleteTag,
@@ -63,6 +65,7 @@ import {
   getRepositorySnapshot,
   initializeSubmodule,
   listenForRepositoryChanges,
+  mutateHistory,
   normalizeAppError,
   openRepository,
   previewInteractiveRebase,
@@ -80,6 +83,7 @@ import {
   startInteractiveRebase,
   startRemoteOperation,
   skipRebase,
+  skipHistory,
   stagePaths,
   unstagePaths,
   undoOperation,
@@ -98,6 +102,7 @@ import {
   type RepositoryGitIdentityDto,
   type InteractiveRebaseAction,
   type InteractiveRebasePreviewDto,
+  type HistoryMutation,
   type OperationEventDto,
   type OperationRecordDto,
   type RemoteOperationOptions,
@@ -121,6 +126,10 @@ import {
 type Page = "changes" | "history";
 
 type ResetMode = "soft" | "mixed" | "hard";
+type HistoryMutationPreview = {
+  operation: HistoryMutation;
+  commits: HistoryCommit[];
+};
 type AppInfoState =
   | { status: "loading" }
   | { status: "ready"; value: AppInfoDto }
@@ -7500,6 +7509,9 @@ function HistoryView({
   const [resetPreview, setResetPreview] = useState<HistoryCommit>();
   const [resetMode, setResetMode] = useState<ResetMode>("mixed");
   const [resetBusy, setResetBusy] = useState(false);
+  const [historyMutationPreview, setHistoryMutationPreview] =
+    useState<HistoryMutationPreview>();
+  const [historyMutationBusy, setHistoryMutationBusy] = useState(false);
   const [rebasePreview, setRebasePreview] =
     useState<InteractiveRebasePreviewDto>();
   const [rebasePlan, setRebasePlan] = useState<
@@ -7528,6 +7540,10 @@ function HistoryView({
         ? mergeHistoryWithReflog(commits, reflogEntries, query)
         : commits.map((commit) => ({ ...commit })),
     [commits, query, reflogEntries, showReflog],
+  );
+  const historySelection = useMultiSelection(
+    visibleCommits.map((commit) => commit.oid),
+    "history",
   );
   const selected =
     visibleCommits.find((commit) => commit.oid === selectedOid) ??
@@ -7813,6 +7829,42 @@ function HistoryView({
     }
   }
 
+  function openHistoryMutationPreview(
+    commit: HistoryCommit,
+    operation: HistoryMutation,
+  ) {
+    setRebaseMenu(undefined);
+    const selectedCommits = visibleCommits.filter((entry) =>
+      historySelection.selected.has(entry.oid),
+    );
+    setHistoryMutationPreview({
+      operation,
+      commits: selectedCommits.some((entry) => entry.oid === commit.oid)
+        ? selectedCommits
+        : [commit],
+    });
+  }
+
+  async function runHistoryMutation() {
+    if (!historyMutationPreview) return;
+    onClearError();
+    setHistoryMutationBusy(true);
+    try {
+      const next = await mutateHistory(
+        snapshot.repository.id,
+        snapshot.revision,
+        historyMutationPreview.operation,
+        historyMutationPreview.commits.map((commit) => commit.oid),
+      );
+      onSnapshot(next);
+      setHistoryMutationPreview(undefined);
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setHistoryMutationBusy(false);
+    }
+  }
+
   function moveRebaseItem(index: number, offset: -1 | 1) {
     const destination = index + offset;
     if (destination < 0 || destination >= rebasePlan.length) return;
@@ -7892,6 +7944,27 @@ function HistoryView({
       onError(reason);
     } finally {
       setRebaseBusy(false);
+    }
+  }
+
+  async function controlHistoryMutation(
+    operation: HistoryMutation,
+    action: "continue" | "abort" | "skip",
+  ) {
+    onClearError();
+    setHistoryMutationBusy(true);
+    try {
+      const next =
+        action === "abort"
+          ? await abortHistory(snapshot.repository.id, snapshot.revision, operation)
+          : action === "skip"
+            ? await skipHistory(snapshot.repository.id, snapshot.revision)
+            : await continueHistory(snapshot.repository.id, snapshot.revision, operation);
+      onSnapshot(next);
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setHistoryMutationBusy(false);
     }
   }
 
@@ -7987,6 +8060,58 @@ function HistoryView({
             </div>
           </div>
         )}
+        {(snapshot.operation === "cherryPick" || snapshot.operation === "revert") && (
+          <div className="rebase-status" role="status">
+            <div>
+              <strong>
+                {snapshot.operation === "cherryPick"
+                  ? t("Cherry-pick is paused")
+                  : t("Revert is paused")}
+              </strong>
+              <span>{t("Resolve and stage conflicts, then continue or abort the operation.")}</span>
+            </div>
+            <div>
+              <button
+                className="control-button control-button--secondary"
+                type="button"
+                disabled={historyMutationBusy || hasConflicts}
+                onClick={() =>
+                  void controlHistoryMutation(
+                    snapshot.operation === "cherryPick" ? "cherry-pick" : "revert",
+                    "continue",
+                  )
+                }
+              >
+                {t("Continue")}
+              </button>
+              {snapshot.operation === "cherryPick" && (
+                <button
+                  className="control-button control-button--secondary"
+                  type="button"
+                  disabled={historyMutationBusy}
+                  onClick={() => void controlHistoryMutation("cherry-pick", "skip")}
+                >
+                  {t("Skip")}
+                </button>
+              )}
+              <button
+                className="control-button control-button--danger"
+                type="button"
+                disabled={historyMutationBusy}
+                onClick={() => {
+                  if (confirmRepositoryMutation(t("Abort this history operation and restore the previous branch state?"))) {
+                    void controlHistoryMutation(
+                      snapshot.operation === "cherryPick" ? "cherry-pick" : "revert",
+                      "abort",
+                    );
+                  }
+                }}
+              >
+                {t("Abort")}
+              </button>
+            </div>
+          </div>
+        )}
         {showHistorySearch && (
           <form
             className="history-filterbar"
@@ -8043,11 +8168,15 @@ function HistoryView({
                   commit.reflogOnly ? "reflog-only" : "",
                   selected?.oid === commit.oid ? "selected" : "",
                 ].filter(Boolean).join(" ")}
-                aria-current={selected?.oid === commit.oid ? "true" : undefined}
-                onClick={() => {
-                  setSelectedOid(commit.oid);
-                  onPersist({ selectedCommit: commit.oid });
-                }}
+                 aria-current={selected?.oid === commit.oid ? "true" : undefined}
+                 aria-selected={historySelection.selected.has(commit.oid)}
+                 onMouseDown={(event) => historySelection.onMouseDown(commit.oid, event)}
+                 onMouseEnter={(event) => historySelection.onMouseEnter(commit.oid, event)}
+                 onClick={(event) => {
+                   historySelection.onClick(commit.oid, event);
+                   setSelectedOid(commit.oid);
+                   onPersist({ selectedCommit: commit.oid });
+                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setSelectedOid(commit.oid);
@@ -8306,6 +8435,41 @@ function HistoryView({
             type="button"
             role="menuitem"
             disabled={
+              historyMutationBusy ||
+              resetBusy ||
+              rebaseBusy ||
+              Boolean(snapshot.operation) ||
+              snapshot.head.kind !== "branch" ||
+              snapshot.head.oid === rebaseMenu.commit.oid ||
+              rebaseMenu.commit.parents.length > 1 ||
+              Boolean(rebaseMenu.commit.remoteOnly) ||
+              Boolean(rebaseMenu.commit.reflogOnly)
+            }
+            onClick={() => openHistoryMutationPreview(rebaseMenu.commit, "cherry-pick")}
+          >
+            {t("Cherry-pick this commit…")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={
+              historyMutationBusy ||
+              resetBusy ||
+              rebaseBusy ||
+              Boolean(snapshot.operation) ||
+              snapshot.head.kind !== "branch" ||
+              rebaseMenu.commit.parents.length > 1 ||
+              Boolean(rebaseMenu.commit.remoteOnly) ||
+              Boolean(rebaseMenu.commit.reflogOnly)
+            }
+            onClick={() => openHistoryMutationPreview(rebaseMenu.commit, "revert")}
+          >
+            {t("Revert this commit…")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={
               resetBusy ||
               rebaseBusy ||
               Boolean(snapshot.operation) ||
@@ -8318,6 +8482,97 @@ function HistoryView({
           >
             {t("Reset current branch to this…")}
           </button>
+        </div>
+      )}
+      {historyMutationPreview && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => !historyMutationBusy && setHistoryMutationPreview(undefined)}
+        >
+          <div
+            className="settings-modal reset-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="history-mutation-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div>
+                <h2 id="history-mutation-title">
+                  {historyMutationPreview.operation === "cherry-pick"
+                    ? t("Cherry-pick commit")
+                    : t("Revert commit")}
+                </h2>
+                <small>
+                  {historyMutationPreview.commits.length} {t("selected commit(s)")}
+                </small>
+              </div>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close history mutation dialog")}
+                disabled={historyMutationBusy}
+                onClick={() => setHistoryMutationPreview(undefined)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="reset-body">
+              <p>{t("This operation creates a new commit on the current branch. The preview checks the selected commit and the worktree before applying it.")}</p>
+              {snapshot.changes.length > 0 ? (
+                <p className="rebase-warning">{t("The worktree is not clean. Commit or stash changes before continuing; conflicts may require continue or abort.")}</p>
+              ) : (
+                <p>{t("The worktree is clean. Git may still stop for conflicts; resolve and stage files before continuing.")}</p>
+              )}
+              {historyMutationPreview.commits.some((commit) => commit.parents.length > 1) && (
+                <p className="rebase-warning">{t("Merge commits are not supported by this operation yet.")}</p>
+              )}
+              <ul className="history-mutation-commits">
+                {historyMutationPreview.commits.map((commit) => (
+                  <li key={commit.oid}>
+                    <code>{commit.oid.slice(0, 8)}</code> {commit.subject}
+                  </li>
+                ))}
+              </ul>
+              <div className="remote-form-actions">
+                <button
+                  className="control-button control-button--secondary"
+                  type="button"
+                  disabled={historyMutationBusy}
+                  onClick={() => setHistoryMutationPreview(undefined)}
+                >
+                  {t("Cancel")}
+                </button>
+                <button
+                  className="control-button control-button--primary"
+                  type="button"
+                  disabled={
+                    historyMutationBusy ||
+                    snapshot.changes.length > 0 ||
+                    historyMutationPreview.commits.some((commit) => commit.parents.length > 1)
+                  }
+                  onClick={() => {
+                    if (
+                      confirmRepositoryMutation(
+                        historyMutationPreview.operation === "cherry-pick"
+                          ? t("Cherry-pick selected commits into the current branch?")
+                          : t("Revert selected commits on the current branch?"),
+                      )
+                    ) {
+                      void runHistoryMutation();
+                    }
+                  }}
+                >
+                  {historyMutationBusy
+                    ? t("Applying history operation…")
+                    : historyMutationPreview.operation === "cherry-pick"
+                      ? t("Cherry-pick commit")
+                      : t("Revert commit")}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
       {resetPreview && (
@@ -8352,6 +8607,13 @@ function HistoryView({
             </div>
             <div className="reset-body">
               <p>{t("Choose how to move the current branch. Undo is available only when the worktree was clean before reset.")}</p>
+              <p>
+                {t("HEAD {current} → {target}. {count} working-tree changes are currently present.", {
+                  current: snapshot.head.oid?.slice(0, 8) ?? "unborn",
+                  target: resetPreview.oid.slice(0, 8),
+                  count: snapshot.changes.length,
+                })}
+              </p>
               <label>
                 <span>{t("Reset mode")}</span>
                 <select
@@ -8367,7 +8629,7 @@ function HistoryView({
                 </select>
               </label>
               {resetMode === "hard" && (
-                <p className="rebase-warning">{t("Hard reset discards uncommitted changes. Ensure they are backed up before continuing.")}</p>
+                <p className="rebase-warning">{t("Hard reset discards uncommitted changes ({count} working-tree or index changes). Ensure they are backed up before continuing.", { count: snapshot.changes.length })}</p>
               )}
               <div className="remote-form-actions">
                 <button
@@ -8813,6 +9075,8 @@ function operationTerm(value: string): string {
       case "reset-mixed":
       case "reset-hard": return t("Reset branch");
       case "interactive-rebase": return t("Interactive rebase");
+      case "cherry-pick": return t("Cherry-pick commit");
+      case "revert": return t("Revert commit");
     case "queued": return t("queued");
     case "running": return t("running");
     case "succeeded": return t("succeeded");
@@ -8844,6 +9108,10 @@ function recoveryButtonLabel(operation: OperationRecordDto, redo: boolean) {
       case "reset-mixed":
       case "reset-hard":
         return redo ? t("Redo reset") : t("Undo reset");
+      case "cherry-pick":
+        return redo ? t("Redo cherry-pick") : t("Undo cherry-pick");
+      case "revert":
+        return redo ? t("Redo revert") : t("Undo revert");
     default:
       return redo ? t("Redo commit") : t("Undo commit");
   }

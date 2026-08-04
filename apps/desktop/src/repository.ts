@@ -29,7 +29,12 @@ export type RepositorySnapshotDto = {
   behind: number;
   stashCount: number;
   changes: FileChangeDto[];
-  operation?: "rebase" | "rebaseEdit" | "autostashConflict";
+  operation?:
+    | "rebase"
+    | "rebaseEdit"
+    | "autostashConflict"
+    | "cherryPick"
+    | "revert";
 };
 
 export type FileChangeDto = {
@@ -269,7 +274,9 @@ export type OperationRecordDto = {
       | "interactive-rebase"
       | "reset-soft"
       | "reset-mixed"
-      | "reset-hard";
+      | "reset-hard"
+      | "cherry-pick"
+      | "revert";
   recoveryState?: "ready" | "undone";
 };
 
@@ -622,6 +629,56 @@ export function resetBranch(
     revision,
     targetOid,
     mode,
+  });
+}
+
+export type HistoryMutation = "cherry-pick" | "revert";
+
+export function mutateHistory(
+  repoId: string,
+  revision: number,
+  operation: HistoryMutation,
+  oids: string[],
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("history_mutate", {
+    repoId,
+    revision,
+    operation,
+    oids,
+  });
+}
+
+export function continueHistory(
+  repoId: string,
+  revision: number,
+  operation: HistoryMutation,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("history_continue", {
+    repoId,
+    revision,
+    operation,
+  });
+}
+
+export function abortHistory(
+  repoId: string,
+  revision: number,
+  operation: HistoryMutation,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("history_abort", {
+    repoId,
+    revision,
+    operation,
+  });
+}
+
+export function skipHistory(
+  repoId: string,
+  revision: number,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("history_skip", {
+    repoId,
+    revision,
   });
 }
 

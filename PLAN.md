@@ -41,12 +41,12 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 ### P0.2 Cherry-pick, Revert, Reset
 
-- [ ] 단일·다중 commit cherry-pick과 실행 전 충돌 가능성 preview
-- [ ] revert와 revert 진행 중 continue/abort
-- [ ] soft/mixed/hard reset의 변경 범위 preview
-- [ ] hard reset은 대상 OID, 삭제될 working tree/index 변경과 복구 ref를 확인
-- [ ] 진행 중 cherry-pick의 continue/skip/abort
-- [ ] commit graph context menu와 키보드 접근성 제공
+- [x] 단일·다중 commit cherry-pick과 실행 전 충돌 가능성 preview
+- [x] revert와 revert 진행 중 continue/abort
+- [x] soft/mixed/hard reset의 변경 범위 preview
+- [x] hard reset은 대상 OID, 삭제될 working tree/index 변경과 복구 ref를 확인
+- [x] 진행 중 cherry-pick의 continue/skip/abort
+- [x] commit graph context menu와 키보드 접근성 제공
 
 완료 조건:
 
@@ -143,7 +143,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | 항목 | 상태 | 비고 |
 | --- | --- | --- |
 | P0.1 Operation recovery와 Undo/Redo | 완료 | commit/checkout/branch 삭제/clean rebase/reset/interactive rebase Undo/Redo, reflog ref 복구, recovery schema allowlist 검증 |
-| P0.2 Cherry-pick, Revert, Reset | 예정 | P0.1 복구 기반 사용 |
+| P0.2 Cherry-pick, Revert, Reset | 완료 | 단일·다중 cherry-pick, revert continue/abort, cherry-pick skip, soft/mixed/hard reset preview와 P0.1 recovery 연결 |
 | P0.3 Blame과 File/Directory History | 예정 | 읽기 전용 기능으로 병렬 설계 가능 |
 | P0.4 Worktree 전체 lifecycle | 예정 | 현재 조회·전환 기능 확장 |
 | P0.5 고급 Diff와 비교 | 예정 | 기존 partial staging renderer 확장 |

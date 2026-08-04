@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use app_core::{
     AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
-    GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
+    GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryOperation,
     InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection, ReflogEntry,
     RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler, RepositoryService,
     RepositorySidebar, StashRequest,
@@ -871,6 +871,91 @@ impl ApplicationState {
                     recovery_oid: None,
                 });
             Ok((snapshot, recovery))
+        })
+    }
+
+    pub fn history_mutation_with_recovery(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        operation: HistoryOperation,
+        oids: &[String],
+    ) -> Result<(RepositorySnapshot, Option<OperationRecoveryData>), AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, repository.revision)?;
+                repository.descriptor.clone()
+            };
+            let clean_before = self.service.is_worktree_clean(&descriptor)?;
+            let before_head_oid = self.service.current_head_oid(&descriptor)?;
+            let before_head_ref = self.service.current_head_ref(&descriptor)?;
+            match operation {
+                HistoryOperation::CherryPick => self.service.cherry_pick(&descriptor, oids)?,
+                HistoryOperation::Revert => self.service.revert(&descriptor, oids)?,
+            }
+            let after_head_oid = self.service.current_head_oid(&descriptor)?;
+            let after_head_ref = self.service.current_head_ref(&descriptor)?;
+            let next_revision = self.advance_revision(repo_id)?;
+            let snapshot = self.service.snapshot(&descriptor, next_revision)?;
+            let action = match operation {
+                HistoryOperation::CherryPick => "cherry-pick",
+                HistoryOperation::Revert => "revert",
+            };
+            let recovery = (clean_before
+                && before_head_oid != after_head_oid
+                && before_head_ref == after_head_ref
+                && snapshot.operation.is_none()
+                && snapshot.status.changes.is_empty())
+            .then(|| OperationRecoveryData {
+                action: action.to_owned(),
+                before_head_oid,
+                after_head_oid,
+                before_head_ref,
+                after_head_ref,
+                recovery_ref: None,
+                recovery_oid: None,
+            });
+            Ok((snapshot, recovery))
+        })
+    }
+
+    pub fn continue_history_operation(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        operation: HistoryOperation,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.continue_history_operation(repository, operation)
+        })
+    }
+
+    pub fn abort_history_operation(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        operation: HistoryOperation,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.abort_history_operation(repository, operation)
+        })
+    }
+
+    pub fn skip_history_operation(
+        &self,
+        repo_id: &str,
+        revision: u64,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.skip_history_operation(repository)
         })
     }
 

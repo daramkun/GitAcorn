@@ -10,6 +10,7 @@ import {
   toggleMaximizeAppWindow,
 } from "./windowControls";
 import {
+  abortHistory,
   abortRebase,
   addSubmodule,
   applyPatchSelection,
@@ -24,6 +25,7 @@ import {
   createCommit,
   createStash,
   createTag,
+  continueHistory,
   continueRebase,
   deleteBranch,
   deleteTag,
@@ -46,6 +48,7 @@ import {
   initializeSubmodule,
   listenForRepositoryChanges,
   mergeBranch,
+  mutateHistory,
   openRepository,
   previewInteractiveRebase,
   renameBranch,
@@ -86,6 +89,7 @@ vi.mock("./windowControls", () => ({
 }));
 
 vi.mock("./repository", () => ({
+  abortHistory: vi.fn(),
   abortRebase: vi.fn(),
   addSubmodule: vi.fn(),
   applyPatchSelection: vi.fn(),
@@ -104,6 +108,7 @@ vi.mock("./repository", () => ({
   createCommit: vi.fn(),
   createStash: vi.fn(),
   createTag: vi.fn(),
+  continueHistory: vi.fn(),
   continueRebase: vi.fn(),
   deleteBranch: vi.fn(),
   deleteTag: vi.fn(),
@@ -140,6 +145,8 @@ vi.mock("./repository", () => ({
   undoOperation: vi.fn(),
   listenForRepositoryChanges: vi.fn(),
   mergeBranch: vi.fn(),
+  mutateHistory: vi.fn(),
+  skipHistory: vi.fn(),
   previewInteractiveRebase: vi.fn(),
   rebaseBranch: vi.fn(),
   renameBranch: vi.fn(),
@@ -194,6 +201,9 @@ const mockedRemoveRemote = vi.mocked(removeRemote);
 const mockedStagePaths = vi.mocked(stagePaths);
 const mockedStartInteractiveRebase = vi.mocked(startInteractiveRebase);
 const mockedStartRemoteOperation = vi.mocked(startRemoteOperation);
+const mockedAbortHistory = vi.mocked(abortHistory);
+const mockedContinueHistory = vi.mocked(continueHistory);
+const mockedMutateHistory = vi.mocked(mutateHistory);
 const mockedAbortRebase = vi.mocked(abortRebase);
 const mockedContinueRebase = vi.mocked(continueRebase);
 const mockedSkipRebase = vi.mocked(skipRebase);
@@ -386,6 +396,9 @@ describe("App", () => {
     mockedRemoveRemote.mockResolvedValue({ ...snapshot, revision: 2 });
     mockedStagePaths.mockResolvedValue(snapshot);
     mockedStartInteractiveRebase.mockResolvedValue(snapshot);
+    mockedAbortHistory.mockResolvedValue(snapshot);
+    mockedContinueHistory.mockResolvedValue(snapshot);
+    mockedMutateHistory.mockResolvedValue({ ...snapshot, revision: 2, changes: [] });
     mockedAbortRebase.mockResolvedValue(snapshot);
     mockedContinueRebase.mockResolvedValue(snapshot);
     mockedSkipRebase.mockResolvedValue(snapshot);
@@ -712,6 +725,89 @@ describe("App", () => {
         },
       ),
     );
+  });
+
+  it("previews and submits a multi-commit cherry-pick from the history graph", async () => {
+    const firstOid = "1".repeat(40);
+    const secondOid = "2".repeat(40);
+    const headOid = "3".repeat(40);
+    const cleanSnapshot = {
+      ...snapshot,
+      changes: [],
+      head: { ...snapshot.head, oid: headOid },
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], page: "history", snapshot: cleanSnapshot }],
+    });
+    mockedGetSnapshot.mockResolvedValue(cleanSnapshot);
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: headOid,
+          parents: [secondOid],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_002,
+          subject: "Head commit",
+          body: "",
+          references: ["HEAD -> refs/heads/main"],
+          lane: 0,
+          laneCount: 1,
+        },
+        {
+          oid: secondOid,
+          parents: [firstOid],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_001,
+          subject: "Second change",
+          body: "",
+          references: [],
+          lane: 0,
+          laneCount: 1,
+        },
+        {
+          oid: firstOid,
+          parents: ["0".repeat(40)],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          subject: "First change",
+          body: "",
+          references: [],
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    const firstButton = await screen.findByRole("button", { name: /First change/ });
+    const secondButton = await screen.findByRole("button", { name: /Second change/ });
+    fireEvent.click(firstButton);
+    fireEvent.mouseDown(secondButton, { button: 0, ctrlKey: true });
+    fireEvent.mouseUp(secondButton, { button: 0, ctrlKey: true });
+    fireEvent.click(secondButton, { ctrlKey: true });
+    fireEvent.contextMenu(secondButton);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Cherry-pick this commit…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Cherry-pick commit" });
+    expect(within(dialog).getByText(/2 selected commit/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cherry-pick commit" }));
+    await waitFor(() =>
+      expect(mockedMutateHistory).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "cherry-pick",
+        [secondOid, firstOid],
+      ),
+    );
+    confirm.mockRestore();
   });
 
   it("clears a previous interactive rebase error when retrying", async () => {

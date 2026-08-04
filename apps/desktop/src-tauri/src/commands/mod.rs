@@ -1,7 +1,8 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use app_core::{
-    AppError, AppErrorDto, ConflictResolution, DiffTarget, HistoryFilter, PatchSelection,
+    AppError, AppErrorDto, ConflictResolution, DiffTarget, HistoryFilter, HistoryOperation,
+    PatchSelection,
 };
 use git_domain::RepositorySnapshot;
 use tauri::{AppHandle, Manager, State, ipc::Channel};
@@ -690,6 +691,69 @@ pub async fn branch_reset(
 }
 
 #[tauri::command]
+pub async fn history_mutate(
+    repo_id: String,
+    revision: u64,
+    operation: String,
+    oids: Vec<String>,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let history_operation = parse_history_operation(&operation)?;
+    let action = match history_operation {
+        HistoryOperation::CherryPick => "cherry-pick",
+        HistoryOperation::Revert => "revert",
+    };
+    let summary = match history_operation {
+        HistoryOperation::CherryPick => "Cherry-picked commits",
+        HistoryOperation::Revert => "Reverted commits",
+    };
+    recorded_recoverable_mutation(&state, &repo_id, action, summary, || {
+        state.history_mutation_with_recovery(&repo_id, revision, history_operation, &oids)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn history_continue(
+    repo_id: String,
+    revision: u64,
+    operation: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let operation = parse_history_operation(&operation)?;
+    state
+        .continue_history_operation(&repo_id, revision, operation)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn history_abort(
+    repo_id: String,
+    revision: u64,
+    operation: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let operation = parse_history_operation(&operation)?;
+    state
+        .abort_history_operation(&repo_id, revision, operation)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn history_skip(
+    repo_id: String,
+    revision: u64,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .skip_history_operation(&repo_id, revision)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
 pub fn interactive_rebase_preview(
     repo_id: String,
     revision: u64,
@@ -1117,6 +1181,16 @@ async fn recorded_mutation(
         .map_err(|error| AppErrorDto::from(&error))
 }
 
+fn parse_history_operation(value: &str) -> Result<HistoryOperation, AppErrorDto> {
+    match value {
+        "cherry-pick" => Ok(HistoryOperation::CherryPick),
+        "revert" => Ok(HistoryOperation::Revert),
+        _ => Err(AppErrorDto::from(&AppError::InvalidRequest(
+            "History operation must be cherry-pick or revert".to_owned(),
+        ))),
+    }
+}
+
 async fn recorded_recoverable_mutation(
     state: &ApplicationState,
     repo_id: &str,
@@ -1215,9 +1289,11 @@ async fn recover_operation(
             };
             state.checkout_for_recovery(repo_id, revision, expected, target, target_ref)
         }
-        Some("rebase") | Some("reset-hard") | Some("interactive-rebase") => {
-            state.move_head_hard(repo_id, revision, expected, target)
-        }
+        Some("rebase")
+        | Some("reset-hard")
+        | Some("interactive-rebase")
+        | Some("cherry-pick")
+        | Some("revert") => state.move_head_hard(repo_id, revision, expected, target),
         Some("branch-delete") => {
             let name = record.recovery_ref.as_deref().ok_or_else(|| {
                 AppErrorDto::from(&AppError::InvalidRequest(

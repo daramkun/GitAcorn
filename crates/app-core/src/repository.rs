@@ -226,6 +226,12 @@ pub struct GitVersion {
     pub patch: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryOperation {
+    CherryPick,
+    Revert,
+}
+
 impl std::fmt::Display for GitVersion {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
@@ -357,6 +363,10 @@ impl RepositoryService {
             } else {
                 Some(RepositoryOperation::Rebase)
             }
+        } else if repository.git_dir.join("CHERRY_PICK_HEAD").is_file() {
+            Some(RepositoryOperation::CherryPick)
+        } else if repository.git_dir.join("REVERT_HEAD").is_file() {
+            Some(RepositoryOperation::Revert)
         } else if autostash_conflict_marker.is_file()
             && status.changes.iter().any(|change| change.is_conflict)
         {
@@ -838,6 +848,122 @@ impl RepositoryService {
             }
         };
         self.git_unit(repository, ["reset", flag, target_head_oid])
+    }
+
+    pub fn cherry_pick(
+        &self,
+        repository: &RepositoryDescriptor,
+        oids: &[String],
+    ) -> Result<(), AppError> {
+        self.validate_linear_history_commits(repository, oids)?;
+        let mut args = vec![OsString::from("cherry-pick"), OsString::from("--no-edit")];
+        args.extend(oids.iter().map(OsString::from));
+        self.run_history_operation(repository, args, HistoryOperation::CherryPick)
+    }
+
+    pub fn revert(
+        &self,
+        repository: &RepositoryDescriptor,
+        oids: &[String],
+    ) -> Result<(), AppError> {
+        self.validate_linear_history_commits(repository, oids)?;
+        let mut args = vec![OsString::from("revert"), OsString::from("--no-edit")];
+        args.extend(oids.iter().map(OsString::from));
+        self.run_history_operation(repository, args, HistoryOperation::Revert)
+    }
+
+    pub fn continue_history_operation(
+        &self,
+        repository: &RepositoryDescriptor,
+        operation: HistoryOperation,
+    ) -> Result<(), AppError> {
+        let command = match operation {
+            HistoryOperation::CherryPick => "cherry-pick",
+            HistoryOperation::Revert => "revert",
+        };
+        self.run_history_operation(
+            repository,
+            [OsString::from(command), OsString::from("--continue")],
+            operation,
+        )
+    }
+
+    pub fn abort_history_operation(
+        &self,
+        repository: &RepositoryDescriptor,
+        operation: HistoryOperation,
+    ) -> Result<(), AppError> {
+        let command = match operation {
+            HistoryOperation::CherryPick => "cherry-pick",
+            HistoryOperation::Revert => "revert",
+        };
+        self.git_unit(repository, [command, "--abort"])
+    }
+
+    pub fn skip_history_operation(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<(), AppError> {
+        self.git_unit(repository, ["cherry-pick", "--skip"])
+    }
+
+    fn validate_linear_history_commits(
+        &self,
+        repository: &RepositoryDescriptor,
+        oids: &[String],
+    ) -> Result<(), AppError> {
+        if oids.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "Select at least one commit".to_owned(),
+            ));
+        }
+        if !self.is_worktree_clean(repository)? {
+            return Err(AppError::InvalidRequest(
+                "Commit history operations require a clean worktree".to_owned(),
+            ));
+        }
+        for oid in oids {
+            validate_object_id(oid)?;
+            let parents = self.git_text(repository, ["rev-list", "--parents", "-n", "1", oid])?;
+            if parents.split_whitespace().count() != 2 {
+                return Err(AppError::InvalidRequest(
+                    "Merge commits are not supported by this operation yet".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn run_history_operation<I, S>(
+        &self,
+        repository: &RepositoryDescriptor,
+        args: I,
+        operation: HistoryOperation,
+    ) -> Result<(), AppError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let mut request = GitRequest::new(args);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(300);
+        let output = self.run(request)?;
+        if output.exit_code == 0 || self.history_operation_in_progress(repository, operation) {
+            Ok(())
+        } else {
+            ensure_success(output).map(|_| ())
+        }
+    }
+
+    fn history_operation_in_progress(
+        &self,
+        repository: &RepositoryDescriptor,
+        operation: HistoryOperation,
+    ) -> bool {
+        match operation {
+            HistoryOperation::CherryPick => repository.git_dir.join("CHERRY_PICK_HEAD").is_file(),
+            HistoryOperation::Revert => repository.git_dir.join("REVERT_HEAD").is_file(),
+        }
     }
 
     pub fn move_head_hard(

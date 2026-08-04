@@ -1,7 +1,7 @@
 use app_core::{
-    BranchRequest, CommitRequest, DiffTarget, HistoryFilter, InteractiveRebaseAction,
-    InteractiveRebaseItem, InteractiveRebaseRequest, PatchSelection, ReferenceKind,
-    RepositoryService,
+    BranchRequest, CommitRequest, DiffTarget, HistoryFilter, HistoryOperation,
+    InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebaseRequest, PatchSelection,
+    ReferenceKind, RepositoryService,
 };
 use git_cli::GitExecutor;
 use git_domain::{DiffLineKind, HeadState, RepositoryOperation};
@@ -127,6 +127,122 @@ fn reset_modes_round_trip_with_the_matching_recovery_strategy() {
             Some(after)
         );
     }
+}
+
+#[test]
+fn cherry_pick_and_revert_round_trip_clean_commits() {
+    let fixture = TestRepository::init();
+    let base = commit_independent_file(&fixture, "base.txt", "base");
+    fixture.git(["switch", "-c", "topic"]);
+    let source = commit_independent_file(&fixture, "topic.txt", "topic change");
+    fixture.git(["switch", "main"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    service
+        .cherry_pick(&repository, std::slice::from_ref(&source))
+        .expect("cherry-pick");
+    let cherry_head = service
+        .current_head_oid(&repository)
+        .expect("cherry-picked head")
+        .expect("born head");
+    assert_ne!(cherry_head, base);
+    assert_eq!(
+        fs::read_to_string(fixture.path().join("topic.txt"))
+            .expect("topic file")
+            .replace("\r\n", "\n"),
+        "topic change\n"
+    );
+
+    service
+        .revert(&repository, std::slice::from_ref(&source))
+        .expect("revert");
+    let reverted_head = service
+        .current_head_oid(&repository)
+        .expect("reverted head")
+        .expect("born head");
+    assert_ne!(reverted_head, cherry_head);
+    assert!(!fixture.path().join("topic.txt").exists());
+}
+
+#[test]
+fn cherry_pick_conflict_exposes_operation_and_supports_continue_and_abort() {
+    let fixture = TestRepository::init();
+    fixture.write("shared.txt", "base\n");
+    fixture.git(["add", "shared.txt"]);
+    fixture.git(["commit", "-m", "shared base"]);
+    fixture.git(["switch", "-c", "topic"]);
+    fixture.write("shared.txt", "topic\n");
+    fixture.git(["add", "shared.txt"]);
+    fixture.git(["commit", "-m", "topic change"]);
+    let source = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("topic oid")
+        .trim()
+        .to_owned();
+    fixture.git(["switch", "main"]);
+    fixture.write("shared.txt", "main\n");
+    fixture.git(["add", "shared.txt"]);
+    fixture.git(["commit", "-m", "main change"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    service
+        .cherry_pick(&repository, std::slice::from_ref(&source))
+        .expect("conflicting cherry-pick remains recoverable");
+    let conflicted = service.snapshot(&repository, 2).expect("conflict snapshot");
+    assert_eq!(conflicted.operation, Some(RepositoryOperation::CherryPick));
+    assert!(
+        conflicted
+            .status
+            .changes
+            .iter()
+            .any(|change| change.is_conflict)
+    );
+
+    fixture.write("shared.txt", "resolved\n");
+    fixture.git(["add", "shared.txt"]);
+    service
+        .continue_history_operation(&repository, HistoryOperation::CherryPick)
+        .expect("continue cherry-pick");
+    assert_eq!(
+        service
+            .snapshot(&repository, 3)
+            .expect("continued snapshot")
+            .operation,
+        None
+    );
+
+    fixture.git(["reset", "--hard", "HEAD~2"]);
+    fixture.write("shared.txt", "main\n");
+    fixture.git(["add", "shared.txt"]);
+    fixture.git(["commit", "-m", "main change again"]);
+    service
+        .cherry_pick(&repository, std::slice::from_ref(&source))
+        .expect("second conflicting cherry-pick");
+    service
+        .abort_history_operation(&repository, HistoryOperation::CherryPick)
+        .expect("abort cherry-pick");
+    assert_eq!(
+        service
+            .snapshot(&repository, 4)
+            .expect("aborted snapshot")
+            .operation,
+        None
+    );
+
+    service
+        .cherry_pick(&repository, std::slice::from_ref(&source))
+        .expect("third conflicting cherry-pick");
+    service
+        .skip_history_operation(&repository)
+        .expect("skip cherry-pick");
+    assert_eq!(
+        service
+            .snapshot(&repository, 5)
+            .expect("skipped snapshot")
+            .operation,
+        None
+    );
 }
 
 #[test]

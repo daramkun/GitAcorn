@@ -101,6 +101,8 @@ pub enum RepositoryOperation {
     Rebase,
     RebaseEdit,
     AutostashConflict,
+    CherryPick,
+    Revert,
 }
 
 #[cfg(test)]

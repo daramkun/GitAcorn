@@ -473,6 +473,8 @@ impl From<RepositorySnapshot> for RepositorySnapshotDto {
                 RepositoryOperation::Rebase => "rebase",
                 RepositoryOperation::RebaseEdit => "rebaseEdit",
                 RepositoryOperation::AutostashConflict => "autostashConflict",
+                RepositoryOperation::CherryPick => "cherryPick",
+                RepositoryOperation::Revert => "revert",
             }),
             changes: snapshot
                 .status
