@@ -1,7 +1,7 @@
 use app_core::{
     BranchRequest, CommitRequest, DiffTarget, HistoryFilter, HistoryOperation,
     InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebaseRequest, PatchSelection,
-    ReferenceKind, RepositoryService,
+    ReferenceKind, RepositoryService, WorktreeCreateRequest,
 };
 use git_cli::GitExecutor;
 use git_domain::{DiffLineKind, HeadState, RepositoryOperation};
@@ -1583,6 +1583,59 @@ fn assigns_one_repository_id_and_distinct_ids_to_linked_worktrees() {
             .iter()
             .any(|worktree| worktree.id == linked.worktree_id && !worktree.is_current)
     );
+}
+
+#[test]
+fn manages_worktree_create_lock_unlock_and_force_remove_lifecycle() {
+    let fixture = TestRepository::init();
+    let linked_root = tempfile::tempdir().expect("create linked worktree parent");
+    let linked_path = linked_root.path().join("feature-worktree");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .create_worktree(
+            &repository,
+            &WorktreeCreateRequest {
+                path: linked_path.clone(),
+                branch: Some("feature/lifecycle".to_owned()),
+                start_point: Some("HEAD".to_owned()),
+            },
+        )
+        .expect("create worktree");
+    let sidebar = service.sidebar(&repository).expect("read created worktree");
+    let created = sidebar
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.branch.as_deref() == Some("feature/lifecycle"))
+        .expect("created worktree entry");
+    assert_eq!(created.branch.as_deref(), Some("feature/lifecycle"));
+
+    service
+        .lock_worktree(&repository, &linked_path, Some("qa hold"))
+        .expect("lock worktree");
+    assert!(
+        service
+            .sidebar(&repository)
+            .expect("read locked worktree")
+            .worktrees
+            .iter()
+            .any(|worktree| worktree.is_locked)
+    );
+    service
+        .unlock_worktree(&repository, &linked_path)
+        .expect("unlock worktree");
+
+    fs::write(linked_path.join("dirty.txt"), "uncommitted\n").expect("dirty worktree");
+    assert!(
+        service
+            .remove_worktree(&repository, &linked_path, false)
+            .is_err()
+    );
+    service
+        .remove_worktree(&repository, &linked_path, true)
+        .expect("force remove worktree");
+    assert!(!linked_path.exists());
 }
 
 #[test]

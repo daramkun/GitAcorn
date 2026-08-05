@@ -2,7 +2,7 @@ use app_core::{
     AppErrorDto, BranchRequest, CloneRequest, CommitFile, CommitRequest, GitIdentity, GitReference,
     GitRemote, InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
     InteractiveRebaseRequest, PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind,
-    RemoteRequest, RemoteTagSummary, RepositorySidebar,
+    RemoteRequest, RemoteTagSummary, RepositorySidebar, WorktreeCreateRequest,
 };
 use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffLineKind, FileBlame, FileChange, HeadState,
@@ -653,6 +653,40 @@ pub struct WorktreeDto {
     pub branch: Option<String>,
     pub is_current: bool,
     pub is_locked: bool,
+    pub is_prunable: bool,
+    pub is_missing: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeCreateRequestDto {
+    pub path: String,
+    pub branch: Option<String>,
+    pub start_point: Option<String>,
+}
+
+impl TryFrom<WorktreeCreateRequestDto> for WorktreeCreateRequest {
+    type Error = AppErrorDto;
+
+    fn try_from(request: WorktreeCreateRequestDto) -> Result<Self, Self::Error> {
+        let path = std::path::PathBuf::from(request.path.trim());
+        if path.as_os_str().is_empty() {
+            return Err(AppErrorDto::from(&app_core::AppError::InvalidRequest(
+                "Worktree path is required".to_owned(),
+            )));
+        }
+        Ok(Self {
+            path,
+            branch: request
+                .branch
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+            start_point: request
+                .start_point
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -726,6 +760,8 @@ impl From<RepositorySidebar> for RepositorySidebarDto {
                     branch: worktree.branch,
                     is_current: worktree.is_current,
                     is_locked: worktree.is_locked,
+                    is_prunable: worktree.is_prunable,
+                    is_missing: worktree.is_missing,
                 })
                 .collect(),
             submodules: sidebar

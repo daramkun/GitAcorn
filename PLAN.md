@@ -67,12 +67,12 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 ### P0.4 Worktree 전체 lifecycle
 
-- [ ] branch 또는 remote branch에서 worktree 생성
-- [ ] 기존 worktree 열기·전환과 새 탭으로 열기
-- [ ] worktree lock/unlock
-- [ ] 안전한 remove와 `--force`가 필요한 상태의 명시적 확인
-- [ ] worktree 제거와 branch 삭제를 결합한 선택적 흐름
-- [ ] submodule이 포함된 worktree와 같은 이름의 폴더를 구분
+- [x] branch 또는 remote branch에서 worktree 생성
+- [x] 기존 worktree 열기·전환과 새 탭으로 열기
+- [x] worktree lock/unlock
+- [x] 안전한 remove와 `--force`가 필요한 상태의 명시적 확인
+- [x] worktree 제거와 branch 삭제를 결합한 선택적 흐름
+- [x] submodule이 포함된 worktree와 같은 이름의 폴더를 구분
 
 완료 조건:
 
@@ -145,6 +145,6 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P0.1 Operation recovery와 Undo/Redo | 완료 | commit/checkout/branch 삭제/clean rebase/reset/interactive rebase Undo/Redo, reflog ref 복구, recovery schema allowlist 검증 |
 | P0.2 Cherry-pick, Revert, Reset | 완료 | 단일·다중 cherry-pick, revert continue/abort, cherry-pick skip, soft/mixed/hard reset preview와 P0.1 recovery 연결 |
 | P0.3 Blame과 File/Directory History | 완료 | byte-safe blame, rename-aware file/directory history, path filter와 비동기 검사기 |
-| P0.4 Worktree 전체 lifecycle | 예정 | 현재 조회·전환 기능 확장 |
+| P0.4 Worktree 전체 lifecycle | 완료 | 생성·새 탭 열기·lock/unlock·안전/강제 제거·branch 결합 제거, missing/prunable 상태와 path 기반 식별자 |
 | P0.5 고급 Diff와 비교 | 예정 | 기존 partial staging renderer 확장 |
 | P0.6 Git LFS와 서명 상태 | 예정 | 시스템 Git·credential 정책 유지 |

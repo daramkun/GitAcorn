@@ -16,7 +16,8 @@ pub use repository::{
     GitReference, GitRemote, GitVersion, HistoryFilter, HistoryOperation, InteractiveRebaseAction,
     InteractiveRebaseCommit, InteractiveRebaseItem, InteractiveRebasePreview,
     InteractiveRebaseRequest, PatchSelection, RefSummary, ReferenceKind, ReflogEntry,
-    RemoteTagSummary, RepositoryService, RepositorySidebar, StashSummary, WorktreeSummary,
+    RemoteTagSummary, RepositoryService, RepositorySidebar, StashSummary, WorktreeCreateRequest,
+    WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;
 pub use workspace::{ConflictResolution, StashRequest};

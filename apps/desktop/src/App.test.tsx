@@ -25,6 +25,7 @@ import {
   createCommit,
   createStash,
   createTag,
+  createWorktree,
   continueHistory,
   continueRebase,
   deleteBranch,
@@ -58,6 +59,7 @@ import {
   resetBranch,
   removeRemote,
   removeSubmodule,
+  removeWorktree,
   redoOperation,
   resolveConflict,
   restoreSession,
@@ -68,11 +70,14 @@ import {
   startRemoteOperation,
   unstagePaths,
   undoOperation,
+  lockWorktree,
+  unlockWorktree,
   updateGlobalGitIdentity,
   updateRepositoryGitIdentity,
   updateSessionTab,
   updateRemote,
   type RepositorySnapshotDto,
+  type RepositorySidebarDto,
   type SessionDto,
 } from "./repository";
 
@@ -110,6 +115,7 @@ vi.mock("./repository", () => ({
   createCommit: vi.fn(),
   createStash: vi.fn(),
   createTag: vi.fn(),
+  createWorktree: vi.fn(),
   continueHistory: vi.fn(),
   continueRebase: vi.fn(),
   deleteBranch: vi.fn(),
@@ -136,6 +142,7 @@ vi.mock("./repository", () => ({
   reorderSessionTabs: vi.fn(),
   removeRemote: vi.fn(),
   removeSubmodule: vi.fn(),
+  removeWorktree: vi.fn(),
   redoOperation: vi.fn(),
   resolveConflict: vi.fn(),
   updateGlobalGitIdentity: vi.fn(),
@@ -147,6 +154,8 @@ vi.mock("./repository", () => ({
   startRemoteOperation: vi.fn(),
   unstagePaths: vi.fn(),
   undoOperation: vi.fn(),
+  lockWorktree: vi.fn(),
+  unlockWorktree: vi.fn(),
   listenForRepositoryChanges: vi.fn(),
   mergeBranch: vi.fn(),
   mutateHistory: vi.fn(),
@@ -184,6 +193,7 @@ const mockedCheckoutBranch = vi.mocked(checkoutBranch);
 const mockedCloseTab = vi.mocked(closeSessionTab);
 const mockedCreateBranch = vi.mocked(createBranch);
 const mockedCreateTag = vi.mocked(createTag);
+const mockedCreateWorktree = vi.mocked(createWorktree);
 const mockedGetSidebar = vi.mocked(getRepositorySidebar);
 const mockedReorderTabs = vi.mocked(reorderSessionTabs);
 const mockedUpdateTab = vi.mocked(updateSessionTab);
@@ -191,6 +201,9 @@ const mockedGetSnapshot = vi.mocked(getRepositorySnapshot);
 const mockedInitializeSubmodule = vi.mocked(initializeSubmodule);
 const mockedDeinitializeSubmodule = vi.mocked(deinitializeSubmodule);
 const mockedRemoveSubmodule = vi.mocked(removeSubmodule);
+const mockedRemoveWorktree = vi.mocked(removeWorktree);
+const mockedLockWorktree = vi.mocked(lockWorktree);
+const mockedUnlockWorktree = vi.mocked(unlockWorktree);
 const mockedGetDiff = vi.mocked(getDiff);
 const mockedGetFileBlame = vi.mocked(getFileBlame);
 const mockedGetPathHistory = vi.mocked(getPathHistory);
@@ -309,6 +322,38 @@ describe("App", () => {
     mockedRestoreSession.mockResolvedValue({ schemaVersion: 1, tabs: [] });
     mockedActivateTab.mockResolvedValue();
     mockedActivateWorktree.mockResolvedValue(sessionWithSnapshot);
+    mockedCreateWorktree.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    mockedLockWorktree.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    mockedUnlockWorktree.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    mockedRemoveWorktree.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 0, items: [] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
     mockedCloseTab.mockResolvedValue({ schemaVersion: 1, tabs: [] });
     mockedGetSidebar.mockResolvedValue({
       schemaVersion: 1,
@@ -988,7 +1033,9 @@ describe("App", () => {
       bubbles: true,
       cancelable: true,
     });
-    window.dispatchEvent(fileFindShortcut);
+    await act(async () => {
+      window.dispatchEvent(fileFindShortcut);
+    });
 
     expect(fileFindShortcut.defaultPrevented).toBe(true);
     const commitFileFilter = await screen.findByRole("searchbox", {
@@ -1625,7 +1672,9 @@ describe("App", () => {
       bubbles: true,
       cancelable: true,
     });
-    window.dispatchEvent(fileFindShortcut);
+    await act(async () => {
+      window.dispatchEvent(fileFindShortcut);
+    });
 
     expect(fileFindShortcut.defaultPrevented).toBe(true);
     const fileFilter = await screen.findByRole("searchbox", {
@@ -1803,6 +1852,102 @@ describe("App", () => {
       snapshot.repository.id,
       "worktree-feature",
     );
+  });
+
+  it("creates and manages worktrees from the sidebar actions", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [
+        {
+          id: "worktree-one",
+          path: "C:\\Code\\acorn-demo",
+          branch: "main",
+          isCurrent: true,
+          isLocked: false,
+        },
+        {
+          id: "worktree-feature",
+          path: "C:\\Code\\acorn-feature",
+          branch: "feature",
+          isCurrent: false,
+          isLocked: false,
+        },
+      ],
+      branches: { total: 2, items: ["main", "feature"] },
+      remoteBranches: { total: 1, items: ["origin/main"] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    const sidebar: RepositorySidebarDto = {
+      schemaVersion: 1,
+      worktrees: [
+        {
+          id: "worktree-one",
+          path: "C:\\Code\\acorn-demo",
+          branch: "main",
+          isCurrent: true,
+          isLocked: false,
+        },
+        {
+          id: "worktree-feature",
+          path: "C:\\Code\\acorn-feature",
+          branch: "feature",
+          isCurrent: false,
+          isLocked: false,
+        },
+      ],
+      branches: { total: 2, items: ["main", "feature"] },
+      remoteBranches: { total: 1, items: ["origin/main"] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    };
+    mockedCreateWorktree.mockResolvedValue(sidebar);
+    mockedLockWorktree.mockResolvedValue(sidebar);
+    mockedUnlockWorktree.mockResolvedValue(sidebar);
+    mockedRemoveWorktree.mockResolvedValue(sidebar);
+    render(<App />);
+
+    const createWorktreeButton = await screen.findByRole("button", { name: "Create worktree" });
+    fireEvent.click(createWorktreeButton);
+    const worktreeDialog = screen.getByRole("dialog", { name: "Create worktree" });
+    expect(worktreeDialog).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Worktree path"), {
+      target: { value: "C:\\Code\\acorn-feature-new" },
+    });
+    fireEvent.change(screen.getByLabelText("New branch (optional)"), {
+      target: { value: "feature/new" },
+    });
+    fireEvent.change(screen.getByLabelText("Start point or remote branch"), {
+      target: { value: "origin/main" },
+    });
+    fireEvent.click(within(worktreeDialog).getByRole("button", { name: "Create worktree" }));
+    await waitFor(() => {
+      expect(mockedCreateWorktree).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        {
+          path: "C:\\Code\\acorn-feature-new",
+          branch: "feature/new",
+          startPoint: "origin/main",
+        },
+      );
+    });
+
+    const feature = screen.getByRole("button", { name: "feature" });
+    fireEvent.contextMenu(feature);
+    expect(screen.getByRole("menu", { name: "Worktree actions" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Remove worktree and delete branch" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Lock" }));
+    await waitFor(() => {
+      expect(mockedLockWorktree).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "worktree-feature",
+      );
+    });
   });
 
   it("shows a recoverable placeholder for a missing restored repository", async () => {

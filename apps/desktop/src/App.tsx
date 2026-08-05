@@ -42,6 +42,7 @@ import {
   createCommit,
   createStash,
   createTag,
+  createWorktree,
   continueHistory,
   continueRebase,
   deleteBranch,
@@ -77,6 +78,7 @@ import {
   reorderSessionTabs,
   removeSubmodule,
   removeRemote,
+  removeWorktree,
   redoOperation,
   resolveConflict,
   restoreSession,
@@ -89,6 +91,8 @@ import {
   stagePaths,
   unstagePaths,
   undoOperation,
+  unlockWorktree,
+  lockWorktree,
   updateSessionTab,
   updateRemote,
   updateGlobalGitIdentity,
@@ -206,6 +210,18 @@ type SubmoduleContextMenu = {
   x: number;
   y: number;
   submodule: SubmoduleItem;
+};
+
+type WorktreeContextMenu = {
+  x: number;
+  y: number;
+  worktree: RepositorySidebarDto["worktrees"][number];
+};
+
+type WorktreeDialog = {
+  path: string;
+  branch: string;
+  startPoint: string;
 };
 
 type RemoteDetails = {
@@ -463,6 +479,10 @@ export function App() {
     useState<StashContextMenu>();
   const [submoduleContextMenu, setSubmoduleContextMenu] =
     useState<SubmoduleContextMenu>();
+  const [worktreeContextMenu, setWorktreeContextMenu] =
+    useState<WorktreeContextMenu>();
+  const [worktreeDialog, setWorktreeDialog] = useState<WorktreeDialog>();
+  const [worktreeDialogBusy, setWorktreeDialogBusy] = useState(false);
   const [stashDialog, setStashDialog] = useState<StashItem>();
   const [referenceEditor, setReferenceEditor] = useState<ReferenceEditor>();
   const [referenceDeleteDialog, setReferenceDeleteDialog] =
@@ -629,6 +649,8 @@ export function App() {
         else if (referenceEditor) setReferenceEditor(undefined);
         else if (stashContextMenu) setStashContextMenu(undefined);
         else if (submoduleContextMenu) setSubmoduleContextMenu(undefined);
+        else if (worktreeContextMenu) setWorktreeContextMenu(undefined);
+        else if (worktreeDialog) setWorktreeDialog(undefined);
         else if (referenceContextMenu) setReferenceContextMenu(undefined);
         else if (remoteContextMenu) setRemoteContextMenu(undefined);
         else if (showRepositorySettings) setShowRepositorySettings(false);
@@ -646,6 +668,8 @@ export function App() {
     showSubmoduleAdd,
     stashContextMenu,
     submoduleContextMenu,
+    worktreeContextMenu,
+    worktreeDialog,
     stashDialog,
     remoteContextMenu,
     remoteDetails,
@@ -1240,13 +1264,15 @@ export function App() {
       !remoteContextMenu &&
       !referenceContextMenu &&
       !stashContextMenu &&
-      !submoduleContextMenu
+      !submoduleContextMenu &&
+      !worktreeContextMenu
     ) return;
     const close = () => {
       setRemoteContextMenu(undefined);
       setReferenceContextMenu(undefined);
       setStashContextMenu(undefined);
       setSubmoduleContextMenu(undefined);
+      setWorktreeContextMenu(undefined);
     };
     window.addEventListener("click", close);
     window.addEventListener("blur", close);
@@ -1254,7 +1280,7 @@ export function App() {
       window.removeEventListener("click", close);
       window.removeEventListener("blur", close);
     };
-  }, [referenceContextMenu, remoteContextMenu, stashContextMenu, submoduleContextMenu]);
+  }, [referenceContextMenu, remoteContextMenu, stashContextMenu, submoduleContextMenu, worktreeContextMenu]);
 
   useEffect(() => {
     let disposed = false;
@@ -1807,6 +1833,80 @@ export function App() {
           submodule.path,
         ),
       );
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+    }
+  }
+
+  async function refreshWorktreeSidebar(repoId: string, sidebar: RepositorySidebarDto) {
+    setSidebars((current) => ({ ...current, [repoId]: sidebar }));
+    const snapshot = await getRepositorySnapshot(repoId);
+    setTabs((current) =>
+      current.map((tab) => (tab.repoId === repoId ? { ...tab, snapshot } : tab)),
+    );
+  }
+
+  async function handleCreateWorktree() {
+    if (!activeTab || !activeSnapshot || !worktreeDialog) return;
+    const path = worktreeDialog.path.trim();
+    if (!path) return;
+    try {
+      setWorktreeDialogBusy(true);
+      setError(undefined);
+      const sidebar = await createWorktree(activeTab.repoId, activeSnapshot.revision, {
+        path,
+        branch: worktreeDialog.branch.trim() || undefined,
+        startPoint: worktreeDialog.startPoint.trim() || undefined,
+      });
+      await refreshWorktreeSidebar(activeTab.repoId, sidebar);
+      setWorktreeDialog(undefined);
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+    } finally {
+      setWorktreeDialogBusy(false);
+    }
+  }
+
+  async function handleWorktreeLock(worktree: WorktreeContextMenu["worktree"]) {
+    if (!activeTab || !activeSnapshot || worktree.isCurrent) return;
+    try {
+      setError(undefined);
+      const sidebar = worktree.isLocked
+        ? await unlockWorktree(activeTab.repoId, activeSnapshot.revision, worktree.id)
+        : await lockWorktree(activeTab.repoId, activeSnapshot.revision, worktree.id);
+      await refreshWorktreeSidebar(activeTab.repoId, sidebar);
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+    }
+  }
+
+  async function handleWorktreeRemove(
+    worktree: WorktreeContextMenu["worktree"],
+    force: boolean,
+    deleteBranchAfter = false,
+  ) {
+    if (!activeTab || !activeSnapshot || worktree.isCurrent) return;
+    if (
+      !confirmRepositoryMutation(
+        force
+          ? t("Force remove worktree {path}? This may delete uncommitted files.", { path: worktree.path })
+          : t("Remove worktree {path}?", { path: worktree.path }),
+      )
+    ) {
+      return;
+    }
+    try {
+      setError(undefined);
+      const sidebar = await removeWorktree(
+        activeTab.repoId,
+        activeSnapshot.revision,
+        worktree.id,
+        force,
+      );
+      await refreshWorktreeSidebar(activeTab.repoId, sidebar);
+      if (deleteBranchAfter && worktree.branch) {
+        openBranchDeleteDialog(activeTab.repoId, worktree.branch);
+      }
     } catch (reason: unknown) {
       setError(normalizeAppError(reason));
     }
@@ -2508,6 +2608,19 @@ export function App() {
             <SidebarGroup
               label={t("Worktrees")}
               count={filteredWorktrees.length}
+              action={activeSnapshot ? {
+                label: t("Create worktree"),
+                onClick: () => {
+                  const root = activeSnapshot.repository.worktreePath;
+                  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+                  const parent = root.slice(0, Math.max(0, root.lastIndexOf(separator)));
+                  setWorktreeDialog({
+                    path: `${parent}${separator}worktree-new`,
+                    branch: "",
+                    startPoint: activeSnapshot.head.name ?? "HEAD",
+                  });
+                },
+              } : undefined}
             >
               {filteredWorktrees.map((worktree) => (
                 <button
@@ -2516,9 +2629,31 @@ export function App() {
                   title={worktree.path}
                   aria-current={worktree.id === activeTab?.worktreeId ? "true" : undefined}
                   onClick={() => handleWorktreeActivate(worktree.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setWorktreeContextMenu({
+                      worktree,
+                      x: event.clientX,
+                      y: event.clientY,
+                    });
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                      event.preventDefault();
+                      const bounds = event.currentTarget.getBoundingClientRect();
+                      setWorktreeContextMenu({
+                        worktree,
+                        x: bounds.left + 12,
+                        y: bounds.top + 12,
+                      });
+                    }
+                  }}
                 >
                   {worktree.isCurrent ? "● " : ""}{worktree.branch ?? t("Detached")}
                   {worktree.isLocked ? ` · ${t("locked")}` : ""}
+                  {worktree.isPrunable ? ` · ${t("prunable")}` : ""}
+                  {worktree.isMissing ? ` · ${t("missing")}` : ""}
                 </button>
               ))}
             </SidebarGroup>
@@ -3079,6 +3214,159 @@ export function App() {
               {t("Initialize")}
             </button>
           )}
+        </div>
+      )}
+      {worktreeContextMenu && activeSnapshot && (
+        <div
+          className="remote-context-menu"
+          role="menu"
+          aria-label={t("Worktree actions")}
+          style={{ left: worktreeContextMenu.x, top: worktreeContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const worktree = worktreeContextMenu.worktree;
+              setWorktreeContextMenu(undefined);
+              void handleOpenRepositoryPath(worktree.path, {
+                repositoryName: activeSnapshot.repository.name,
+                worktreePath: activeSnapshot.repository.worktreePath,
+              });
+            }}
+          >
+            {t("Open in new tab")}
+          </button>
+          {!worktreeContextMenu.worktree.isCurrent && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const worktree = worktreeContextMenu.worktree;
+                setWorktreeContextMenu(undefined);
+                void handleWorktreeLock(worktree);
+              }}
+            >
+              {worktreeContextMenu.worktree.isLocked ? t("Unlock") : t("Lock")}
+            </button>
+          )}
+          {!worktreeContextMenu.worktree.isCurrent && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const worktree = worktreeContextMenu.worktree;
+                  setWorktreeContextMenu(undefined);
+                  void handleWorktreeRemove(worktree, false);
+                }}
+              >
+                {t("Remove worktree")}
+              </button>
+              {worktreeContextMenu.worktree.branch && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const worktree = worktreeContextMenu.worktree;
+                    setWorktreeContextMenu(undefined);
+                    void handleWorktreeRemove(worktree, false, true);
+                  }}
+                >
+                  {t("Remove worktree and delete branch")}
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                className="danger-button"
+                onClick={() => {
+                  const worktree = worktreeContextMenu.worktree;
+                  setWorktreeContextMenu(undefined);
+                  void handleWorktreeRemove(worktree, true);
+                }}
+              >
+                {t("Force remove worktree")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {worktreeDialog && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => !worktreeDialogBusy && setWorktreeDialog(undefined)}
+        >
+          <form
+            className="settings-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="worktree-dialog-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleCreateWorktree();
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <h2 id="worktree-dialog-title">{t("Create worktree")}</h2>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close worktree dialog")}
+                disabled={worktreeDialogBusy}
+                onClick={() => setWorktreeDialog(undefined)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body">
+              <label>
+                {t("Worktree path")}
+                <input
+                  className="control-input"
+                  autoFocus
+                  value={worktreeDialog.path}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setWorktreeDialog((current) => current && { ...current, path: value });
+                  }}
+                  placeholder="C:\\Code\\acorn-feature"
+                  required
+                />
+              </label>
+              <label>
+                {t("New branch (optional)")}
+                <input
+                  className="control-input"
+                  value={worktreeDialog.branch}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setWorktreeDialog((current) => current && { ...current, branch: value });
+                  }}
+                  placeholder="feature/worktree"
+                />
+              </label>
+              <label>
+                {t("Start point or remote branch")}
+                <input
+                  className="control-input"
+                  value={worktreeDialog.startPoint}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setWorktreeDialog((current) => current && { ...current, startPoint: value });
+                  }}
+                  placeholder="HEAD or origin/main"
+                />
+              </label>
+              <p className="settings-note">{t("The path must not already exist. A remote branch can be used as the start point.")}</p>
+              <button className="primary-action" type="submit" disabled={worktreeDialogBusy || !worktreeDialog.path.trim()}>
+                {worktreeDialogBusy ? t("Creating…") : t("Create worktree")}
+              </button>
+            </div>
+          </form>
         </div>
       )}
       {referenceContextMenu && activeSnapshot && (

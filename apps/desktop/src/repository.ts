@@ -258,6 +258,8 @@ export type RepositorySidebarDto = {
     branch?: string;
     isCurrent: boolean;
     isLocked: boolean;
+    isPrunable?: boolean;
+    isMissing?: boolean;
   }>;
   submodules?: Array<{
     path: string;
@@ -891,6 +893,58 @@ export function getRepositorySidebar(repoId: string): Promise<RepositorySidebarD
 
 export function activateWorktree(repoId: string, worktreeId: string): Promise<SessionDto> {
   return invoke<SessionDto>("worktree_activate", { repoId, worktreeId });
+}
+
+export function createWorktree(
+  repoId: string,
+  revision: number,
+  request: { path: string; branch?: string; startPoint?: string },
+): Promise<RepositorySidebarDto> {
+  return invoke<RepositorySidebarDto>("worktree_create", {
+    repoId,
+    revision,
+    request,
+  });
+}
+
+export function lockWorktree(
+  repoId: string,
+  revision: number,
+  worktreeId: string,
+  reason?: string,
+): Promise<RepositorySidebarDto> {
+  return invoke<RepositorySidebarDto>("worktree_lock", {
+    repoId,
+    revision,
+    worktreeId,
+    reason,
+  });
+}
+
+export function unlockWorktree(
+  repoId: string,
+  revision: number,
+  worktreeId: string,
+): Promise<RepositorySidebarDto> {
+  return invoke<RepositorySidebarDto>("worktree_unlock", {
+    repoId,
+    revision,
+    worktreeId,
+  });
+}
+
+export function removeWorktree(
+  repoId: string,
+  revision: number,
+  worktreeId: string,
+  force: boolean,
+): Promise<RepositorySidebarDto> {
+  return invoke<RepositorySidebarDto>("worktree_remove", {
+    repoId,
+    revision,
+    worktreeId,
+    force,
+  });
 }
 
 export function getDiff(

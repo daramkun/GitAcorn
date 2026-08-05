@@ -41,6 +41,15 @@ pub struct WorktreeSummary {
     pub branch: Option<String>,
     pub is_current: bool,
     pub is_locked: bool,
+    pub is_prunable: bool,
+    pub is_missing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeCreateRequest {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+    pub start_point: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -430,6 +439,100 @@ impl RepositoryService {
             tags: summarize_refs(&tags),
             stashes: parse_stashes(&stashes),
         })
+    }
+
+    pub fn create_worktree(
+        &self,
+        repository: &RepositoryDescriptor,
+        request: &WorktreeCreateRequest,
+    ) -> Result<(), AppError> {
+        if request.path.as_os_str().is_empty() || !request.path.is_absolute() {
+            return Err(AppError::InvalidRequest(
+                "Worktree path must be an absolute path".to_owned(),
+            ));
+        }
+        if request.path.exists() {
+            return Err(AppError::InvalidRequest(
+                "Worktree path already exists".to_owned(),
+            ));
+        }
+        let Some(parent) = request.path.parent() else {
+            return Err(AppError::InvalidPath);
+        };
+        if !parent.is_dir() {
+            return Err(AppError::InvalidPath);
+        }
+        if let Some(branch) = request.branch.as_deref() {
+            self.validate_branch_name(repository, branch)?;
+        }
+        if let Some(start_point) = request.start_point.as_deref() {
+            self.git_text(
+                repository,
+                [
+                    "rev-parse",
+                    "--verify",
+                    &format!("{start_point}^{{commit}}"),
+                ],
+            )?;
+        }
+
+        let mut args = vec![OsString::from("worktree"), OsString::from("add")];
+        if let Some(branch) = request.branch.as_deref() {
+            args.extend([OsString::from("-b"), OsString::from(branch)]);
+        }
+        args.push(request.path.clone().into_os_string());
+        if let Some(start_point) = request.start_point.as_deref() {
+            args.push(OsString::from(start_point));
+        }
+        self.git_unit(repository, args)
+    }
+
+    pub fn remove_worktree(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &Path,
+        force: bool,
+    ) -> Result<(), AppError> {
+        if fs::canonicalize(path).ok().as_ref() == Some(&repository.worktree_path) {
+            return Err(AppError::InvalidRequest(
+                "The current worktree cannot be removed".to_owned(),
+            ));
+        }
+        let mut args = vec![OsString::from("worktree"), OsString::from("remove")];
+        if force {
+            args.push(OsString::from("--force"));
+        }
+        args.push(path.to_path_buf().into_os_string());
+        self.git_unit(repository, args)
+    }
+
+    pub fn lock_worktree(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &Path,
+        reason: Option<&str>,
+    ) -> Result<(), AppError> {
+        let mut args = vec![OsString::from("worktree"), OsString::from("lock")];
+        if let Some(reason) = reason.filter(|reason| !reason.trim().is_empty()) {
+            args.extend([OsString::from("--reason"), OsString::from(reason)]);
+        }
+        args.push(path.to_path_buf().into_os_string());
+        self.git_unit(repository, args)
+    }
+
+    pub fn unlock_worktree(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &Path,
+    ) -> Result<(), AppError> {
+        self.git_unit(
+            repository,
+            [
+                OsString::from("worktree"),
+                OsString::from("unlock"),
+                path.to_path_buf().into_os_string(),
+            ],
+        )
     }
 
     pub fn references(
@@ -2689,6 +2792,7 @@ fn parse_worktrees(output: &str, current_path: &Path) -> Vec<WorktreeSummary> {
             let mut head = None;
             let mut branch = None;
             let mut locked = false;
+            let mut prunable = false;
             for field in record.split('\0').flat_map(str::lines) {
                 if let Some(value) = field.strip_prefix("worktree ") {
                     path = Some(value.to_owned());
@@ -2698,6 +2802,8 @@ fn parse_worktrees(output: &str, current_path: &Path) -> Vec<WorktreeSummary> {
                     branch = Some(value.trim_start_matches("refs/heads/").to_owned());
                 } else if field == "locked" || field.starts_with("locked ") {
                     locked = true;
+                } else if field == "prunable" || field.starts_with("prunable ") {
+                    prunable = true;
                 }
             }
             path.map(|path| WorktreeSummary {
@@ -2705,10 +2811,12 @@ fn parse_worktrees(output: &str, current_path: &Path) -> Vec<WorktreeSummary> {
                     &fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path)),
                 ),
                 is_current: normalized_path(Path::new(&path)) == normalized_path(current_path),
+                is_missing: !Path::new(&path).is_dir(),
                 path,
                 head,
                 branch,
                 is_locked: locked,
+                is_prunable: prunable,
             })
         })
         .collect()
@@ -3061,12 +3169,14 @@ mod tests {
     #[test]
     fn parses_sidebar_machine_formats_and_limits_refs() {
         let worktrees = parse_worktrees(
-            "worktree C:/repo\0HEAD abc\0branch refs/heads/main\0\0worktree C:/other\0HEAD def\0detached\0locked reason\0\0",
+            "worktree C:/repo\0HEAD abc\0branch refs/heads/main\0\0worktree C:/other\0HEAD def\0detached\0locked reason\0prunable stale\0\0",
             Path::new("C:/repo"),
         );
         assert_eq!(worktrees.len(), 2);
         assert!(worktrees[0].is_current);
         assert!(worktrees[1].is_locked);
+        assert!(worktrees[1].is_prunable);
+        assert!(worktrees[1].is_missing);
 
         let refs = summarize_refs("main\nfeature\none\ntwo\nthree\nfour\n");
         assert_eq!(refs.total, 6);

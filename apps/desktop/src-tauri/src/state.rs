@@ -10,7 +10,7 @@ use app_core::{
     FileBlame, GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
     HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection,
     PathHistory, ReflogEntry, RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler,
-    RepositoryService, RepositorySidebar, StashRequest,
+    RepositoryService, RepositorySidebar, StashRequest, WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -256,6 +256,61 @@ impl ApplicationState {
             .clone();
         self.scheduler
             .read(repo_id, || self.service.sidebar(&descriptor))
+    }
+
+    pub fn create_worktree(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        request: &WorktreeCreateRequest,
+    ) -> Result<RepositorySidebar, AppError> {
+        self.mutate_sidebar(repo_id, revision, |service, repository| {
+            service.create_worktree(repository, request)
+        })
+    }
+
+    pub fn lock_worktree(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        worktree_id: &str,
+        reason: Option<&str>,
+    ) -> Result<RepositorySidebar, AppError> {
+        self.mutate_worktree(
+            repo_id,
+            revision,
+            worktree_id,
+            |service, repository, path| service.lock_worktree(repository, path, reason),
+        )
+    }
+
+    pub fn unlock_worktree(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        worktree_id: &str,
+    ) -> Result<RepositorySidebar, AppError> {
+        self.mutate_worktree(
+            repo_id,
+            revision,
+            worktree_id,
+            |service, repository, path| service.unlock_worktree(repository, path),
+        )
+    }
+
+    pub fn remove_worktree(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        worktree_id: &str,
+        force: bool,
+    ) -> Result<RepositorySidebar, AppError> {
+        self.mutate_worktree(
+            repo_id,
+            revision,
+            worktree_id,
+            |service, repository, path| service.remove_worktree(repository, path, force),
+        )
     }
 
     pub fn repository_history(
@@ -1437,6 +1492,63 @@ impl ApplicationState {
             operation(&self.service, &descriptor)?;
             let next_revision = self.advance_revision(repo_id)?;
             self.service.snapshot(&descriptor, next_revision)
+        })
+    }
+
+    fn mutate_sidebar(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        operation: impl FnOnce(&RepositoryService, &RepositoryDescriptor) -> Result<(), AppError>,
+    ) -> Result<RepositorySidebar, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, repository.revision)?;
+                repository.descriptor.clone()
+            };
+            operation(&self.service, &descriptor)?;
+            self.advance_revision(repo_id)?;
+            self.service.sidebar(&descriptor)
+        })
+    }
+
+    fn mutate_worktree(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        worktree_id: &str,
+        operation: impl FnOnce(&RepositoryService, &RepositoryDescriptor, &Path) -> Result<(), AppError>,
+    ) -> Result<RepositorySidebar, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, repository.revision)?;
+                repository.descriptor.clone()
+            };
+            let sidebar = self.service.sidebar(&descriptor)?;
+            let worktree = sidebar
+                .worktrees
+                .iter()
+                .find(|worktree| worktree.id.to_string() == worktree_id)
+                .ok_or(AppError::WorktreeNotFound)?;
+            operation(&self.service, &descriptor, Path::new(&worktree.path))?;
+            self.advance_revision(repo_id)?;
+            self.service.sidebar(&descriptor)
         })
     }
 

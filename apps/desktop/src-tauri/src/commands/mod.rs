@@ -16,7 +16,7 @@ use crate::dto::{
     ReferenceDto, ReflogEntryDto, RemoteMutationRequestDto, RemoteReferenceDeleteDto,
     RemoteRequestDto, RemoteTagDto, RepositoryGitIdentityDto, RepositoryOpenSourceDto,
     RepositorySidebarDto, RepositorySnapshotDto, SessionDto, SessionTabUpdateDto, StashRequestDto,
-    SubmoduleAddRequestDto,
+    SubmoduleAddRequestDto, WorktreeCreateRequestDto,
 };
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
@@ -326,6 +326,61 @@ pub fn repository_sidebar(
 ) -> CommandResult<RepositorySidebarDto> {
     state
         .repository_sidebar(&repo_id)
+        .map(RepositorySidebarDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn worktree_create(
+    repo_id: String,
+    revision: u64,
+    request: WorktreeCreateRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySidebarDto> {
+    let request = app_core::WorktreeCreateRequest::try_from(request)?;
+    state
+        .create_worktree(&repo_id, revision, &request)
+        .map(RepositorySidebarDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn worktree_lock(
+    repo_id: String,
+    revision: u64,
+    worktree_id: String,
+    reason: Option<String>,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySidebarDto> {
+    state
+        .lock_worktree(&repo_id, revision, &worktree_id, reason.as_deref())
+        .map(RepositorySidebarDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn worktree_unlock(
+    repo_id: String,
+    revision: u64,
+    worktree_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySidebarDto> {
+    state
+        .unlock_worktree(&repo_id, revision, &worktree_id)
+        .map(RepositorySidebarDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn worktree_remove(
+    repo_id: String,
+    revision: u64,
+    worktree_id: String,
+    force: bool,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySidebarDto> {
+    state
+        .remove_worktree(&repo_id, revision, &worktree_id, force)
         .map(RepositorySidebarDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
