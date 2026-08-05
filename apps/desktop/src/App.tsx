@@ -8203,6 +8203,20 @@ type HistoryCommit = CommitDto & {
   reflogOnly?: boolean;
 };
 
+function tagNamesForHistoryCommit(commit?: HistoryCommit): string[] {
+  if (!commit) return [];
+  return Array.from(
+    new Set(
+      commit.references
+        .flatMap((reference) => reference.split(","))
+        .map((reference) => reference.trim().replace(/^tag:\s*/, ""))
+        .filter((reference) => reference.includes("refs/tags/"))
+        .map((reference) => reference.slice(reference.indexOf("refs/tags/") + "refs/tags/".length))
+        .filter(Boolean),
+    ),
+  );
+}
+
 function mergeHistoryWithReflog(
   commits: CommitDto[],
   entries: ReflogEntryDto[],
@@ -8333,6 +8347,9 @@ function HistoryView({
   const [binaryPreviewBusy, setBinaryPreviewBusy] = useState(false);
   const [binaryOverlay, setBinaryOverlay] = useState(false);
   const [signatureStatus, setSignatureStatus] = useState<SignatureStatusDto>();
+  const [tagSignatureStatuses, setTagSignatureStatuses] = useState<
+    Array<SignatureStatusDto & { tag: string }>
+  >([]);
   const [rebasePreview, setRebasePreview] =
     useState<InteractiveRebasePreviewDto>();
   const [rebasePlan, setRebasePlan] = useState<
@@ -8383,6 +8400,25 @@ function HistoryView({
       active = false;
     };
   }, [selected?.oid, snapshot.repository.id]);
+  const selectedTagNames = useMemo(() => tagNamesForHistoryCommit(selected), [selected]);
+  useEffect(() => {
+    if (selectedTagNames.length === 0) {
+      setTagSignatureStatuses([]);
+      return;
+    }
+    let active = true;
+    Promise.all(
+      selectedTagNames.map(async (tag) => ({
+        tag,
+        ...(await getSignatureStatus(snapshot.repository.id, tag, "tag")),
+      })),
+    )
+      .then((statuses) => active && setTagSignatureStatuses(statuses))
+      .catch(() => active && setTagSignatureStatuses([]));
+    return () => {
+      active = false;
+    };
+  }, [selectedTagNames, snapshot.repository.id]);
   const commitFileFilterQuery = commitFileFilter.trim().toLocaleLowerCase();
   const filteredCommitFiles = useMemo(
     () =>
@@ -9304,6 +9340,11 @@ function HistoryView({
                   {t("Signature")}: {signatureStatus.status}{signatureStatus.signer ? ` · ${signatureStatus.signer}` : ""}
                 </span>
               )}
+              {tagSignatureStatuses.map((status) => (
+                <span className={`signature-badge signature-${status.status.toLowerCase()}`} key={status.tag}>
+                  {t("Tag signature")} · {status.tag}: {status.status}{status.signer ? ` · ${status.signer}` : ""}
+                </span>
+              ))}
               {selected.body && <pre>{selected.body}</pre>}
               <div className="detail-refs">
                 {selected.references.map((item) => <span key={item}>{shortRef(item)}</span>)}

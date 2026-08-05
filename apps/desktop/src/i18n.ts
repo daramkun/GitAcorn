@@ -542,6 +542,7 @@ const korean = {
   "Open a repository to explore commits, branches, tags, and authors.": "저장소를 열어 커밋, 브랜치, 태그, 작성자를 살펴보세요.",
   "Minified content detected. Word wrap stays opt-in to keep rendering responsive.": "Minified 콘텐츠가 감지되었습니다. 렌더링 반응성을 위해 줄 바꿈은 선택할 때만 적용됩니다.",
   "Large diff protected with virtualized rendering and bounded search.": "큰 diff는 가상 렌더링과 제한된 검색으로 보호됩니다.",
+  "Tag signature": "태그 서명",
 } as const;
 
 export type TranslationKey = keyof typeof korean;

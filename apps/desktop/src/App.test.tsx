@@ -728,6 +728,40 @@ describe("App", () => {
     );
   });
 
+  it("shows tag signature status for decorated tag references", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: "abcdef123456",
+          parents: [],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          subject: "Tagged release",
+          body: "",
+          references: ["tag: refs/tags/v1.0.0"],
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+    mockedGetSignatureStatus.mockImplementation(async (_repoId, revision, kind) => ({
+      schemaVersion: 1,
+      revision,
+      kind,
+      status: kind === "tag" ? "G" : "N",
+      signer: kind === "tag" ? "Release Bot" : null,
+    }));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^History/ }));
+
+    expect(await screen.findByText(/Tag signature/)).toBeInTheDocument();
+    expect(screen.getByText(/v1\.0\.0: G/)).toBeInTheDocument();
+  });
+
   it("compares history refs and switches between unified and split views", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedCompareDiff.mockResolvedValue({
