@@ -5757,7 +5757,7 @@ function ChangesView({
   }>();
   const [pathInspector, setPathInspector] = useState<PathInspectorState>();
   const [pathHistoryQuery, setPathHistoryQuery] = useState("");
-  const blameRequestRef = useRef(0);
+  const pathInspectorRequestRef = useRef(0);
   const [stashCreateDialog, setStashCreateDialog] = useState<{
     paths: number[][];
     count: number;
@@ -6085,17 +6085,17 @@ function ChangesView({
   }
 
   function openBlame(path: FileChangeDto) {
-    const requestId = ++blameRequestRef.current;
+    const requestId = ++pathInspectorRequestRef.current;
     setChangeContextMenu(undefined);
     setPathInspector({ mode: "blame", path, loading: true });
     getFileBlame(snapshot.repository.id, path.pathBytes)
       .then((data) => {
-        if (requestId === blameRequestRef.current) {
+        if (requestId === pathInspectorRequestRef.current) {
           setPathInspector({ mode: "blame", path, loading: false, data });
         }
       })
       .catch((reason: unknown) => {
-        if (requestId === blameRequestRef.current) {
+        if (requestId === pathInspectorRequestRef.current) {
           setPathInspector({
             mode: "blame",
             path,
@@ -6107,6 +6107,7 @@ function ChangesView({
   }
 
   function openPathHistory(path: string, directory: boolean) {
+    const requestId = ++pathInspectorRequestRef.current;
     setChangeContextMenu(undefined);
     setPathHistoryQuery("");
     setPathInspector({ mode: "history", path, directory, loading: true });
@@ -6117,8 +6118,13 @@ function ChangesView({
       undefined,
       100,
     )
-      .then((data) => setPathInspector({ mode: "history", path, directory, loading: false, data }))
+      .then((data) => {
+        if (requestId === pathInspectorRequestRef.current) {
+          setPathInspector({ mode: "history", path, directory, loading: false, data });
+        }
+      })
       .catch((reason: unknown) =>
+        requestId === pathInspectorRequestRef.current &&
         setPathInspector({
           mode: "history",
           path,
@@ -6127,6 +6133,11 @@ function ChangesView({
           error: normalizeAppError(reason).message,
         }),
       );
+  }
+
+  function closePathInspector() {
+    pathInspectorRequestRef.current += 1;
+    setPathInspector(undefined);
   }
 
   function changesFor(target: DiffTarget) {
@@ -6964,7 +6975,7 @@ function ChangesView({
         <div
           className="modal-overlay"
           role="presentation"
-          onClick={() => setPathInspector(undefined)}
+          onClick={closePathInspector}
         >
           <section
             className="settings-modal path-inspector-modal"
@@ -6992,38 +7003,29 @@ function ChangesView({
                 className="settings-close-btn"
                 type="button"
                 aria-label={t("Close path inspector")}
-                onClick={() => setPathInspector(undefined)}
+                onClick={closePathInspector}
               >
                 ×
               </button>
             </div>
             <div className="settings-modal-body path-inspector-body">
               {pathInspector.loading ? (
-                <div className="history-state" role="status">{t("Loading path history…")}</div>
+                <div className="history-state" role="status">
+                  <span>{t("Loading path history…")}</span>
+                  <button className="control-button" type="button" onClick={closePathInspector}>
+                    {t("Cancel")}
+                  </button>
+                </div>
               ) : pathInspector.error ? (
                 <div className="error-banner" role="alert">
                   <strong>{t("Path inspection failed")}</strong>
                   <span>{pathInspector.error}</span>
                 </div>
               ) : pathInspector.mode === "blame" ? (
-                <div className="path-blame-table" role="table" aria-label={t("Blame lines")}>
-                  {pathInspector.data?.lines.slice(0, 500).map((line) => (
-                    <div className="path-blame-row" role="row" key={`${line.line}:${line.commitOid}`}>
-                      <code>{line.line}</code>
-                      <button
-                        className="path-blame-commit"
-                        type="button"
-                        onClick={() => onOpenHistoryCommit(line.commitOid)}
-                      >
-                        {line.commitOid.slice(0, 8)} · {line.authorName}
-                      </button>
-                      <span>{line.content || " "}</span>
-                    </div>
-                  ))}
-                  {(pathInspector.data?.lines.length ?? 0) > 500 && (
-                    <p className="history-state">{t("Showing the first 500 lines for responsiveness.")}</p>
-                  )}
-                </div>
+                <VirtualBlameTable
+                  blame={pathInspector.data}
+                  onOpenHistoryCommit={onOpenHistoryCommit}
+                />
               ) : (
                 <>
                   <label className="path-history-filter">
@@ -8149,6 +8151,50 @@ function VirtualDiffLines({
         </div>
       </div>
     </>
+  );
+}
+
+function VirtualBlameTable({
+  blame,
+  onOpenHistoryCommit,
+}: {
+  blame?: FileBlameDto;
+  onOpenHistoryCommit: (oid: string) => void;
+}) {
+  const rowHeight = 28;
+  const [scrollTop, setScrollTop] = useState(0);
+  const lines = blame?.lines ?? [];
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 8);
+  const end = Math.min(lines.length, start + 72);
+  return (
+    <div
+      className="path-blame-table path-blame-table--virtual"
+      role="table"
+      aria-label={t("Blame lines")}
+      aria-rowcount={lines.length}
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+    >
+      <div className="path-blame-space" style={{ height: lines.length * rowHeight }}>
+        <div
+          className="path-blame-window"
+          style={{ transform: `translateY(${start * rowHeight}px)` }}
+        >
+          {lines.slice(start, end).map((line) => (
+            <div className="path-blame-row" role="row" key={`${line.line}:${line.commitOid}`}>
+              <code>{line.line}</code>
+              <button
+                className="path-blame-commit"
+                type="button"
+                onClick={() => onOpenHistoryCommit(line.commitOid)}
+              >
+                {line.commitOid.slice(0, 8)} · {line.authorName}
+              </button>
+              <span>{line.content || " "}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

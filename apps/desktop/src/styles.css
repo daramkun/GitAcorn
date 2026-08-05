@@ -1986,6 +1986,28 @@ button:disabled {
   font-size: var(--font-size-sm);
 }
 
+.path-blame-table--virtual {
+  max-height: min(58vh, 560px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.path-blame-space {
+  position: relative;
+  min-width: 720px;
+}
+
+.path-blame-window {
+  position: absolute;
+  inset: 0 0 auto;
+}
+
+.path-blame-table--virtual .path-blame-row {
+  min-height: 28px;
+}
+
 .diff-lines.split-diff {
   min-width: 760px;
 }
