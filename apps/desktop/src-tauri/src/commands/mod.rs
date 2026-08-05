@@ -10,12 +10,13 @@ use uuid::Uuid;
 
 use crate::dto::{
     AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto, CommitRequestDto,
-    DiffDto, GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto,
-    HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, OperationEventDto,
-    OperationRecordDto, OperationStartedDto, PatchSelectionDto, ReferenceDto, ReflogEntryDto,
-    RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
-    RepositoryGitIdentityDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
-    SessionDto, SessionTabUpdateDto, StashRequestDto, SubmoduleAddRequestDto,
+    DiffDto, FileBlameDto, GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto,
+    GitRemoteDto, HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto,
+    OperationEventDto, OperationRecordDto, OperationStartedDto, PatchSelectionDto, PathHistoryDto,
+    ReferenceDto, ReflogEntryDto, RemoteMutationRequestDto, RemoteReferenceDeleteDto,
+    RemoteRequestDto, RemoteTagDto, RepositoryGitIdentityDto, RepositoryOpenSourceDto,
+    RepositorySidebarDto, RepositorySnapshotDto, SessionDto, SessionTabUpdateDto, StashRequestDto,
+    SubmoduleAddRequestDto,
 };
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
@@ -895,6 +896,34 @@ pub fn diff_get(
     state
         .repository_diff(&repo_id, &path_bytes, parse_diff_target(&target)?)
         .map(DiffDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn blame_get(
+    repo_id: String,
+    path_bytes: Vec<u8>,
+    revision: Option<String>,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<FileBlameDto> {
+    state
+        .repository_blame(&repo_id, &path_bytes, revision.as_deref())
+        .map(FileBlameDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn path_history_get(
+    repo_id: String,
+    path_bytes: Vec<u8>,
+    is_directory: bool,
+    query: Option<String>,
+    limit: usize,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<PathHistoryDto> {
+    state
+        .repository_path_history(&repo_id, &path_bytes, is_directory, query.as_deref(), limit)
+        .map(PathHistoryDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
 

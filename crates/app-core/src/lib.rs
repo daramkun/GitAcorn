@@ -9,6 +9,7 @@ use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use git_domain::{FileBlame, PathHistory};
 pub use remote::{CloneRequest, RemoteOperationKind, RemoteProgress, RemoteRequest};
 pub use repository::{
     BranchRequest, CommitFile, CommitRequest, DiffTarget, GitIdentity, GitIdentitySettings,
@@ -19,7 +20,6 @@ pub use repository::{
 };
 pub use scheduler::RepositoryScheduler;
 pub use workspace::{ConflictResolution, StashRequest};
-
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("Git is not installed or is not available on PATH")]

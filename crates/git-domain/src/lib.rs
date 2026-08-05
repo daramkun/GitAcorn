@@ -1,6 +1,7 @@
 //! Pure Git domain types. Tauri and process execution do not belong in this crate.
 
 mod diff;
+mod file_history;
 mod history;
 mod status;
 
@@ -13,6 +14,9 @@ use uuid::Uuid;
 
 pub use diff::{
     DiffDocument, DiffFile, DiffHunk, DiffLine, DiffLineKind, DiffParseError, parse_unified_diff,
+};
+pub use file_history::{
+    BlameLine, FileBlame, PathHistory, PathHistoryEntry, parse_blame_porcelain, parse_path_history,
 };
 pub use history::{CommitSummary, HistoryPage, parse_history_records};
 pub use status::{FileChange, HeadState, StatusParseError, StatusSnapshot, parse_porcelain_v2};

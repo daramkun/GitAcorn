@@ -72,6 +72,38 @@ export type DiffDto = {
   }>;
 };
 
+export type FileBlameDto = {
+  schemaVersion: 1;
+  path: number[];
+  revision?: string;
+  lines: Array<{
+    line: number;
+    commitOid: string;
+    authorName: string;
+    authorEmail: string;
+    authoredAt: number;
+    content: string;
+  }>;
+};
+
+export type PathHistoryDto = {
+  schemaVersion: 1;
+  path: number[];
+  isDirectory: boolean;
+  entries: Array<{
+    oid: string;
+    parentOid?: string;
+    authorName: string;
+    authorEmail: string;
+    authoredAt: number;
+    subject: string;
+    path: number[];
+    previousPath?: number[];
+    status: string;
+  }>;
+  nextCursor?: string;
+};
+
 export type PatchSelection = {
   hunkIndex: number;
   lineIndices: number[];
@@ -867,6 +899,30 @@ export function getDiff(
   target: DiffTarget,
 ): Promise<DiffDto> {
   return invoke<DiffDto>("diff_get", { repoId, pathBytes, target });
+}
+
+export function getFileBlame(
+  repoId: string,
+  pathBytes: number[],
+  revision?: string,
+): Promise<FileBlameDto> {
+  return invoke<FileBlameDto>("blame_get", { repoId, pathBytes, revision });
+}
+
+export function getPathHistory(
+  repoId: string,
+  pathBytes: number[],
+  isDirectory: boolean,
+  query?: string,
+  limit = 100,
+): Promise<PathHistoryDto> {
+  return invoke<PathHistoryDto>("path_history_get", {
+    repoId,
+    pathBytes,
+    isDirectory,
+    query,
+    limit,
+  });
 }
 
 export function stagePaths(

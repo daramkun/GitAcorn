@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 
 use app_core::{
     AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
-    GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryOperation,
-    InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection, ReflogEntry,
-    RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler, RepositoryService,
-    RepositorySidebar, StashRequest,
+    FileBlame, GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
+    HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection,
+    PathHistory, ReflogEntry, RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler,
+    RepositoryService, RepositorySidebar, StashRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -463,6 +463,35 @@ impl ApplicationState {
                 .get(&repo_id)
                 .ok_or(AppError::RepositoryNotOpen)?;
             self.service.diff(&repository.descriptor, path, target)
+        })
+    }
+
+    pub fn repository_blame(
+        &self,
+        repo_id: &str,
+        path: &[u8],
+        target_revision: Option<&str>,
+    ) -> Result<FileBlame, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.read(repo_id, || {
+            self.service.blame(&descriptor, path, target_revision)
+        })
+    }
+
+    pub fn repository_path_history(
+        &self,
+        repo_id: &str,
+        path: &[u8],
+        is_directory: bool,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<PathHistory, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.read(repo_id, || {
+            self.service
+                .path_history(&descriptor, path, is_directory, query, limit)
         })
     }
 

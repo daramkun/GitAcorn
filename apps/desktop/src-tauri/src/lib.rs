@@ -59,6 +59,8 @@ pub fn run() {
             commands::submodule_deinitialize,
             commands::submodule_remove,
             commands::diff_get,
+            commands::blame_get,
+            commands::path_history_get,
             commands::commit_files,
             commands::commit_diff_get,
             commands::stage_paths,

@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use git_cli::{CancellationToken, GitExecutionError, GitExecutor, GitOutput, GitRequest};
 use git_domain::{
-    DiffDocument, DiffLineKind, HistoryPage, RepoId, RepositoryDescriptor, RepositoryOperation,
-    RepositorySnapshot, WorktreeId, parse_history_records, parse_porcelain_v2, parse_unified_diff,
+    DiffDocument, DiffLineKind, FileBlame, HistoryPage, PathHistory, RepoId, RepositoryDescriptor,
+    RepositoryOperation, RepositorySnapshot, WorktreeId, parse_blame_porcelain,
+    parse_history_records, parse_path_history, parse_porcelain_v2, parse_unified_diff,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -1168,6 +1169,76 @@ impl RepositoryService {
         Ok(HistoryPage {
             commits,
             next_cursor: has_more.then(|| format!("offset:{}", offset + limit)),
+        })
+    }
+
+    pub fn blame(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+        revision: Option<&str>,
+    ) -> Result<FileBlame, AppError> {
+        let raw_path = path.to_vec();
+        let path = path_argument(path)?;
+        let mut args = vec![
+            OsString::from("blame"),
+            OsString::from("--line-porcelain"),
+            OsString::from("--date=unix"),
+        ];
+        if let Some(revision) = revision {
+            validate_object_id(revision)?;
+            args.push(OsString::from(revision));
+        }
+        args.extend([OsString::from("--"), path]);
+        let output = self.git_bytes(repository, args)?;
+        let lines = parse_blame_porcelain(&output).map_err(AppError::InvalidGitOutput)?;
+        Ok(FileBlame {
+            path: raw_path,
+            revision: revision.map(str::to_owned),
+            lines,
+        })
+    }
+
+    pub fn path_history(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+        is_directory: bool,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<PathHistory, AppError> {
+        let raw_path = path.to_vec();
+        let path_argument = path_argument(path)?;
+        let limit = limit.clamp(1, 200);
+        let mut args = vec![OsString::from("log")];
+        if !is_directory {
+            args.push(OsString::from("--follow"));
+        }
+        args.extend([
+            OsString::from("--find-renames"),
+            OsString::from("--name-status"),
+            OsString::from("--format=%x1e%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00"),
+            OsString::from(format!("--max-count={limit}")),
+            OsString::from("--"),
+            path_argument,
+        ]);
+        let output = self.git_bytes(repository, args)?;
+        let mut entries = parse_path_history(&output).map_err(AppError::InvalidGitOutput)?;
+        if let Some(query) = query.map(str::trim).filter(|query| !query.is_empty()) {
+            let query = query.to_lowercase();
+            entries.retain(|entry| {
+                String::from_utf8_lossy(&entry.path)
+                    .to_lowercase()
+                    .contains(&query)
+                    || entry.subject.to_lowercase().contains(&query)
+            });
+        }
+        let next_cursor = (entries.len() == limit).then(|| format!("offset:{limit}"));
+        Ok(PathHistory {
+            path: raw_path,
+            is_directory,
+            entries,
+            next_cursor,
         })
     }
 

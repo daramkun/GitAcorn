@@ -34,6 +34,8 @@ import {
   dropStash,
   fastForwardBranch,
   getDiff,
+  getFileBlame,
+  getPathHistory,
   getCommitDiff,
   getCommitFiles,
   getHistoryPage,
@@ -117,6 +119,8 @@ vi.mock("./repository", () => ({
   dropStash: vi.fn(),
   fastForwardBranch: vi.fn(),
   getDiff: vi.fn(),
+  getFileBlame: vi.fn(),
+  getPathHistory: vi.fn(),
   getCommitDiff: vi.fn(),
   getCommitFiles: vi.fn(),
   getHistoryPage: vi.fn(),
@@ -188,6 +192,8 @@ const mockedInitializeSubmodule = vi.mocked(initializeSubmodule);
 const mockedDeinitializeSubmodule = vi.mocked(deinitializeSubmodule);
 const mockedRemoveSubmodule = vi.mocked(removeSubmodule);
 const mockedGetDiff = vi.mocked(getDiff);
+const mockedGetFileBlame = vi.mocked(getFileBlame);
+const mockedGetPathHistory = vi.mocked(getPathHistory);
 const mockedGetCommitDiff = vi.mocked(getCommitDiff);
 const mockedGetCommitFiles = vi.mocked(getCommitFiles);
 const mockedGetHistory = vi.mocked(getHistoryPage);
@@ -441,6 +447,36 @@ describe("App", () => {
               selectable: true,
             },
           ],
+        },
+      ],
+    });
+    mockedGetFileBlame.mockResolvedValue({
+      schemaVersion: 1,
+      path: snapshot.changes[0].pathBytes,
+      lines: [
+        {
+          line: 1,
+          commitOid: "abcdef123456",
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          content: "modified",
+        },
+      ],
+    });
+    mockedGetPathHistory.mockResolvedValue({
+      schemaVersion: 1,
+      path: snapshot.changes[0].pathBytes,
+      isDirectory: false,
+      entries: [
+        {
+          oid: "abcdef123456",
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          subject: "Update tracked file",
+          path: snapshot.changes[0].pathBytes,
+          status: "M",
         },
       ],
     });
@@ -3142,6 +3178,49 @@ describe("App", () => {
         "before refactor",
         [snapshot.changes[0].pathBytes],
       ),
+    );
+  });
+
+  it("inspects blame and file history from the changed-file context menu", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    render(<App />);
+
+    const trackedRow = await screen.findByRole("button", { name: /tracked\.txt/ });
+    fireEvent.contextMenu(trackedRow, { clientX: 40, clientY: 50 });
+    const actions = screen.getByRole("menu", { name: "File actions" });
+    fireEvent.click(within(actions).getByRole("menuitem", { name: "Blame file" }));
+
+    const blameDialog = await screen.findByRole("dialog", { name: "Blame file" });
+    expect(within(blameDialog).getByText("modified")).toBeInTheDocument();
+    fireEvent.click(within(blameDialog).getByRole("button", { name: "Close path inspector" }));
+
+    fireEvent.contextMenu(trackedRow, { clientX: 40, clientY: 50 });
+    fireEvent.click(
+      within(screen.getByRole("menu", { name: "File actions" })).getByRole(
+        "menuitem",
+        { name: "File history" },
+      ),
+    );
+    const historyDialog = await screen.findByRole("dialog", { name: "File history" });
+    expect(within(historyDialog).getByText("Update tracked file")).toBeInTheDocument();
+    fireEvent.change(within(historyDialog).getByRole("textbox", { name: "Filter path history" }), {
+      target: { value: "missing" },
+    });
+    expect(within(historyDialog).queryByText("Update tracked file")).not.toBeInTheDocument();
+
+    fireEvent.change(within(historyDialog).getByRole("textbox", { name: "Filter path history" }), {
+      target: { value: "" },
+    });
+    fireEvent.click(within(historyDialog).getByRole("button", { name: /abcdef12/ }));
+    expect(mockedUpdateTab).toHaveBeenCalledWith(
+      snapshot.repository.id,
+      "history",
+      "tracked.txt",
+      "unstaged",
+      280,
+      undefined,
+      "abcdef123456",
+      undefined,
     );
   });
 

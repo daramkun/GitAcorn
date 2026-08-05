@@ -55,11 +55,11 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 ### P0.3 Blame과 File/Directory History
 
-- [ ] 선택 commit 또는 working tree 기준 file blame
-- [ ] line별 author, commit, timestamp 표시와 commit graph 이동
-- [ ] rename 추적을 포함한 file history
-- [ ] directory/path history와 path filter
-- [ ] 큰 파일에서 취소 가능한 비동기 로딩과 가상화
+- [x] 선택 commit 또는 working tree 기준 file blame
+- [x] line별 author, commit, timestamp 표시와 commit graph 이동
+- [x] rename 추적을 포함한 file history
+- [x] directory/path history와 path filter
+- [x] 큰 파일에서 취소 가능한 비동기 로딩과 가상화
 
 완료 조건:
 
@@ -144,7 +144,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | --- | --- | --- |
 | P0.1 Operation recovery와 Undo/Redo | 완료 | commit/checkout/branch 삭제/clean rebase/reset/interactive rebase Undo/Redo, reflog ref 복구, recovery schema allowlist 검증 |
 | P0.2 Cherry-pick, Revert, Reset | 완료 | 단일·다중 cherry-pick, revert continue/abort, cherry-pick skip, soft/mixed/hard reset preview와 P0.1 recovery 연결 |
-| P0.3 Blame과 File/Directory History | 예정 | 읽기 전용 기능으로 병렬 설계 가능 |
+| P0.3 Blame과 File/Directory History | 완료 | byte-safe blame, rename-aware file/directory history, path filter와 비동기 검사기 |
 | P0.4 Worktree 전체 lifecycle | 예정 | 현재 조회·전환 기능 확장 |
 | P0.5 고급 Diff와 비교 | 예정 | 기존 partial staging renderer 확장 |
 | P0.6 Git LFS와 서명 상태 | 예정 | 시스템 Git·credential 정책 유지 |

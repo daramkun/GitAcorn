@@ -5,8 +5,8 @@ use app_core::{
     RemoteRequest, RemoteTagSummary, RepositorySidebar,
 };
 use git_domain::{
-    CommitSummary, DiffDocument, DiffLineKind, FileChange, HeadState, HistoryPage,
-    RepositoryOperation, RepositorySnapshot,
+    BlameLine, CommitSummary, DiffDocument, DiffLineKind, FileBlame, FileChange, HeadState,
+    HistoryPage, PathHistory, PathHistoryEntry, RepositoryOperation, RepositorySnapshot,
 };
 use persistence::OperationRecord;
 use serde::{Deserialize, Serialize};
@@ -929,6 +929,106 @@ impl From<ReflogEntry> for ReflogEntryDto {
             subject: entry.subject,
             body: entry.body,
             reflog_only: entry.reflog_only,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameLineDto {
+    pub line: usize,
+    pub commit_oid: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub authored_at: i64,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileBlameDto {
+    pub schema_version: u16,
+    pub path: Vec<u8>,
+    pub revision: Option<String>,
+    pub lines: Vec<BlameLineDto>,
+}
+
+impl From<BlameLine> for BlameLineDto {
+    fn from(line: BlameLine) -> Self {
+        Self {
+            line: line.line,
+            commit_oid: line.commit_oid,
+            author_name: line.author_name,
+            author_email: line.author_email,
+            authored_at: line.authored_at,
+            content: line.content,
+        }
+    }
+}
+
+impl From<FileBlame> for FileBlameDto {
+    fn from(blame: FileBlame) -> Self {
+        Self {
+            schema_version: 1,
+            path: blame.path,
+            revision: blame.revision,
+            lines: blame.lines.into_iter().map(BlameLineDto::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathHistoryEntryDto {
+    pub oid: String,
+    pub parent_oid: Option<String>,
+    pub author_name: String,
+    pub author_email: String,
+    pub authored_at: i64,
+    pub subject: String,
+    pub path: Vec<u8>,
+    pub previous_path: Option<Vec<u8>>,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathHistoryDto {
+    pub schema_version: u16,
+    pub path: Vec<u8>,
+    pub is_directory: bool,
+    pub entries: Vec<PathHistoryEntryDto>,
+    pub next_cursor: Option<String>,
+}
+
+impl From<PathHistoryEntry> for PathHistoryEntryDto {
+    fn from(entry: PathHistoryEntry) -> Self {
+        Self {
+            oid: entry.oid,
+            parent_oid: entry.parent_oid,
+            author_name: entry.author_name,
+            author_email: entry.author_email,
+            authored_at: entry.authored_at,
+            subject: entry.subject,
+            path: entry.path,
+            previous_path: entry.previous_path,
+            status: entry.status,
+        }
+    }
+}
+
+impl From<PathHistory> for PathHistoryDto {
+    fn from(history: PathHistory) -> Self {
+        Self {
+            schema_version: 1,
+            path: history.path,
+            is_directory: history.is_directory,
+            entries: history
+                .entries
+                .into_iter()
+                .map(PathHistoryEntryDto::from)
+                .collect(),
+            next_cursor: history.next_cursor,
         }
     }
 }

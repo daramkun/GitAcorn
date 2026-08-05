@@ -46,6 +46,46 @@ fn commit_independent_file(fixture: &TestRepository, path: &str, subject: &str) 
 }
 
 #[test]
+fn reads_blame_and_tracks_renames_in_file_and_directory_history() {
+    let fixture = TestRepository::init();
+    fs::create_dir_all(fixture.path().join("src")).expect("create source directory");
+    fixture.write("src/original.txt", "first\nsecond\n");
+    fixture.git(["add", "src/original.txt"]);
+    fixture.git(["commit", "-m", "add source file"]);
+    fixture.write("src/original.txt", "first\nupdated\n");
+    fixture.git(["add", "src/original.txt"]);
+    fixture.git(["commit", "-m", "update source file"]);
+    fixture.git(["mv", "src/original.txt", "src/renamed.txt"]);
+    fixture.git(["commit", "-m", "rename source file"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let blame = service
+        .blame(&repository, b"src/renamed.txt", None)
+        .expect("blame current file");
+    assert_eq!(blame.path, b"src/renamed.txt");
+    assert_eq!(blame.lines.len(), 2);
+    assert_eq!(blame.lines[1].content, "updated");
+
+    let history = service
+        .path_history(&repository, b"src/renamed.txt", false, None, 20)
+        .expect("file history");
+    assert!(!history.entries.is_empty());
+    assert!(
+        history
+            .entries
+            .iter()
+            .any(|entry| entry.previous_path.as_deref() == Some(b"src/original.txt"))
+    );
+
+    let directory_history = service
+        .path_history(&repository, b"src", true, Some("source"), 20)
+        .expect("directory history");
+    assert!(directory_history.is_directory);
+    assert!(!directory_history.entries.is_empty());
+}
+
+#[test]
 fn soft_head_recovery_undoes_and_redoes_a_commit_without_losing_the_index() {
     let fixture = TestRepository::init();
     let before = commit_independent_file(&fixture, "baseline.txt", "baseline");

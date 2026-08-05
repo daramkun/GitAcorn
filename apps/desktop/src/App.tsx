@@ -51,6 +51,8 @@ import {
   dropStash,
   fastForwardBranch,
   getDiff,
+  getFileBlame,
+  getPathHistory,
   getCommitDiff,
   getCommitFiles,
   getHistoryPage,
@@ -97,6 +99,8 @@ import {
   type DiffDto,
   type DiffTarget,
   type FileChangeDto,
+  type FileBlameDto,
+  type PathHistoryDto,
   type GitRemoteDto,
   type GitIdentitySettingsDto,
   type RepositoryGitIdentityDto,
@@ -171,6 +175,19 @@ type ChangeViewMode = "list" | "tree";
 type ChangeListEntry =
   | { kind: "folder"; path: string; name: string; depth: number }
   | { kind: "file"; change: FileChangeDto; depth: number };
+
+type PathInspectorState =
+  | { mode: "blame"; path: FileChangeDto; loading: boolean; data?: FileBlameDto; error?: string }
+  | { mode: "history"; path: string; directory: boolean; loading: boolean; data?: PathHistoryDto; error?: string };
+
+function decodePathBytes(bytes: number[] | undefined, fallback = "") {
+  if (!bytes) return fallback;
+  try {
+    return new TextDecoder().decode(new Uint8Array(bytes));
+  } catch {
+    return fallback;
+  }
+}
 
 type ReferenceContextMenu =
   | { x: number; y: number; kind: "branch"; name: string; upstream?: string }
@@ -2631,6 +2648,9 @@ export function App() {
                   }
                 }
                 onError={reportError}
+                onOpenHistoryCommit={(oid) =>
+                  updateActiveTab({ page: "history", selectedCommit: oid })
+                }
               />
             ) : (
               <ChangesEmpty onOpen={handleOpenRepository} opening={opening || sessionLoading} />
@@ -5231,6 +5251,7 @@ function ChangesView({
   onSelect,
   onSnapshot,
   onError,
+  onOpenHistoryCommit,
 }: {
   snapshot: RepositorySnapshotDto;
   refreshing: boolean;
@@ -5241,6 +5262,7 @@ function ChangesView({
   onSelect: (path: string, target: DiffTarget) => void;
   onSnapshot: (snapshot: RepositorySnapshotDto) => void;
   onError: (error: unknown) => void;
+  onOpenHistoryCommit: (oid: string) => void;
 }) {
   const unstaged = useMemo(
     () =>
@@ -5279,6 +5301,9 @@ function ChangesView({
     y: number;
     target: DiffTarget;
   }>();
+  const [pathInspector, setPathInspector] = useState<PathInspectorState>();
+  const [pathHistoryQuery, setPathHistoryQuery] = useState("");
+  const blameRequestRef = useRef(0);
   const [stashCreateDialog, setStashCreateDialog] = useState<{
     paths: number[][];
     count: number;
@@ -5603,6 +5628,51 @@ function ChangesView({
 
   function selectionFor(target: DiffTarget) {
     return target === "staged" ? stagedSelection : unstagedSelection;
+  }
+
+  function openBlame(path: FileChangeDto) {
+    const requestId = ++blameRequestRef.current;
+    setChangeContextMenu(undefined);
+    setPathInspector({ mode: "blame", path, loading: true });
+    getFileBlame(snapshot.repository.id, path.pathBytes)
+      .then((data) => {
+        if (requestId === blameRequestRef.current) {
+          setPathInspector({ mode: "blame", path, loading: false, data });
+        }
+      })
+      .catch((reason: unknown) => {
+        if (requestId === blameRequestRef.current) {
+          setPathInspector({
+            mode: "blame",
+            path,
+            loading: false,
+            error: normalizeAppError(reason).message,
+          });
+        }
+      });
+  }
+
+  function openPathHistory(path: string, directory: boolean) {
+    setChangeContextMenu(undefined);
+    setPathHistoryQuery("");
+    setPathInspector({ mode: "history", path, directory, loading: true });
+    getPathHistory(
+      snapshot.repository.id,
+      Array.from(new TextEncoder().encode(path)),
+      directory,
+      undefined,
+      100,
+    )
+      .then((data) => setPathInspector({ mode: "history", path, directory, loading: false, data }))
+      .catch((reason: unknown) =>
+        setPathInspector({
+          mode: "history",
+          path,
+          directory,
+          loading: false,
+          error: normalizeAppError(reason).message,
+        }),
+      );
   }
 
   function changesFor(target: DiffTarget) {
@@ -6419,6 +6489,114 @@ function ChangesView({
           )}
         </aside>
       </section>
+      {pathInspector && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => setPathInspector(undefined)}
+        >
+          <section
+            className="settings-modal path-inspector-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="path-inspector-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div>
+                <h2 id="path-inspector-title">
+                  {pathInspector.mode === "blame"
+                    ? t("Blame file")
+                    : pathInspector.directory
+                      ? t("Directory history")
+                      : t("File history")}
+                </h2>
+                <small>
+                  {pathInspector.mode === "blame"
+                    ? pathInspector.path.path
+                    : pathInspector.path}
+                </small>
+              </div>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close path inspector")}
+                onClick={() => setPathInspector(undefined)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body path-inspector-body">
+              {pathInspector.loading ? (
+                <div className="history-state" role="status">{t("Loading path history…")}</div>
+              ) : pathInspector.error ? (
+                <div className="error-banner" role="alert">
+                  <strong>{t("Path inspection failed")}</strong>
+                  <span>{pathInspector.error}</span>
+                </div>
+              ) : pathInspector.mode === "blame" ? (
+                <div className="path-blame-table" role="table" aria-label={t("Blame lines")}>
+                  {pathInspector.data?.lines.slice(0, 500).map((line) => (
+                    <div className="path-blame-row" role="row" key={`${line.line}:${line.commitOid}`}>
+                      <code>{line.line}</code>
+                      <button
+                        className="path-blame-commit"
+                        type="button"
+                        onClick={() => onOpenHistoryCommit(line.commitOid)}
+                      >
+                        {line.commitOid.slice(0, 8)} · {line.authorName}
+                      </button>
+                      <span>{line.content || " "}</span>
+                    </div>
+                  ))}
+                  {(pathInspector.data?.lines.length ?? 0) > 500 && (
+                    <p className="history-state">{t("Showing the first 500 lines for responsiveness.")}</p>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <label className="path-history-filter">
+                    {t("Filter path history")}
+                    <input
+                      className="control-input"
+                      value={pathHistoryQuery}
+                      onChange={(event) => setPathHistoryQuery(event.currentTarget.value)}
+                      placeholder={t("Path or commit subject")}
+                    />
+                  </label>
+                  <div className="path-history-list" role="list">
+                    {pathInspector.data?.entries
+                      .filter((entry) => {
+                        const query = pathHistoryQuery.trim().toLocaleLowerCase();
+                        if (!query) return true;
+                        return (
+                          decodePathBytes(entry.path).toLocaleLowerCase().includes(query) ||
+                          entry.subject.toLocaleLowerCase().includes(query)
+                        );
+                      })
+                      .map((entry) => (
+                        <article className="path-history-entry" role="listitem" key={`${entry.oid}:${decodePathBytes(entry.path)}`}>
+                          <div>
+                            <button
+                              className="path-history-commit"
+                              type="button"
+                              onClick={() => onOpenHistoryCommit(entry.oid)}
+                            >
+                              {entry.oid.slice(0, 8)}
+                            </button>
+                            <strong>{entry.subject}</strong>
+                          </div>
+                          <span>{entry.status} · {decodePathBytes(entry.path)}</span>
+                          {entry.previousPath && <small>{t("Renamed from {path}", { path: decodePathBytes(entry.previousPath) })}</small>}
+                        </article>
+                      ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
       {changeContextMenu && (
         <div
           className="remote-context-menu"
@@ -6442,6 +6620,39 @@ function ChangesView({
               ? t("Unstage file")
               : t("Stage file")}
           </button>
+          {selectionFor(changeContextMenu.target).selected.size === 1 && (() => {
+            const selectedPath = [...selectionFor(changeContextMenu.target).selected][0];
+            const selectedChange = snapshot.changes.find((change) => change.path === selectedPath);
+            if (!selectedChange) return null;
+            const directory = selectedChange.path.includes("/")
+              ? selectedChange.path.slice(0, selectedChange.path.lastIndexOf("/"))
+              : ".";
+            return (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => openBlame(selectedChange)}
+                >
+                  {t("Blame file")}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => openPathHistory(selectedChange.path, false)}
+                >
+                  {t("File history")}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => openPathHistory(directory, true)}
+                >
+                  {t("Directory history")}
+                </button>
+              </>
+            );
+          })()}
           {changeContextMenu.target === "unstaged" && (
             <button
               type="button"
