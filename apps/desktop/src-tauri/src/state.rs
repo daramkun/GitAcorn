@@ -1181,12 +1181,24 @@ impl ApplicationState {
         })
     }
 
+    #[allow(dead_code)]
     pub fn history_mutation_with_recovery(
         &self,
         repo_id: &str,
         revision: u64,
         operation: HistoryOperation,
         oids: &[String],
+    ) -> Result<(RepositorySnapshot, Option<OperationRecoveryData>), AppError> {
+        self.history_mutation_with_recovery_and_mainline(repo_id, revision, operation, oids, None)
+    }
+
+    pub fn history_mutation_with_recovery_and_mainline(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        operation: HistoryOperation,
+        oids: &[String],
+        mainline: Option<usize>,
     ) -> Result<(RepositorySnapshot, Option<OperationRecoveryData>), AppError> {
         let repo_id = parse_repo_id(repo_id)?;
         self.scheduler.write(repo_id, || {
@@ -1205,8 +1217,14 @@ impl ApplicationState {
             let before_head_oid = self.service.current_head_oid(&descriptor)?;
             let before_head_ref = self.service.current_head_ref(&descriptor)?;
             match operation {
-                HistoryOperation::CherryPick => self.service.cherry_pick(&descriptor, oids)?,
-                HistoryOperation::Revert => self.service.revert(&descriptor, oids)?,
+                HistoryOperation::CherryPick => {
+                    self.service
+                        .cherry_pick_with_mainline(&descriptor, oids, mainline)?
+                }
+                HistoryOperation::Revert => {
+                    self.service
+                        .revert_with_mainline(&descriptor, oids, mainline)?
+                }
             }
             let after_head_oid = self.service.current_head_oid(&descriptor)?;
             let after_head_ref = self.service.current_head_ref(&descriptor)?;

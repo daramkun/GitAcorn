@@ -760,12 +760,14 @@ export function mutateHistory(
   revision: number,
   operation: HistoryMutation,
   oids: string[],
+  mainline?: number,
 ): Promise<RepositorySnapshotDto> {
   return invoke<RepositorySnapshotDto>("history_mutate", {
     repoId,
     revision,
     operation,
     oids,
+    mainline,
   });
 }
 

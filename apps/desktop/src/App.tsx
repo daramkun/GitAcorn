@@ -164,6 +164,7 @@ type ResetMode = "soft" | "mixed" | "hard";
 type HistoryMutationPreview = {
   operation: HistoryMutation;
   commits: HistoryCommit[];
+  mainline?: number;
 };
 type AppInfoState =
   | { status: "loading" }
@@ -8754,11 +8755,14 @@ function HistoryView({
     const selectedCommits = visibleCommits.filter((entry) =>
       historySelection.selected.has(entry.oid),
     );
+    const commits = selectedCommits.some((entry) => entry.oid === commit.oid)
+      ? selectedCommits
+      : [commit];
+    const mergeCommit = commits.find((entry) => entry.parents.length > 1);
     setHistoryMutationPreview({
       operation,
-      commits: selectedCommits.some((entry) => entry.oid === commit.oid)
-        ? selectedCommits
-        : [commit],
+      commits,
+      mainline: mergeCommit ? 1 : undefined,
     });
   }
 
@@ -8767,12 +8771,15 @@ function HistoryView({
     onClearError();
     setHistoryMutationBusy(true);
     try {
-      const next = await mutateHistory(
+      const mutationArgs = [
         snapshot.repository.id,
         snapshot.revision,
         historyMutationPreview.operation,
         historyMutationPreview.commits.map((commit) => commit.oid),
-      );
+      ] as const;
+      const next = historyMutationPreview.mainline
+        ? await mutateHistory(...mutationArgs, historyMutationPreview.mainline)
+        : await mutateHistory(...mutationArgs);
       onSnapshot(next);
       setHistoryMutationPreview(undefined);
     } catch (reason: unknown) {
@@ -9571,7 +9578,6 @@ function HistoryView({
               Boolean(snapshot.operation) ||
               snapshot.head.kind !== "branch" ||
               snapshot.head.oid === rebaseMenu.commit.oid ||
-              rebaseMenu.commit.parents.length > 1 ||
               Boolean(rebaseMenu.commit.remoteOnly) ||
               Boolean(rebaseMenu.commit.reflogOnly)
             }
@@ -9588,7 +9594,6 @@ function HistoryView({
               rebaseBusy ||
               Boolean(snapshot.operation) ||
               snapshot.head.kind !== "branch" ||
-              rebaseMenu.commit.parents.length > 1 ||
               Boolean(rebaseMenu.commit.remoteOnly) ||
               Boolean(rebaseMenu.commit.reflogOnly)
             }
@@ -9656,7 +9661,29 @@ function HistoryView({
                 <p>{t("The worktree is clean. Git may still stop for conflicts; resolve and stage files before continuing.")}</p>
               )}
               {historyMutationPreview.commits.some((commit) => commit.parents.length > 1) && (
-                <p className="rebase-warning">{t("Merge commits are not supported by this operation yet.")}</p>
+                <label className="history-mutation-mainline">
+                  {t("Mainline parent")}
+                  <select
+                    className="control-input"
+                    aria-label={t("Mainline parent")}
+                    value={historyMutationPreview.mainline ?? 1}
+                    onChange={(event) =>
+                      setHistoryMutationPreview((current) =>
+                        current ? { ...current, mainline: Number(event.currentTarget.value) } : current,
+                      )
+                    }
+                  >
+                    {Array.from(
+                      { length: Math.max(...historyMutationPreview.commits.map((commit) => commit.parents.length)) - 1 },
+                      (_, index) => (
+                        <option key={index + 1} value={index + 1}>
+                          {t("Parent {number}", { number: index + 1 })}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                  <small>{t("The selected parent is used to replay merge commits.")}</small>
+                </label>
               )}
               <ul className="history-mutation-commits">
                 {historyMutationPreview.commits.map((commit) => (
@@ -9680,7 +9707,8 @@ function HistoryView({
                   disabled={
                     historyMutationBusy ||
                     snapshot.changes.length > 0 ||
-                    historyMutationPreview.commits.some((commit) => commit.parents.length > 1)
+                    historyMutationPreview.commits.some((commit) => commit.parents.length > 1) &&
+                    !historyMutationPreview.mainline
                   }
                   onClick={() => {
                     if (

@@ -206,6 +206,58 @@ fn cherry_pick_and_revert_round_trip_clean_commits() {
 }
 
 #[test]
+fn supports_merge_and_empty_history_operations_with_mainline() {
+    let fixture = TestRepository::init();
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    fixture.git(["checkout", "-b", "feature"]);
+    fixture.write("feature.txt", "feature\n");
+    fixture.git(["add", "feature.txt"]);
+    fixture.git(["commit", "-m", "feature change"]);
+    fixture.git(["checkout", "main"]);
+    fixture.write("main.txt", "main\n");
+    fixture.git(["add", "main.txt"]);
+    fixture.git(["commit", "-m", "main change"]);
+    fixture.git(["merge", "--no-ff", "feature", "-m", "merge change"]);
+    let merge_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("merge oid")
+        .trim()
+        .to_owned();
+    let main_parent = String::from_utf8(fixture.git_output(["rev-parse", "HEAD^1"]))
+        .expect("main parent")
+        .trim()
+        .to_owned();
+
+    fixture.git(["checkout", "-b", "merge-target", &main_parent]);
+    assert!(
+        service
+            .cherry_pick(&repository, std::slice::from_ref(&merge_oid))
+            .is_err()
+    );
+    service
+        .cherry_pick_with_mainline(&repository, std::slice::from_ref(&merge_oid), Some(1))
+        .expect("cherry-pick merge commit");
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("feature.txt"))
+            .expect("feature file")
+            .replace("\r\n", "\n"),
+        "feature\n"
+    );
+
+    fixture.git(["checkout", "-b", "empty-source", &main_parent]);
+    fixture.git(["commit", "--allow-empty", "-m", "empty change"]);
+    let empty_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("empty oid")
+        .trim()
+        .to_owned();
+    fixture.git(["checkout", "-b", "empty-target", &main_parent]);
+    service
+        .cherry_pick(&repository, std::slice::from_ref(&empty_oid))
+        .expect("cherry-pick empty commit");
+}
+
+#[test]
 fn cherry_pick_conflict_exposes_operation_and_supports_continue_and_abort() {
     let fixture = TestRepository::init();
     fixture.write("shared.txt", "base\n");

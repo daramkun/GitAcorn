@@ -1023,6 +1023,60 @@ describe("App", () => {
     confirm.mockRestore();
   });
 
+  it("requires and submits a mainline parent for merge cherry-picks", async () => {
+    const parentOne = "1".repeat(40);
+    const parentTwo = "2".repeat(40);
+    const mergeOid = "3".repeat(40);
+    const cleanSnapshot = {
+      ...snapshot,
+      changes: [],
+      head: { ...snapshot.head, oid: parentOne },
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], page: "history", snapshot: cleanSnapshot }],
+    });
+    mockedGetSnapshot.mockResolvedValue(cleanSnapshot);
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [{
+        oid: mergeOid,
+        parents: [parentOne, parentTwo],
+        authorName: "Ada",
+        authorEmail: "ada@example.com",
+        authoredAt: 1_700_000_000,
+        subject: "Merge feature",
+        body: "",
+        references: ["HEAD -> refs/heads/main"],
+        lane: 0,
+        laneCount: 1,
+      }],
+    });
+    mockedMutateHistory.mockResolvedValue({ ...snapshot, revision: 2, changes: [] });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    const mergeButton = await screen.findByRole("button", { name: /Merge feature/ });
+    fireEvent.contextMenu(mergeButton);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Cherry-pick this commit…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Cherry-pick commit" });
+    expect(within(dialog).getByRole("combobox", { name: "Mainline parent" })).toHaveValue("1");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cherry-pick commit" }));
+    await waitFor(() =>
+      expect(mockedMutateHistory).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "cherry-pick",
+        [mergeOid],
+        1,
+      ),
+    );
+    confirm.mockRestore();
+  });
+
   it("clears a previous interactive rebase error when retrying", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     const baseOid = "1".repeat(40);

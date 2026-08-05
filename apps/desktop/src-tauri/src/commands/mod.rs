@@ -930,6 +930,7 @@ pub async fn history_mutate(
     revision: u64,
     operation: String,
     oids: Vec<String>,
+    mainline: Option<usize>,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<RepositorySnapshotDto> {
     let history_operation = parse_history_operation(&operation)?;
@@ -942,7 +943,13 @@ pub async fn history_mutate(
         HistoryOperation::Revert => "Reverted commits",
     };
     recorded_recoverable_mutation(&state, &repo_id, action, summary, || {
-        state.history_mutation_with_recovery(&repo_id, revision, history_operation, &oids)
+        state.history_mutation_with_recovery_and_mainline(
+            &repo_id,
+            revision,
+            history_operation,
+            &oids,
+            mainline,
+        )
     })
     .await
 }

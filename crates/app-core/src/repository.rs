@@ -1369,8 +1369,27 @@ impl RepositoryService {
         repository: &RepositoryDescriptor,
         oids: &[String],
     ) -> Result<(), AppError> {
-        self.validate_linear_history_commits(repository, oids)?;
-        let mut args = vec![OsString::from("cherry-pick"), OsString::from("--no-edit")];
+        self.cherry_pick_with_mainline(repository, oids, None)
+    }
+
+    pub fn cherry_pick_with_mainline(
+        &self,
+        repository: &RepositoryDescriptor,
+        oids: &[String],
+        mainline: Option<usize>,
+    ) -> Result<(), AppError> {
+        self.validate_history_commits(repository, oids, mainline)?;
+        let mut args = vec![
+            OsString::from("cherry-pick"),
+            OsString::from("--no-edit"),
+            OsString::from("--allow-empty"),
+        ];
+        if let Some(mainline) = mainline {
+            args.extend([
+                OsString::from("--mainline"),
+                OsString::from(mainline.to_string()),
+            ]);
+        }
         args.extend(oids.iter().map(OsString::from));
         self.run_history_operation(repository, args, HistoryOperation::CherryPick)
     }
@@ -1380,8 +1399,23 @@ impl RepositoryService {
         repository: &RepositoryDescriptor,
         oids: &[String],
     ) -> Result<(), AppError> {
-        self.validate_linear_history_commits(repository, oids)?;
+        self.revert_with_mainline(repository, oids, None)
+    }
+
+    pub fn revert_with_mainline(
+        &self,
+        repository: &RepositoryDescriptor,
+        oids: &[String],
+        mainline: Option<usize>,
+    ) -> Result<(), AppError> {
+        self.validate_history_commits(repository, oids, mainline)?;
         let mut args = vec![OsString::from("revert"), OsString::from("--no-edit")];
+        if let Some(mainline) = mainline {
+            args.extend([
+                OsString::from("--mainline"),
+                OsString::from(mainline.to_string()),
+            ]);
+        }
         args.extend(oids.iter().map(OsString::from));
         self.run_history_operation(repository, args, HistoryOperation::Revert)
     }
@@ -1421,10 +1455,11 @@ impl RepositoryService {
         self.git_unit(repository, ["cherry-pick", "--skip"])
     }
 
-    fn validate_linear_history_commits(
+    fn validate_history_commits(
         &self,
         repository: &RepositoryDescriptor,
         oids: &[String],
+        mainline: Option<usize>,
     ) -> Result<(), AppError> {
         if oids.is_empty() {
             return Err(AppError::InvalidRequest(
@@ -1439,10 +1474,20 @@ impl RepositoryService {
         for oid in oids {
             validate_object_id(oid)?;
             let parents = self.git_text(repository, ["rev-list", "--parents", "-n", "1", oid])?;
-            if parents.split_whitespace().count() != 2 {
+            let parent_count = parents.split_whitespace().count().saturating_sub(1);
+            if parent_count > 1 && mainline.is_none() {
                 return Err(AppError::InvalidRequest(
-                    "Merge commits are not supported by this operation yet".to_owned(),
+                    "A mainline parent is required for merge commits".to_owned(),
                 ));
+            }
+            if parent_count > 1 {
+                if let Some(mainline) = mainline {
+                    if mainline == 0 || mainline > parent_count {
+                        return Err(AppError::InvalidRequest(format!(
+                            "Mainline parent must be between 1 and {parent_count}"
+                        )));
+                    }
+                }
             }
         }
         Ok(())

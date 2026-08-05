@@ -543,6 +543,9 @@ const korean = {
   "Minified content detected. Word wrap stays opt-in to keep rendering responsive.": "Minified 콘텐츠가 감지되었습니다. 렌더링 반응성을 위해 줄 바꿈은 선택할 때만 적용됩니다.",
   "Large diff protected with virtualized rendering and bounded search.": "큰 diff는 가상 렌더링과 제한된 검색으로 보호됩니다.",
   "Tag signature": "태그 서명",
+  "Mainline parent": "메인라인 부모",
+  "Parent {number}": "부모 {number}",
+  "The selected parent is used to replay merge commits.": "선택한 부모를 기준으로 병합 커밋을 다시 적용합니다.",
 } as const;
 
 export type TranslationKey = keyof typeof korean;
