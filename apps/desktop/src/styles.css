@@ -1965,6 +1965,27 @@ button:disabled {
   text-underline-offset: 2px;
 }
 
+.diff-word-change {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: inherit;
+  text-decoration: underline wavy color-mix(in srgb, var(--accent) 72%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.diff-protection-banner {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
 .diff-lines.split-diff {
   min-width: 760px;
 }

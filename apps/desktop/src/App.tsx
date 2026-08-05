@@ -1,5 +1,6 @@
 import {
   Children,
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -3150,9 +3151,9 @@ export function App() {
                       {t("{count} tracked LFS files", { count: lfsStatus.tracked.length })}
                     </p>
                     <div className="remote-form-actions">
-                      <button type="button" onClick={() => handleLfs("fetch")}>{t("LFS fetch")}</button>
-                      <button type="button" onClick={() => handleLfs("pull")}>{t("LFS pull")}</button>
-                      <button type="button" onClick={() => handleLfs("prune")}>{t("LFS prune")}</button>
+                      <button className="control-button" type="button" onClick={() => handleLfs("fetch")}>{t("LFS fetch")}</button>
+                      <button className="control-button" type="button" onClick={() => handleLfs("pull")}>{t("LFS pull")}</button>
+                      <button className="control-button" type="button" onClick={() => handleLfs("prune")}>{t("LFS prune")}</button>
                     </div>
                     <ul className="lfs-file-list">
                       {lfsStatus.tracked.slice(0, 20).map((file) => (
@@ -3167,13 +3168,13 @@ export function App() {
                       {lfsLocks.length === 0 ? <small>{t("No LFS locks.")}</small> : lfsLocks.map((lock) => (
                         <div className="lfs-lock-row" key={lock.id}>
                           <span>{lock.path} · {lock.owner}</span>
-                          <button type="button" onClick={() => {
+                          <button className="control-button" type="button" onClick={() => {
                             if (!activeRepoId) return;
                             void unlockLfsPath(activeRepoId, undefined, lock.id).then(setLfsLocks).catch((reason: unknown) => setLfsMessage(normalizeAppError(reason).message));
                           }}>{t("Unlock")}</button>
                         </div>
                       ))}
-                      <button type="button" onClick={() => {
+                      <button className="control-button" type="button" onClick={() => {
                         if (!activeRepoId) return;
                         const path = window.prompt(t("LFS lock path"));
                         if (!path?.trim()) return;
@@ -3192,10 +3193,10 @@ export function App() {
                   <div className="signature-settings-grid">
                     <label className="settings-toggle-row"><span>{t("Sign commits")}</span><input type="checkbox" checked={signatureSettings.commitSign} onChange={(event) => setSignatureSettings((current) => current && { ...current, commitSign: event.target.checked })} /></label>
                     <label className="settings-toggle-row"><span>{t("Sign tags")}</span><input type="checkbox" checked={signatureSettings.tagSign} onChange={(event) => setSignatureSettings((current) => current && { ...current, tagSign: event.target.checked })} /></label>
-                    <label>{t("Signature format")}<select value={signatureSettings.format ?? ""} onChange={(event) => setSignatureSettings((current) => current && { ...current, format: event.target.value || null })}><option value="">{t("System default")}</option><option value="openpgp">OpenPGP</option><option value="ssh">SSH</option><option value="x509">X.509</option></select></label>
-                    <label>{t("Signing key")}<input value={signatureSettings.signingKey ?? ""} onChange={(event) => setSignatureSettings((current) => current && { ...current, signingKey: event.target.value || null })} /></label>
-                    <label>{t("SSH allowed signers file")}<input value={signatureSettings.sshAllowedSignersFile ?? ""} onChange={(event) => setSignatureSettings((current) => current && { ...current, sshAllowedSignersFile: event.target.value || null })} /></label>
-                    <button type="button" disabled={signatureSaving} onClick={() => {
+                    <label>{t("Signature format")}<select className="control-input" value={signatureSettings.format ?? ""} onChange={(event) => setSignatureSettings((current) => current && { ...current, format: event.target.value || null })}><option value="">{t("System default")}</option><option value="openpgp">OpenPGP</option><option value="ssh">SSH</option><option value="x509">X.509</option></select></label>
+                    <label>{t("Signing key")}<input className="control-input" value={signatureSettings.signingKey ?? ""} onChange={(event) => setSignatureSettings((current) => current && { ...current, signingKey: event.target.value || null })} /></label>
+                    <label>{t("SSH allowed signers file")}<input className="control-input" value={signatureSettings.sshAllowedSignersFile ?? ""} onChange={(event) => setSignatureSettings((current) => current && { ...current, sshAllowedSignersFile: event.target.value || null })} /></label>
+                    <button className="control-button control-button--primary" type="button" disabled={signatureSaving} onClick={() => {
                       if (!activeRepoId || !signatureSettings) return;
                       setSignatureSaving(true);
                       void updateSignatureSettings(activeRepoId, signatureSettings).then(setSignatureSettings).catch((reason: unknown) => setLfsMessage(normalizeAppError(reason).message)).finally(() => setSignatureSaving(false));
@@ -7924,6 +7925,34 @@ export function highlightCodeLine(code: string): React.ReactNode[] {
   return nodes;
 }
 
+function diffWordTokens(value: string): string[] {
+  return value.match(/\s+|[^\s]+/g) ?? [];
+}
+
+export function renderWordDiffLine(value: string, peerValue?: string): React.ReactNode[] {
+  if (!peerValue) return highlightCodeLine(value);
+  const tokens = diffWordTokens(value);
+  const peerTokens = diffWordTokens(peerValue);
+  const peerCounts = new Map<string, number>();
+  for (const token of peerTokens) {
+    peerCounts.set(token, (peerCounts.get(token) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  return tokens.map((token, index) => {
+    const count = seen.get(token) ?? 0;
+    seen.set(token, count + 1);
+    const unchanged = count < (peerCounts.get(token) ?? 0);
+    const content = highlightCodeLine(token);
+    return unchanged ? (
+      <Fragment key={`word-${index}`}>{content}</Fragment>
+    ) : (
+      <mark key={`word-${index}`} className="diff-word-change">
+        {content}
+      </mark>
+    );
+  });
+}
+
 function VirtualDiffLines({
   hunkIndex,
   lines,
@@ -7979,7 +8008,33 @@ function VirtualDiffLines({
 
   const start = virtual ? Math.max(0, Math.floor(scrollTop / rowHeight) - 8) : 0;
   const end = virtual ? Math.min(lines.length, start + 80) : lines.length;
-  const renderLine = (line: (typeof lines)[number] | undefined, side?: "left" | "right") => {
+  const wordPeers = useMemo(() => {
+    const peers = new Map<number, string>();
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index]?.kind !== "deletion") continue;
+      const deletions: Array<(typeof lines)[number]> = [];
+      const additions: Array<(typeof lines)[number]> = [];
+      while (lines[index]?.kind === "deletion") deletions.push(lines[index++]);
+      while (lines[index]?.kind === "addition") additions.push(lines[index++]);
+      const count = Math.min(deletions.length, additions.length);
+      for (let pair = 0; pair < count; pair += 1) {
+        peers.set(deletions[pair].index, additions[pair].content);
+        peers.set(additions[pair].index, deletions[pair].content);
+      }
+      index -= 1;
+    }
+    return peers;
+  }, [lines]);
+  const maxLineLength = useMemo(
+    () => lines.reduce((max, line) => Math.max(max, line.content.length), 0),
+    [lines],
+  );
+  const isMinified = maxLineLength >= 240 && lines.length <= 80;
+  const isLarge = lines.length >= 2000 || maxLineLength >= 10_000;
+  const renderLine = (
+    line: (typeof lines)[number] | undefined,
+    side?: "left" | "right",
+  ) => {
     if (!line) return <span className="diff-split-empty" aria-hidden="true" />;
     const key = `${hunkIndex}:${line.index}`;
     const searchMatch =
@@ -8021,7 +8076,9 @@ function VirtualDiffLines({
           <span className="diff-prefix">
             {line.kind === "addition" ? "+" : line.kind === "deletion" ? "-" : " "}
           </span>
-          {highlightCodeLine(line.content)}
+          {wordDiff && (line.kind === "addition" || line.kind === "deletion")
+            ? renderWordDiffLine(line.content, wordPeers.get(line.index))
+            : highlightCodeLine(line.content)}
         </code>
       </button>
     );
@@ -8055,23 +8112,43 @@ function VirtualDiffLines({
       })()
     : visibleLines.map((line) => renderLine(line));
   if (!virtual) {
-    return <div className={`diff-lines ${displayMode === "split" ? "split-diff" : ""}`}>{content}</div>;
+    return (
+      <>
+        {(isLarge || isMinified) && (
+          <div className="diff-protection-banner" role="status">
+            {isMinified
+              ? t("Minified content detected. Word wrap stays opt-in to keep rendering responsive.")
+              : t("Large diff protected with virtualized rendering and bounded search.")}
+          </div>
+        )}
+        <div className={`diff-lines ${displayMode === "split" ? "split-diff" : ""}`}>{content}</div>
+      </>
+    );
   }
   return (
-    <div
-      ref={virtualListRef}
-      className={`diff-lines virtual-diff ${displayMode === "split" ? "split-diff" : ""}`}
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-    >
-      <div className="virtual-diff-space" style={{ height: lines.length * rowHeight }}>
-        <div
-          className="virtual-diff-window"
-          style={{ transform: `translateY(${start * rowHeight}px)` }}
-        >
-          {content}
+    <>
+      {(isLarge || isMinified) && (
+        <div className="diff-protection-banner" role="status">
+          {isMinified
+            ? t("Minified content detected. Word wrap stays opt-in to keep rendering responsive.")
+            : t("Large diff protected with virtualized rendering and bounded search.")}
+        </div>
+      )}
+      <div
+        ref={virtualListRef}
+        className={`diff-lines virtual-diff ${displayMode === "split" ? "split-diff" : ""}`}
+        onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      >
+        <div className="virtual-diff-space" style={{ height: lines.length * rowHeight }}>
+          <div
+            className="virtual-diff-window"
+            style={{ transform: `translateY(${start * rowHeight}px)` }}
+          >
+            {content}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 

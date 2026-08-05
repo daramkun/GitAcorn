@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { App, buildRemoteBranchTree } from "./App";
+import { App, buildRemoteBranchTree, renderWordDiffLine } from "./App";
 import { getAppInfo } from "./app-info";
 import { getSystemFileIcons } from "./fileIcons";
 import {
@@ -337,6 +337,15 @@ const sessionWithSnapshot: SessionDto = {
 };
 
 describe("App", () => {
+  it("renders token-level marks for paired word diff lines", () => {
+    const { container } = render(
+      <code>{renderWordDiffLine("const value = 2;", "const value = 1;")}</code>,
+    );
+
+    expect(container.querySelector("mark.diff-word-change")).toHaveTextContent("2");
+    expect(container.querySelector("mark.diff-word-change")).not.toHaveTextContent("1");
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
