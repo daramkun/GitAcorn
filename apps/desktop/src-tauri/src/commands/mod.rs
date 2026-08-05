@@ -9,13 +9,15 @@ use tauri::{AppHandle, Manager, State, ipc::Channel};
 use uuid::Uuid;
 
 use crate::dto::{
-    AppInfoDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto, CommitRequestDto,
-    DiffDto, FileBlameDto, GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto,
-    GitRemoteDto, HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto,
-    OperationEventDto, OperationRecordDto, OperationStartedDto, PatchSelectionDto, PathHistoryDto,
-    ReferenceDto, ReflogEntryDto, RemoteMutationRequestDto, RemoteReferenceDeleteDto,
-    RemoteRequestDto, RemoteTagDto, RepositoryGitIdentityDto, RepositoryOpenSourceDto,
-    RepositorySidebarDto, RepositorySnapshotDto, SessionDto, SessionTabUpdateDto, StashRequestDto,
+    AppInfoDto, BinaryPreviewDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto,
+    CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto, DiffDto,
+    ExternalDiffResultDto, ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto,
+    GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto, HistoryPageDto,
+    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, OperationEventDto,
+    OperationRecordDto, OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto,
+    ReflogEntryDto, RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto,
+    RemoteTagDto, RepositoryGitIdentityDto, RepositoryOpenSourceDto, RepositorySidebarDto,
+    RepositorySnapshotDto, SessionDto, SessionTabUpdateDto, StashRequestDto,
     SubmoduleAddRequestDto, WorktreeCreateRequestDto,
 };
 use crate::state::{
@@ -951,6 +953,137 @@ pub fn diff_get(
     state
         .repository_diff(&repo_id, &path_bytes, parse_diff_target(&target)?)
         .map(DiffDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn compare_get(
+    repo_id: String,
+    request: CompareRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<CompareDto> {
+    state
+        .repository_compare(&repo_id, &request.left, &request.right)
+        .map(CompareDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn compare_patch_get(
+    repo_id: String,
+    request: CompareRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ComparePatchDto> {
+    state
+        .repository_compare_patch(&repo_id, &request.left, &request.right)
+        .map(ComparePatchDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn compare_patch_validate(
+    repo_id: String,
+    patch: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<crate::dto::PatchValidationDto> {
+    match state.repository_validate_patch(&repo_id, patch.as_bytes()) {
+        Ok(()) => Ok(crate::dto::PatchValidationDto {
+            schema_version: 1,
+            valid: true,
+            message: None,
+        }),
+        Err(error) => Ok(crate::dto::PatchValidationDto {
+            schema_version: 1,
+            valid: false,
+            message: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub fn compare_patch_apply(
+    repo_id: String,
+    revision: u64,
+    patch: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .repository_apply_patch(&repo_id, revision, patch.as_bytes())
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn compare_patch_save(
+    repo_id: String,
+    path: String,
+    patch: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<()> {
+    state
+        .repository_save_patch(&repo_id, std::path::Path::new(&path), patch.as_bytes())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn external_diff_tool_get(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ExternalDiffToolDto> {
+    state
+        .repository_external_diff_tool(&repo_id)
+        .map(ExternalDiffToolDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn external_diff_tool_update(
+    repo_id: String,
+    request: ExternalDiffToolRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ExternalDiffToolDto> {
+    state
+        .update_repository_external_tools(
+            &repo_id,
+            request.tool.as_deref(),
+            request.merge_tool.as_deref(),
+        )
+        .map(ExternalDiffToolDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn external_diff_run(
+    repo_id: String,
+    request: CompareRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ExternalDiffResultDto> {
+    state
+        .run_repository_external_diff(&repo_id, &request.left, &request.right)
+        .map(ExternalDiffResultDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn external_merge_run(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ExternalDiffResultDto> {
+    state
+        .run_repository_external_merge(&repo_id)
+        .map(ExternalDiffResultDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn binary_preview_get(
+    repo_id: String,
+    request: crate::dto::BinaryPreviewRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<BinaryPreviewDto> {
+    state
+        .repository_binary_preview(&repo_id, &request.left, &request.right, &request.path)
+        .map(BinaryPreviewDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
 

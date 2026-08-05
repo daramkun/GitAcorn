@@ -1,12 +1,13 @@
 use app_core::{
-    AppErrorDto, BranchRequest, CloneRequest, CommitFile, CommitRequest, GitIdentity, GitReference,
-    GitRemote, InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
+    AppErrorDto, BinaryPreview, BranchRequest, CloneRequest, CommitFile, CommitRequest,
+    ComparePatch, ExternalDiffResult, ExternalDiffTool, GitIdentity, GitReference, GitRemote,
+    InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
     InteractiveRebaseRequest, PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind,
     RemoteRequest, RemoteTagSummary, RepositorySidebar, WorktreeCreateRequest,
 };
 use git_domain::{
-    BlameLine, CommitSummary, DiffDocument, DiffLineKind, FileBlame, FileChange, HeadState,
-    HistoryPage, PathHistory, PathHistoryEntry, RepositoryOperation, RepositorySnapshot,
+    BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
+    HeadState, HistoryPage, PathHistory, PathHistoryEntry, RepositoryOperation, RepositorySnapshot,
 };
 use persistence::OperationRecord;
 use serde::{Deserialize, Serialize};
@@ -498,6 +499,148 @@ pub struct DiffDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CompareDto {
+    pub schema_version: u16,
+    pub files: Vec<CompareFileDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareFileDto {
+    pub old_path: String,
+    pub new_path: String,
+    pub binary: bool,
+    pub hunks: Vec<DiffHunkDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComparePatchDto {
+    pub schema_version: u16,
+    pub patch: String,
+    pub file_count: usize,
+    pub binary: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchValidationDto {
+    pub schema_version: u16,
+    pub valid: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalDiffToolDto {
+    pub schema_version: u16,
+    pub configured: Option<String>,
+    pub merge_configured: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalDiffToolRequestDto {
+    pub tool: Option<String>,
+    pub merge_tool: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryPreviewRequestDto {
+    pub left: String,
+    pub right: String,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalDiffResultDto {
+    pub schema_version: u16,
+    pub tool: String,
+    pub exit_code: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryPreviewDto {
+    pub schema_version: u16,
+    pub old_path: String,
+    pub new_path: String,
+    pub mime_type: Option<String>,
+    pub old_size: Option<u64>,
+    pub new_size: Option<u64>,
+    pub old_data_url: Option<String>,
+    pub new_data_url: Option<String>,
+}
+
+impl From<ComparePatch> for ComparePatchDto {
+    fn from(patch: ComparePatch) -> Self {
+        Self {
+            schema_version: 1,
+            patch: String::from_utf8_lossy(&patch.bytes).into_owned(),
+            file_count: patch.file_count,
+            binary: patch.is_binary,
+        }
+    }
+}
+
+impl From<ExternalDiffTool> for ExternalDiffToolDto {
+    fn from(tool: ExternalDiffTool) -> Self {
+        Self {
+            schema_version: 1,
+            configured: tool.configured,
+            merge_configured: tool.merge_configured,
+        }
+    }
+}
+
+impl From<ExternalDiffResult> for ExternalDiffResultDto {
+    fn from(result: ExternalDiffResult) -> Self {
+        Self {
+            schema_version: 1,
+            tool: result.tool,
+            exit_code: result.exit_code,
+        }
+    }
+}
+
+impl From<BinaryPreview> for BinaryPreviewDto {
+    fn from(preview: BinaryPreview) -> Self {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+        let mime_type = preview.mime_type.clone();
+        let data_url = |bytes: Option<Vec<u8>>| {
+            bytes.and_then(|bytes| {
+                mime_type
+                    .as_deref()
+                    .map(|mime| format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+            })
+        };
+        let old_data_url = data_url(preview.old_bytes);
+        let new_data_url = data_url(preview.new_bytes);
+        Self {
+            schema_version: 1,
+            old_path: preview.old_path,
+            new_path: preview.new_path,
+            mime_type,
+            old_size: preview.old_size,
+            new_size: preview.new_size,
+            old_data_url,
+            new_data_url,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareRequestDto {
+    pub left: String,
+    pub right: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitFileDto {
     pub path: String,
     pub path_bytes: Vec<u8>,
@@ -864,6 +1007,56 @@ impl From<DiffDocument> for DiffDto {
                 })
                 .unwrap_or_default(),
         }
+    }
+}
+
+impl From<DiffDocument> for CompareDto {
+    fn from(document: DiffDocument) -> Self {
+        Self {
+            schema_version: 1,
+            files: document.files.into_iter().map(compare_file_dto).collect(),
+        }
+    }
+}
+
+fn compare_file_dto(file: DiffFile) -> CompareFileDto {
+    CompareFileDto {
+        old_path: file.old_path,
+        new_path: file.new_path,
+        binary: file.binary,
+        hunks: file
+            .hunks
+            .into_iter()
+            .map(|hunk| DiffHunkDto {
+                index: hunk.index,
+                header: hunk.header,
+                old_start: hunk.old_start,
+                old_count: hunk.old_count,
+                new_start: hunk.new_start,
+                new_count: hunk.new_count,
+                lines: hunk
+                    .lines
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        let (kind, selectable) = match line.kind {
+                            DiffLineKind::Context => ("context", false),
+                            DiffLineKind::Addition => ("addition", true),
+                            DiffLineKind::Deletion => ("deletion", true),
+                            DiffLineKind::NoNewline => ("noNewline", false),
+                        };
+                        DiffLineDto {
+                            index,
+                            kind,
+                            old_line: line.old_line,
+                            new_line: line.new_line,
+                            content: line.content,
+                            selectable,
+                        }
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 

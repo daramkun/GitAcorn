@@ -21,6 +21,10 @@ import {
   checkoutBranch,
   chooseRepositoryDirectory,
   closeSessionTab,
+  compareDiff,
+  getBinaryPreview,
+  getComparePatch,
+  getExternalDiffTool,
   createBranch,
   createCommit,
   createStash,
@@ -100,6 +104,7 @@ vi.mock("./repository", () => ({
   abortRebase: vi.fn(),
   addSubmodule: vi.fn(),
   applyPatchSelection: vi.fn(),
+  applyComparePatch: vi.fn(),
   addRemote: vi.fn(),
   abortMerge: vi.fn(),
   chooseRepositoryDirectory: vi.fn(),
@@ -111,6 +116,10 @@ vi.mock("./repository", () => ({
   applyStash: vi.fn(),
   checkoutBranch: vi.fn(),
   closeSessionTab: vi.fn(),
+  compareDiff: vi.fn(),
+  getBinaryPreview: vi.fn(),
+  getComparePatch: vi.fn(),
+  getExternalDiffTool: vi.fn(),
   createBranch: vi.fn(),
   createCommit: vi.fn(),
   createStash: vi.fn(),
@@ -146,9 +155,13 @@ vi.mock("./repository", () => ({
   redoOperation: vi.fn(),
   resolveConflict: vi.fn(),
   updateGlobalGitIdentity: vi.fn(),
+  updateExternalDiffTool: vi.fn(),
   updateRepositoryGitIdentity: vi.fn(),
   updateSessionTab: vi.fn(),
   updateRemote: vi.fn(),
+  saveComparePatch: vi.fn(),
+  runExternalDiff: vi.fn(),
+  validateComparePatch: vi.fn(),
   getRepositorySnapshot: vi.fn(),
   stagePaths: vi.fn(),
   startRemoteOperation: vi.fn(),
@@ -191,6 +204,10 @@ const mockedActivateTab = vi.mocked(activateSessionTab);
 const mockedActivateWorktree = vi.mocked(activateWorktree);
 const mockedCheckoutBranch = vi.mocked(checkoutBranch);
 const mockedCloseTab = vi.mocked(closeSessionTab);
+const mockedCompareDiff = vi.mocked(compareDiff);
+const mockedGetExternalDiffTool = vi.mocked(getExternalDiffTool);
+const mockedGetBinaryPreview = vi.mocked(getBinaryPreview);
+const mockedGetComparePatch = vi.mocked(getComparePatch);
 const mockedCreateBranch = vi.mocked(createBranch);
 const mockedCreateTag = vi.mocked(createTag);
 const mockedCreateWorktree = vi.mocked(createWorktree);
@@ -322,6 +339,10 @@ describe("App", () => {
     mockedRestoreSession.mockResolvedValue({ schemaVersion: 1, tabs: [] });
     mockedActivateTab.mockResolvedValue();
     mockedActivateWorktree.mockResolvedValue(sessionWithSnapshot);
+    mockedCompareDiff.mockResolvedValue({ schemaVersion: 1, files: [] });
+    mockedGetExternalDiffTool.mockResolvedValue({ schemaVersion: 1, configured: null, mergeConfigured: null });
+    mockedGetBinaryPreview.mockResolvedValue({ schemaVersion: 1, oldPath: "", newPath: "" });
+    mockedGetComparePatch.mockResolvedValue({ schemaVersion: 1, patch: "", fileCount: 0, binary: false });
     mockedCreateWorktree.mockResolvedValue({
       schemaVersion: 1,
       worktrees: [],
@@ -675,6 +696,54 @@ describe("App", () => {
       undefined,
       undefined,
       undefined,
+    );
+  });
+
+  it("compares history refs and switches between unified and split views", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedCompareDiff.mockResolvedValue({
+      schemaVersion: 1,
+      files: [
+        {
+          oldPath: "tracked.txt",
+          newPath: "tracked.txt",
+          binary: false,
+          hunks: [
+            {
+              index: 0,
+              header: "@@ -1 +1 @@",
+              oldStart: 1,
+              oldCount: 1,
+              newStart: 1,
+              newCount: 1,
+              lines: [
+                { index: 0, kind: "deletion", oldLine: 1, content: "before", selectable: false },
+                { index: 1, kind: "addition", newLine: 1, content: "after", selectable: false },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Compare revisions" }));
+    const compareDialog = screen.getByRole("dialog", { name: "Compare revisions" });
+    expect(compareDialog).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Left revision"), { target: { value: "HEAD~1" } });
+    fireEvent.change(screen.getByLabelText("Right revision"), { target: { value: "HEAD" } });
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Compare" }));
+
+    await waitFor(() => {
+      expect(mockedCompareDiff).toHaveBeenCalledWith(snapshot.repository.id, "HEAD~1", "HEAD");
+    });
+    expect(await screen.findByRole("region", { name: "Comparison result" })).toBeInTheDocument();
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Unified" }));
+    expect(within(compareDialog).getByRole("button", { name: "Unified" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
   });
 

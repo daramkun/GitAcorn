@@ -1954,6 +1954,37 @@ button:disabled {
   color: inherit;
 }
 
+.diff-line.word-wrap code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-line.word-diff code {
+  text-decoration: underline dotted color-mix(in srgb, var(--accent) 70%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.diff-lines.split-diff {
+  min-width: 760px;
+}
+
+.diff-split-row {
+  display: grid;
+  grid-template-columns: minmax(380px, 1fr) minmax(380px, 1fr);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+.diff-split-row > .diff-line {
+  min-width: 0;
+  border-right: 1px solid var(--diff-gutter-border);
+}
+
+.diff-split-empty {
+  min-height: 23px;
+  background: color-mix(in srgb, var(--diff-bg) 80%, var(--surface-soft));
+}
+
 .diff-prefix {
   display: inline-block;
   width: 12px;
@@ -2399,6 +2430,18 @@ button:disabled {
 .history-filterbar .search-close-button {
   width: var(--control-height-lg);
   height: var(--control-height-lg);
+}
+
+.history-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 .reference-actions input {
@@ -3191,6 +3234,176 @@ button:disabled {
 
 .settings-modal-body {
   padding: 20px;
+}
+
+.compare-modal {
+  width: min(960px, 94vw);
+}
+
+.compare-input-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.compare-input-grid label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.compare-result {
+  display: grid;
+  min-height: 0;
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.compare-actions,
+.external-diff-settings,
+.compare-patch-preview,
+.binary-preview-card {
+  display: grid;
+  gap: 8px;
+}
+
+.compare-actions {
+  grid-template-columns: repeat(auto-fit, minmax(120px, max-content));
+  margin-top: 12px;
+}
+
+.compare-patch-preview {
+  margin-top: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.compare-patch-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: var(--surface-muted);
+}
+
+.compare-patch-preview pre {
+  max-height: 220px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: 12px/1.5 var(--font-mono);
+}
+
+.external-diff-settings {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.external-diff-settings label {
+  display: grid;
+  gap: 4px;
+}
+
+.binary-preview-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.binary-preview-controls button {
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  padding: 4px 8px;
+}
+
+.binary-preview-controls button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.binary-images {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.binary-images figure {
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+.binary-images img {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  background: repeating-conic-gradient(#d9d9d9 0 25%, #fff 0 50%) 50% / 12px 12px;
+}
+
+.binary-images figcaption {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.binary-images--overlay {
+  position: relative;
+  display: block;
+  min-height: 180px;
+}
+
+.binary-images--overlay figure {
+  position: absolute;
+  inset: 0;
+}
+
+.binary-images--overlay figure + figure {
+  opacity: 0.55;
+  mix-blend-mode: multiply;
+}
+
+.compare-file-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  overflow-x: auto;
+  background: var(--surface-soft);
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-file-tabs button,
+.diff-view-controls button {
+  padding: 4px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.compare-file-tabs button[aria-selected="true"],
+.diff-view-controls button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-raised));
+  color: var(--text);
+}
+
+.diff-view-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .git-settings-modal {

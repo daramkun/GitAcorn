@@ -81,12 +81,12 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 ### P0.5 고급 Diff와 비교
 
-- [ ] unified/split 전환, word diff, syntax highlighting과 word wrap
-- [ ] 임의의 두 commit, branch, tag, WIP 간 비교
-- [ ] image side-by-side/overlay diff와 binary metadata 표시
-- [ ] hunk 탐색, diff 내 검색, large/minified file 보호
-- [ ] 외부 diff/merge tool 설정과 실행
-- [ ] text patch 생성·저장·적용 및 적용 전 검증
+- [x] unified/split 전환, word diff, syntax highlighting과 word wrap
+- [x] 임의의 두 commit, branch, tag, WIP 간 비교
+- [x] image side-by-side/overlay diff와 binary metadata 표시
+- [x] hunk 탐색, diff 내 검색, large/minified file 보호
+- [x] 외부 diff/merge tool 설정과 실행
+- [x] text patch 생성·저장·적용 및 적용 전 검증
 
 완료 조건:
 
@@ -146,5 +146,5 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P0.2 Cherry-pick, Revert, Reset | 완료 | 단일·다중 cherry-pick, revert continue/abort, cherry-pick skip, soft/mixed/hard reset preview와 P0.1 recovery 연결 |
 | P0.3 Blame과 File/Directory History | 완료 | byte-safe blame, rename-aware file/directory history, path filter와 비동기 검사기 |
 | P0.4 Worktree 전체 lifecycle | 완료 | 생성·새 탭 열기·lock/unlock·안전/강제 제거·branch 결합 제거, missing/prunable 상태와 path 기반 식별자 |
-| P0.5 고급 Diff와 비교 | 예정 | 기존 partial staging renderer 확장 |
+| P0.5 고급 Diff와 비교 | 완료 | 임의 ref/WORKTREE 비교, split·word·syntax·wrap renderer, 이미지/바이너리 미리보기, 외부 diff 실행과 patch lifecycle |
 | P0.6 Git LFS와 서명 상태 | 예정 | 시스템 Git·credential 정책 유지 |

@@ -1771,6 +1771,93 @@ fn reads_files_and_diff_for_a_selected_commit() {
 }
 
 #[test]
+fn compares_refs_and_current_worktree_with_multiple_files() {
+    let fixture = TestRepository::init();
+    fixture.write("tracked.txt", "committed change\n");
+    fixture.write("added.txt", "added in comparison\n");
+    fixture.git(["add", "tracked.txt", "added.txt"]);
+    fixture.git(["commit", "-m", "comparison commit"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let head = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("UTF-8 head")
+        .trim()
+        .to_owned();
+    let previous = format!("{head}^");
+
+    let committed = service
+        .compare(&repository, &previous, &head)
+        .expect("compare commits");
+    assert_eq!(committed.files.len(), 2);
+    assert!(
+        committed
+            .files
+            .iter()
+            .any(|file| file.new_path == "added.txt")
+    );
+
+    fixture.write("tracked.txt", "working tree change\n");
+    let worktree = service
+        .compare(&repository, &head, "WORKTREE")
+        .expect("compare worktree");
+    assert_eq!(worktree.files.len(), 1);
+    assert_eq!(worktree.files[0].new_path, "tracked.txt");
+}
+
+#[test]
+fn generates_validates_applies_and_previews_compare_artifacts() {
+    let fixture = TestRepository::init();
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let base = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("base oid")
+        .trim()
+        .to_owned();
+    fixture.write("tracked.txt", "patched\n");
+    fixture.git(["add", "tracked.txt"]);
+    fixture.git(["commit", "-m", "patch source"]);
+    let head = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("head oid")
+        .trim()
+        .to_owned();
+
+    let patch = service
+        .compare_patch(&repository, &base, &head)
+        .expect("generate patch");
+    assert_eq!(patch.file_count, 1);
+    assert!(!patch.is_binary);
+
+    fixture.git(["reset", "--hard", &base]);
+    service
+        .validate_patch(&repository, &patch.bytes)
+        .expect("validate patch");
+    service
+        .apply_patch(&repository, &patch.bytes)
+        .expect("apply patch");
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("tracked.txt"))
+            .expect("read applied file")
+            .replace("\r\n", "\n"),
+        "patched\n"
+    );
+
+    std::fs::write(fixture.path().join("image.png"), [0x89, b'P', b'N', b'G'])
+        .expect("write image fixture");
+    fixture.git(["add", "image.png"]);
+    fixture.git(["commit", "-m", "image source"]);
+    let image_head = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("image head oid")
+        .trim()
+        .to_owned();
+    let preview = service
+        .binary_preview(&repository, &head, &image_head, "image.png")
+        .expect("binary preview");
+    assert_eq!(preview.mime_type.as_deref(), Some("image/png"));
+    assert_eq!(preview.new_size, Some(4));
+}
+
+#[test]
 fn stages_selected_lines_in_a_crlf_file() {
     let fixture = TestRepository::init();
     fixture.git(["config", "core.autocrlf", "false"]);

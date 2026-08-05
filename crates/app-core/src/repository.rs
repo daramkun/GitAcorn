@@ -144,6 +144,36 @@ pub enum DiffTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComparePatch {
+    pub bytes: Vec<u8>,
+    pub file_count: usize,
+    pub is_binary: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalDiffTool {
+    pub configured: Option<String>,
+    pub merge_configured: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalDiffResult {
+    pub tool: String,
+    pub exit_code: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinaryPreview {
+    pub old_path: String,
+    pub new_path: String,
+    pub mime_type: Option<String>,
+    pub old_size: Option<u64>,
+    pub new_size: Option<u64>,
+    pub old_bytes: Option<Vec<u8>>,
+    pub new_bytes: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatchSelection {
     pub hunk_index: usize,
     pub line_indices: Vec<usize>,
@@ -2172,6 +2202,305 @@ impl RepositoryService {
         parse_unified_diff(&output).map_err(|error| AppError::InvalidGitOutput(error.to_string()))
     }
 
+    pub fn compare(
+        &self,
+        repository: &RepositoryDescriptor,
+        left: &str,
+        right: &str,
+    ) -> Result<DiffDocument, AppError> {
+        let left = validate_compare_ref(self, repository, left)?;
+        let right = validate_compare_ref(self, repository, right)?;
+        if left.is_none() && right.is_none() {
+            return Err(AppError::InvalidRequest(
+                "At least one comparison side must be a commit or reference".to_owned(),
+            ));
+        }
+        let mut args = vec![
+            OsString::from("diff"),
+            OsString::from("--no-ext-diff"),
+            OsString::from("--no-color"),
+            OsString::from("--binary"),
+            OsString::from("--find-renames"),
+            OsString::from("--unified=3"),
+        ];
+        if let Some(left) = left {
+            args.push(left);
+        }
+        if let Some(right) = right {
+            args.push(right);
+        }
+        args.push(OsString::from("--"));
+        let output = self.git_bytes(repository, args)?;
+        parse_unified_diff(&output).map_err(|error| AppError::InvalidGitOutput(error.to_string()))
+    }
+
+    pub fn compare_patch(
+        &self,
+        repository: &RepositoryDescriptor,
+        left: &str,
+        right: &str,
+    ) -> Result<ComparePatch, AppError> {
+        let args = self.compare_args(repository, left, right, true)?;
+        let bytes = self.git_bytes(repository, args)?;
+        let document = parse_unified_diff(&bytes)
+            .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
+        let is_binary = bytes
+            .windows(b"GIT binary patch".len())
+            .any(|window| window == b"GIT binary patch")
+            || document.files.iter().any(|file| file.binary);
+        Ok(ComparePatch {
+            bytes,
+            file_count: document.files.len(),
+            is_binary,
+        })
+    }
+
+    pub fn validate_patch(
+        &self,
+        repository: &RepositoryDescriptor,
+        patch: &[u8],
+    ) -> Result<(), AppError> {
+        if patch.is_empty() {
+            return Err(AppError::InvalidRequest("Patch cannot be empty".to_owned()));
+        }
+        let mut request = GitRequest::new([
+            OsString::from("apply"),
+            OsString::from("--check"),
+            OsString::from("--recount"),
+            OsString::from("--whitespace=error-all"),
+            OsString::from("--"),
+        ]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.stdin = Some(patch.to_vec());
+        request.timeout = Duration::from_secs(15);
+        ensure_success(self.run(request)?).map(|_| ())
+    }
+
+    pub fn apply_patch(
+        &self,
+        repository: &RepositoryDescriptor,
+        patch: &[u8],
+    ) -> Result<(), AppError> {
+        self.validate_patch(repository, patch)?;
+        let mut request = GitRequest::new([
+            OsString::from("apply"),
+            OsString::from("--index"),
+            OsString::from("--recount"),
+            OsString::from("--whitespace=error-all"),
+            OsString::from("--"),
+        ]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.stdin = Some(patch.to_vec());
+        request.timeout = Duration::from_secs(15);
+        ensure_success(self.run(request)?).map(|_| ())
+    }
+
+    pub fn save_patch(&self, path: &Path, patch: &[u8]) -> Result<(), AppError> {
+        if patch.is_empty() {
+            return Err(AppError::InvalidRequest("Patch cannot be empty".to_owned()));
+        }
+        if path.as_os_str().is_empty() || path.to_string_lossy().contains(['\0', '\r', '\n']) {
+            return Err(AppError::InvalidRequest(
+                "Patch path must be a valid file path".to_owned(),
+            ));
+        }
+        if path.is_dir() {
+            return Err(AppError::InvalidRequest(
+                "Patch path must point to a file".to_owned(),
+            ));
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                AppError::InvalidRequest(format!("Could not create patch folder: {error}"))
+            })?;
+        }
+        fs::write(path, patch)
+            .map_err(|error| AppError::InvalidRequest(format!("Could not save patch: {error}")))
+    }
+
+    pub fn external_diff_tool(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<ExternalDiffTool, AppError> {
+        Ok(ExternalDiffTool {
+            configured: self.config_value(Some(repository), "--get", "diff.tool")?,
+            merge_configured: self.config_value(Some(repository), "--get", "merge.tool")?,
+        })
+    }
+
+    pub fn set_external_tools(
+        &self,
+        repository: &RepositoryDescriptor,
+        diff_tool: Option<&str>,
+        merge_tool: Option<&str>,
+    ) -> Result<ExternalDiffTool, AppError> {
+        let diff_tool = validate_tool_name(diff_tool)?;
+        let merge_tool = validate_tool_name(merge_tool)?;
+        self.update_config_value(
+            Some(repository),
+            "--local",
+            "diff.tool",
+            diff_tool.as_deref(),
+        )?;
+        self.update_config_value(
+            Some(repository),
+            "--local",
+            "merge.tool",
+            merge_tool.as_deref(),
+        )?;
+        self.external_diff_tool(repository)
+    }
+
+    pub fn run_external_diff(
+        &self,
+        repository: &RepositoryDescriptor,
+        left: &str,
+        right: &str,
+    ) -> Result<ExternalDiffResult, AppError> {
+        let tool = self
+            .external_diff_tool(repository)?
+            .configured
+            .ok_or_else(|| {
+                AppError::InvalidRequest(
+                    "Configure a Git diff.tool before launching an external diff".to_owned(),
+                )
+            })?;
+        let left = validate_compare_ref(self, repository, left)?;
+        let right = validate_compare_ref(self, repository, right)?;
+        if left.is_none() || right.is_none() {
+            return Err(AppError::InvalidRequest(
+                "External diff tools require two commit or reference sides".to_owned(),
+            ));
+        }
+        let mut request = GitRequest::new([
+            OsString::from("difftool"),
+            OsString::from("--no-prompt"),
+            OsString::from(format!("--tool={tool}")),
+            left.expect("validated compare side"),
+            right.expect("validated compare side"),
+            OsString::from("--"),
+        ]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(60);
+        let output = self.run(request)?;
+        Ok(ExternalDiffResult {
+            tool,
+            exit_code: output.exit_code,
+        })
+    }
+
+    pub fn run_external_merge(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<ExternalDiffResult, AppError> {
+        let tool = self
+            .external_diff_tool(repository)?
+            .merge_configured
+            .ok_or_else(|| {
+                AppError::InvalidRequest(
+                    "Configure a Git merge.tool before launching an external merge".to_owned(),
+                )
+            })?;
+        let mut request = GitRequest::new([
+            OsString::from("mergetool"),
+            OsString::from("--no-prompt"),
+            OsString::from(format!("--tool={tool}")),
+        ]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(60);
+        let output = self.run(request)?;
+        Ok(ExternalDiffResult {
+            tool,
+            exit_code: output.exit_code,
+        })
+    }
+
+    pub fn binary_preview(
+        &self,
+        repository: &RepositoryDescriptor,
+        left: &str,
+        right: &str,
+        path: &str,
+    ) -> Result<BinaryPreview, AppError> {
+        let path = validate_relative_file_path(path)?;
+        let left_ref = validate_compare_ref(self, repository, left)?;
+        let right_ref = validate_compare_ref(self, repository, right)?;
+        let old = self.binary_side(repository, left_ref.as_ref(), &path)?;
+        let new = self.binary_side(repository, right_ref.as_ref(), &path)?;
+        let mime_type = image_mime_type(&path);
+        const PREVIEW_LIMIT: usize = 8 * 1024 * 1024;
+        Ok(BinaryPreview {
+            old_path: path.clone(),
+            new_path: path,
+            mime_type,
+            old_size: old.as_ref().map(|bytes| bytes.len() as u64),
+            new_size: new.as_ref().map(|bytes| bytes.len() as u64),
+            old_bytes: old.filter(|bytes| bytes.len() <= PREVIEW_LIMIT),
+            new_bytes: new.filter(|bytes| bytes.len() <= PREVIEW_LIMIT),
+        })
+    }
+
+    fn compare_args(
+        &self,
+        repository: &RepositoryDescriptor,
+        left: &str,
+        right: &str,
+        binary: bool,
+    ) -> Result<Vec<OsString>, AppError> {
+        let left = validate_compare_ref(self, repository, left)?;
+        let right = validate_compare_ref(self, repository, right)?;
+        if left.is_none() && right.is_none() {
+            return Err(AppError::InvalidRequest(
+                "At least one comparison side must be a commit or reference".to_owned(),
+            ));
+        }
+        let mut args = vec![
+            OsString::from("diff"),
+            OsString::from("--no-ext-diff"),
+            OsString::from("--no-color"),
+            OsString::from("--find-renames"),
+            OsString::from("--unified=3"),
+        ];
+        if binary {
+            args.push(OsString::from("--binary"));
+        }
+        if let Some(left) = left {
+            args.push(left);
+        }
+        if let Some(right) = right {
+            args.push(right);
+        }
+        args.push(OsString::from("--"));
+        Ok(args)
+    }
+
+    fn binary_side(
+        &self,
+        repository: &RepositoryDescriptor,
+        reference: Option<&OsString>,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, AppError> {
+        if let Some(reference) = reference {
+            let spec = OsString::from(format!("{}:{path}", reference.to_string_lossy()));
+            let mut request = GitRequest::new([OsString::from("show"), spec]);
+            request.working_directory = Some(repository.worktree_path.clone());
+            request.timeout = Duration::from_secs(15);
+            let output = self.run(request)?;
+            if output.exit_code != 0 {
+                return Ok(None);
+            }
+            return Ok(Some(output.stdout));
+        }
+        let absolute = repository.worktree_path.join(path);
+        match fs::read(absolute) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(AppError::InvalidRequest(format!(
+                "Could not read binary preview: {error}"
+            ))),
+        }
+    }
+
     pub fn commit_files(
         &self,
         repository: &RepositoryDescriptor,
@@ -2990,6 +3319,97 @@ fn validate_object_id(oid: &str) -> Result<(), AppError> {
             "The selected commit ID is invalid".to_owned(),
         ))
     }
+}
+
+fn validate_compare_ref(
+    service: &RepositoryService,
+    repository: &RepositoryDescriptor,
+    reference: &str,
+) -> Result<Option<OsString>, AppError> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return Err(AppError::InvalidRequest(
+            "Comparison references must not be empty".to_owned(),
+        ));
+    }
+    if reference.eq_ignore_ascii_case("WORKTREE") {
+        return Ok(None);
+    }
+    if reference.starts_with('-') || reference.contains(['\0', '\r', '\n']) {
+        return Err(AppError::InvalidRequest(
+            "Comparison reference contains an unsafe character".to_owned(),
+        ));
+    }
+    let revision = service
+        .git_text(
+            repository,
+            [
+                OsString::from("rev-parse"),
+                OsString::from("--verify"),
+                OsString::from("--end-of-options"),
+                OsString::from(format!("{reference}^{{commit}}")),
+            ],
+        )?
+        .trim()
+        .to_owned();
+    if revision.is_empty() {
+        return Err(AppError::InvalidRequest(format!(
+            "Comparison reference {reference} did not resolve to a commit"
+        )));
+    }
+    Ok(Some(OsString::from(reference)))
+}
+
+fn validate_tool_name(tool: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(tool) = tool.map(str::trim).filter(|tool| !tool.is_empty()) else {
+        return Ok(None);
+    };
+    if tool.starts_with('-')
+        || tool.contains(['\0', '\r', '\n'])
+        || tool.chars().any(char::is_whitespace)
+    {
+        return Err(AppError::InvalidRequest(
+            "External tool name must not contain whitespace or control characters".to_owned(),
+        ));
+    }
+    Ok(Some(tool.to_owned()))
+}
+
+fn validate_relative_file_path(path: &str) -> Result<String, AppError> {
+    use std::path::Component;
+
+    let path = path.trim();
+    let candidate = Path::new(path);
+    if path.is_empty()
+        || path.contains(['\0', '\r', '\n'])
+        || candidate.is_absolute()
+        || candidate
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(AppError::InvalidRequest(
+            "Binary preview path must be a relative file path".to_owned(),
+        ));
+    }
+    Ok(path.replace('\\', "/"))
+}
+
+fn image_mime_type(path: &str) -> Option<String> {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())?
+        .to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        _ => return None,
+    };
+    Some(mime.to_owned())
 }
 
 fn parse_interactive_rebase_commits(

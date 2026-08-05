@@ -24,6 +24,7 @@ import {
   toggleMaximizeAppWindow,
 } from "./windowControls";
 import {
+  applyComparePatch,
   applyPatchSelection,
   addSubmodule,
   addRemote,
@@ -38,6 +39,10 @@ import {
   chooseCloneParentDirectory,
   chooseRepositoryDirectory,
   closeSessionTab,
+  compareDiff,
+  getBinaryPreview,
+  getComparePatch,
+  getExternalDiffTool,
   createBranch,
   createCommit,
   createStash,
@@ -88,6 +93,7 @@ import {
   startRemoteOperation,
   skipRebase,
   skipHistory,
+  saveComparePatch,
   stagePaths,
   unstagePaths,
   undoOperation,
@@ -96,9 +102,17 @@ import {
   updateSessionTab,
   updateRemote,
   updateGlobalGitIdentity,
+  updateExternalDiffTool,
   updateRepositoryGitIdentity,
+  runExternalDiff,
+  runExternalMerge,
+  validateComparePatch,
   type AppErrorDto,
   type CommitDto,
+  type BinaryPreviewDto,
+  type CompareDto,
+  type ComparePatchDto,
+  type ExternalDiffToolDto,
   type CommitFileDto,
   type DiffDto,
   type DiffTarget,
@@ -222,6 +236,14 @@ type WorktreeDialog = {
   path: string;
   branch: string;
   startPoint: string;
+};
+
+type CompareDialogState = {
+  left: string;
+  right: string;
+  result?: CompareDto;
+  busy?: boolean;
+  error?: string;
 };
 
 type RemoteDetails = {
@@ -5573,6 +5595,9 @@ function ChangesView({
   const selected = snapshot.changes.find((change) => change.path === selectedPath);
   const [diff, setDiff] = useState<DiffDto>();
   const [diffLoading, setDiffLoading] = useState(false);
+  const [diffViewMode, setDiffViewMode] = useState<"unified" | "split">("unified");
+  const [wordDiff, setWordDiff] = useState(false);
+  const [wordWrap, setWordWrap] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [fileFilter, setFileFilter] = useState("");
   const [showDiffSearch, setShowDiffSearch] = useState(false);
@@ -6556,12 +6581,26 @@ function ChangesView({
                     disabled={mutationBlocked}
                     onClick={discardSelected}
                   >
-                    {t("Discard…")}
-                  </button>
-                )}
+                   {t("Discard…")}
+                 </button>
+               )}
+               </div>
+               )}
+              <div className="diff-view-controls" role="group" aria-label={t("Diff view")}>
+                <button type="button" aria-pressed={diffViewMode === "unified"} onClick={() => setDiffViewMode("unified")}>
+                  {t("Unified")}
+                </button>
+                <button type="button" aria-pressed={diffViewMode === "split"} onClick={() => setDiffViewMode("split")}>
+                  {t("Split")}
+                </button>
+                <button type="button" aria-pressed={wordDiff} onClick={() => setWordDiff((current) => !current)}>
+                  {t("Word diff")}
+                </button>
+                <button type="button" aria-pressed={wordWrap} onClick={() => setWordWrap((current) => !current)}>
+                  {t("Wrap")}
+                </button>
               </div>
-              )}
-            </div>
+             </div>
             {showDiffSearch && (
               <form
                 className="panel-searchbar diff-searchbar"
@@ -6656,6 +6695,9 @@ function ChangesView({
                 actionDisabled={mutationBlocked}
                 searchQuery={diffSearchQuery}
                 activeSearchKey={activeDiffSearchMatch}
+                displayMode={diffViewMode}
+                wordDiff={wordDiff}
+                wordWrap={wordWrap}
               />
             ) : (
               <div className="diff-state">{t("No text diff is available for this side.")}</div>
@@ -7513,6 +7555,9 @@ function DiffRenderer({
   readOnly = false,
   searchQuery = "",
   activeSearchKey,
+  displayMode = "unified",
+  wordDiff = false,
+  wordWrap = false,
 }: {
   diff: DiffDto;
   selectedLines: Set<string>;
@@ -7524,6 +7569,9 @@ function DiffRenderer({
   readOnly?: boolean;
   searchQuery?: string;
   activeSearchKey?: string;
+  displayMode?: "unified" | "split";
+  wordDiff?: boolean;
+  wordWrap?: boolean;
 }) {
   const selectableKeys = useMemo(
     () =>
@@ -7660,6 +7708,9 @@ function DiffRenderer({
             readOnly={readOnly}
             searchQuery={searchQuery}
             activeSearchKey={activeSearchKey}
+            displayMode={displayMode}
+            wordDiff={wordDiff}
+            wordWrap={wordWrap}
           />
         </div>
       ))}
@@ -7743,6 +7794,9 @@ function VirtualDiffLines({
   readOnly = false,
   searchQuery = "",
   activeSearchKey,
+  displayMode = "unified",
+  wordDiff = false,
+  wordWrap = false,
 }: {
   hunkIndex: number;
   lines: DiffDto["hunks"][number]["lines"];
@@ -7759,6 +7813,9 @@ function VirtualDiffLines({
   readOnly?: boolean;
   searchQuery?: string;
   activeSearchKey?: string;
+  displayMode?: "unified" | "split";
+  wordDiff?: boolean;
+  wordWrap?: boolean;
 }) {
   const rowHeight = 23;
   const [scrollTop, setScrollTop] = useState(0);
@@ -7782,7 +7839,8 @@ function VirtualDiffLines({
 
   const start = virtual ? Math.max(0, Math.floor(scrollTop / rowHeight) - 8) : 0;
   const end = virtual ? Math.min(lines.length, start + 80) : lines.length;
-  const content = lines.slice(start, end).map((line) => {
+  const renderLine = (line: (typeof lines)[number] | undefined, side?: "left" | "right") => {
+    if (!line) return <span className="diff-split-empty" aria-hidden="true" />;
     const key = `${hunkIndex}:${line.index}`;
     const searchMatch =
       Boolean(normalizedSearch) &&
@@ -7794,7 +7852,10 @@ function VirtualDiffLines({
         key={key}
         className={[
           "diff-line",
+          side ? `diff-split-${side}` : "",
           line.kind,
+          wordDiff ? "word-diff" : "",
+          wordWrap ? "word-wrap" : "",
           selectedLines.has(key) ? "selected" : "",
           searchMatch ? "search-match" : "",
           activeSearchMatch ? "active-search-match" : "",
@@ -7824,12 +7885,42 @@ function VirtualDiffLines({
         </code>
       </button>
     );
-  });
-  if (!virtual) return <div className="diff-lines">{content}</div>;
+  };
+  const visibleLines = lines.slice(start, end);
+  const content = displayMode === "split"
+    ? (() => {
+        const rows: Array<{ left?: (typeof lines)[number]; right?: (typeof lines)[number] }> = [];
+        for (let index = 0; index < visibleLines.length; index += 1) {
+          const line = visibleLines[index];
+          if (line.kind === "deletion") {
+            const deletions: Array<(typeof lines)[number]> = [];
+            const additions: Array<(typeof lines)[number]> = [];
+            while (visibleLines[index]?.kind === "deletion") deletions.push(visibleLines[index++]);
+            while (visibleLines[index]?.kind === "addition") additions.push(visibleLines[index++]);
+            const count = Math.max(deletions.length, additions.length);
+            for (let row = 0; row < count; row += 1) rows.push({ left: deletions[row], right: additions[row] });
+            index -= 1;
+          } else if (line.kind === "addition") {
+            rows.push({ right: line });
+          } else {
+            rows.push({ left: line, right: line });
+          }
+        }
+        return rows.map((row, index) => (
+          <div className="diff-split-row" key={`${hunkIndex}-split-${index}`}>
+            {renderLine(row.left, "left")}
+            {renderLine(row.right, "right")}
+          </div>
+        ));
+      })()
+    : visibleLines.map((line) => renderLine(line));
+  if (!virtual) {
+    return <div className={`diff-lines ${displayMode === "split" ? "split-diff" : ""}`}>{content}</div>;
+  }
   return (
     <div
       ref={virtualListRef}
-      className="diff-lines virtual-diff"
+      className={`diff-lines virtual-diff ${displayMode === "split" ? "split-diff" : ""}`}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
     >
       <div className="virtual-diff-space" style={{ height: lines.length * rowHeight }}>
@@ -8011,6 +8102,19 @@ function HistoryView({
   const [historyMutationPreview, setHistoryMutationPreview] =
     useState<HistoryMutationPreview>();
   const [historyMutationBusy, setHistoryMutationBusy] = useState(false);
+  const [compareDialog, setCompareDialog] = useState<CompareDialogState>();
+  const [compareFileIndex, setCompareFileIndex] = useState(0);
+  const [compareViewMode, setCompareViewMode] = useState<"unified" | "split">("split");
+  const [comparePatch, setComparePatch] = useState<ComparePatchDto>();
+  const [comparePatchBusy, setComparePatchBusy] = useState(false);
+  const [comparePatchMessage, setComparePatchMessage] = useState("");
+  const [externalDiffTool, setExternalDiffTool] = useState<ExternalDiffToolDto>();
+  const [externalDiffDraft, setExternalDiffDraft] = useState("");
+  const [externalMergeDraft, setExternalMergeDraft] = useState("");
+  const [externalDiffBusy, setExternalDiffBusy] = useState(false);
+  const [binaryPreview, setBinaryPreview] = useState<BinaryPreviewDto>();
+  const [binaryPreviewBusy, setBinaryPreviewBusy] = useState(false);
+  const [binaryOverlay, setBinaryOverlay] = useState(false);
   const [rebasePreview, setRebasePreview] =
     useState<InteractiveRebasePreviewDto>();
   const [rebasePlan, setRebasePlan] = useState<
@@ -8467,6 +8571,32 @@ function HistoryView({
     }
   }
 
+  function openCompareDialog() {
+    setCompareFileIndex(0);
+    setCompareDialog({
+      left: selected?.oid ?? snapshot.head.oid,
+      right: "WORKTREE",
+    });
+  }
+
+  async function submitCompare() {
+    if (!compareDialog) return;
+    setCompareDialog((current) => current && { ...current, busy: true, error: undefined });
+    try {
+      const result = await compareDiff(
+        snapshot.repository.id,
+        compareDialog.left,
+        compareDialog.right,
+      );
+      setCompareDialog((current) => current && { ...current, result, busy: false });
+      setCompareFileIndex(0);
+    } catch (reason: unknown) {
+      setCompareDialog((current) =>
+        current && { ...current, busy: false, error: normalizeAppError(reason).message },
+      );
+    }
+  }
+
   function closeHistorySearch() {
     setShowHistorySearch(false);
     setDraftQuery("");
@@ -8502,6 +8632,172 @@ function HistoryView({
   }
 
   const hasConflicts = snapshot.changes.some((change) => change.conflict);
+  const compareFile = compareDialog?.result?.files[compareFileIndex];
+  const compareDiffDocument: DiffDto | undefined = compareFile
+    ? {
+        schemaVersion: 1,
+        binary: compareFile.binary,
+        oldPath: compareFile.oldPath,
+        newPath: compareFile.newPath,
+        hunks: compareFile.hunks,
+      }
+    : undefined;
+
+  useEffect(() => {
+    if (!compareDialog) {
+      setComparePatch(undefined);
+      setComparePatchMessage("");
+      setBinaryPreview(undefined);
+      return;
+    }
+    let active = true;
+    getExternalDiffTool(snapshot.repository.id)
+      .then((tool) => {
+        if (active) {
+          setExternalDiffTool(tool);
+          setExternalDiffDraft(tool.configured ?? "");
+          setExternalMergeDraft(tool.mergeConfigured ?? "");
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [compareDialog, snapshot.repository.id]);
+
+  useEffect(() => {
+    if (!compareDialog?.result || !compareFile?.binary) {
+      setBinaryPreview(undefined);
+      return;
+    }
+    const path = compareFile.newPath || compareFile.oldPath;
+    let active = true;
+    setBinaryPreviewBusy(true);
+    getBinaryPreview(
+      snapshot.repository.id,
+      compareDialog.left,
+      compareDialog.right,
+      path,
+    )
+      .then((preview) => active && setBinaryPreview(preview))
+      .catch(() => active && setBinaryPreview(undefined))
+      .finally(() => active && setBinaryPreviewBusy(false));
+    return () => {
+      active = false;
+    };
+  }, [compareDialog, compareFile]);
+
+  async function generateComparePatch() {
+    if (!compareDialog) return;
+    setComparePatchBusy(true);
+    setComparePatchMessage("");
+    try {
+      const result = await getComparePatch(
+        snapshot.repository.id,
+        compareDialog.left,
+        compareDialog.right,
+      );
+      setComparePatch(result);
+      setComparePatchMessage(t("Patch generated."));
+    } catch (reason: unknown) {
+      setComparePatchMessage(normalizeAppError(reason).message);
+    } finally {
+      setComparePatchBusy(false);
+    }
+  }
+
+  async function validateGeneratedPatch() {
+    if (!comparePatch) return;
+    setComparePatchBusy(true);
+    try {
+      const result = await validateComparePatch(
+        snapshot.repository.id,
+        comparePatch.patch,
+      );
+      setComparePatchMessage(result.valid ? t("Patch is valid.") : result.message ?? t("Patch validation failed."));
+    } catch (reason: unknown) {
+      setComparePatchMessage(normalizeAppError(reason).message);
+    } finally {
+      setComparePatchBusy(false);
+    }
+  }
+
+  async function applyGeneratedPatch() {
+    if (!comparePatch || !confirmRepositoryMutation(t("Apply this patch to the index and working tree?"))) return;
+    setComparePatchBusy(true);
+    try {
+      const next = await applyComparePatch(
+        snapshot.repository.id,
+        snapshot.revision,
+        comparePatch.patch,
+      );
+      onSnapshot(next);
+      setComparePatchMessage(t("Patch applied."));
+    } catch (reason: unknown) {
+      setComparePatchMessage(normalizeAppError(reason).message);
+    } finally {
+      setComparePatchBusy(false);
+    }
+  }
+
+  async function saveGeneratedPatch() {
+    if (!comparePatch) return;
+    const path = window.prompt(t("Patch file path"), "comparison.patch");
+    if (!path?.trim()) return;
+    setComparePatchBusy(true);
+    try {
+      await saveComparePatch(snapshot.repository.id, path.trim(), comparePatch.patch);
+      setComparePatchMessage(t("Patch saved."));
+    } catch (reason: unknown) {
+      setComparePatchMessage(normalizeAppError(reason).message);
+    } finally {
+      setComparePatchBusy(false);
+    }
+  }
+
+  async function saveExternalDiffTool() {
+    setExternalDiffBusy(true);
+    try {
+      const tool = await updateExternalDiffTool(snapshot.repository.id, externalDiffDraft, externalMergeDraft);
+      setExternalDiffTool(tool);
+      setExternalDiffDraft(tool.configured ?? "");
+      setExternalMergeDraft(tool.mergeConfigured ?? "");
+      setComparePatchMessage(t("External diff tool saved."));
+    } catch (reason: unknown) {
+      setComparePatchMessage(normalizeAppError(reason).message);
+    } finally {
+      setExternalDiffBusy(false);
+    }
+  }
+
+  async function launchExternalDiff() {
+    if (!compareDialog) return;
+    setExternalDiffBusy(true);
+    try {
+      const result = await runExternalDiff(
+        snapshot.repository.id,
+        compareDialog.left,
+        compareDialog.right,
+      );
+      setComparePatchMessage(t("External diff finished: {tool} (exit {code})", { tool: result.tool, code: result.exitCode }));
+    } catch (reason: unknown) {
+      setComparePatchMessage(normalizeAppError(reason).message);
+    } finally {
+      setExternalDiffBusy(false);
+    }
+  }
+
+  async function launchExternalMerge() {
+    setExternalDiffBusy(true);
+    try {
+      const result = await runExternalMerge(snapshot.repository.id);
+      setComparePatchMessage(t("External merge finished: {tool} (exit {code})", { tool: result.tool, code: result.exitCode }));
+    } catch (reason: unknown) {
+      setComparePatchMessage(normalizeAppError(reason).message);
+    } finally {
+      setExternalDiffBusy(false);
+    }
+  }
 
   return (
     <div className="history-view">
@@ -8611,6 +8907,15 @@ function HistoryView({
             </div>
           </div>
         )}
+        <div className="history-toolbar" role="toolbar" aria-label={t("History tools")}>
+          <button
+            className="control-button control-button--secondary"
+            type="button"
+            onClick={openCompareDialog}
+          >
+            {t("Compare revisions")}
+          </button>
+        </div>
         {showHistorySearch && (
           <form
             className="history-filterbar"
@@ -9400,6 +9705,191 @@ function HistoryView({
               </div>
             </div>
           </div>
+        </div>
+      )}
+      {compareDialog && (
+        <div className="modal-overlay" role="presentation" onClick={() => !compareDialog.busy && setCompareDialog(undefined)}>
+          <form
+            className="settings-modal compare-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="compare-dialog-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitCompare();
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <h2 id="compare-dialog-title">{t("Compare revisions")}</h2>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close comparison")}
+                disabled={compareDialog.busy}
+                onClick={() => setCompareDialog(undefined)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body">
+              <div className="compare-input-grid">
+                <label>
+                  {t("Left revision")}
+                  <input
+                    className="control-input"
+                    value={compareDialog.left}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setCompareDialog((current) => current && { ...current, left: value });
+                    }}
+                    placeholder="HEAD~1"
+                  />
+                </label>
+                <label>
+                  {t("Right revision")}
+                  <input
+                    className="control-input"
+                    value={compareDialog.right}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setCompareDialog((current) => current && { ...current, right: value });
+                    }}
+                    placeholder="WORKTREE"
+                  />
+                </label>
+              </div>
+              <small className="settings-note">{t("WORKTREE means current working tree")}</small>
+              <div className="remote-form-actions">
+                <button className="control-button control-button--primary" type="submit" disabled={compareDialog.busy || !compareDialog.left.trim() || !compareDialog.right.trim()}>
+                  {compareDialog.busy ? t("Comparing…") : t("Compare")}
+                </button>
+                {compareDialog.result && (
+                  <div className="diff-view-controls" role="group" aria-label={t("Diff view")}>
+                    <button type="button" aria-pressed={compareViewMode === "unified"} onClick={() => setCompareViewMode("unified")}>
+                      {t("Unified")}
+                    </button>
+                    <button type="button" aria-pressed={compareViewMode === "split"} onClick={() => setCompareViewMode("split")}>
+                      {t("Split")}
+                    </button>
+                  </div>
+                )}
+              </div>
+              {compareDialog.result && (
+                <div className="compare-actions" role="group" aria-label={t("Patch actions")}>
+                  <button className="control-button control-button--secondary" type="button" disabled={comparePatchBusy} onClick={() => void generateComparePatch()}>
+                    {t("Generate patch")}
+                  </button>
+                  <button className="control-button control-button--secondary" type="button" disabled={comparePatchBusy || !comparePatch} onClick={() => void validateGeneratedPatch()}>
+                    {t("Validate patch")}
+                  </button>
+                  <button className="control-button control-button--secondary" type="button" disabled={comparePatchBusy || !comparePatch} onClick={() => void saveGeneratedPatch()}>
+                    {t("Save patch")}
+                  </button>
+                  <button className="control-button control-button--danger" type="button" disabled={comparePatchBusy || !comparePatch} onClick={() => void applyGeneratedPatch()}>
+                    {t("Apply patch")}
+                  </button>
+                </div>
+              )}
+              {comparePatch && (
+                <div className="compare-patch-preview" role="region" aria-label={t("Generated patch")}>
+                  <div className="compare-patch-header">
+                    <strong>{t("Generated patch")}</strong>
+                    <span>{comparePatch.fileCount} {t("files")}{comparePatch.binary ? ` · ${t("Binary file")}` : ""}</span>
+                  </div>
+                  <pre>{comparePatch.patch.slice(0, 12000)}</pre>
+                </div>
+              )}
+              {compareDialog.result && (
+                <div className="external-diff-settings">
+                  <label>
+                    {t("External diff tool")}
+                    <input
+                      className="control-input"
+                      value={externalDiffDraft}
+                      placeholder={t("Git diff.tool name, leave blank to disable")}
+                      onChange={(event) => setExternalDiffDraft(event.currentTarget.value)}
+                    />
+                  </label>
+                  <label>
+                    {t("External merge tool")}
+                    <input
+                      className="control-input"
+                      value={externalMergeDraft}
+                      placeholder={t("Git merge.tool name, leave blank to disable")}
+                      onChange={(event) => setExternalMergeDraft(event.currentTarget.value)}
+                    />
+                  </label>
+                  <div className="remote-form-actions">
+                    <button className="control-button control-button--secondary" type="button" disabled={externalDiffBusy} onClick={() => void saveExternalDiffTool()}>
+                      {t("Save tool")}
+                    </button>
+                    <button className="control-button control-button--secondary" type="button" disabled={externalDiffBusy || !externalDiffTool?.configured} onClick={() => void launchExternalDiff()}>
+                      {t("Run external diff")}
+                    </button>
+                    <button className="control-button control-button--secondary" type="button" disabled={externalDiffBusy || !externalDiffTool?.mergeConfigured} onClick={() => void launchExternalMerge()}>
+                      {t("Run external merge")}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {comparePatchMessage && <p className="identity-feedback" role="status">{comparePatchMessage}</p>}
+              {compareDialog.error && <p className="identity-feedback error" role="alert">{compareDialog.error}</p>}
+              {compareDialog.result && compareDialog.result.files.length === 0 && (
+                <p className="diff-state">{t("No differences found.")}</p>
+              )}
+              {compareDialog.result && compareDialog.result.files.length > 0 && (
+                <div className="compare-result" role="region" aria-label={t("Comparison result")}>
+                  <div className="compare-file-tabs" role="tablist" aria-label={t("Compared files")}>
+                    {compareDialog.result.files.map((file, index) => (
+                      <button
+                        key={`${file.oldPath}-${file.newPath}-${index}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={index === compareFileIndex}
+                        onClick={() => setCompareFileIndex(index)}
+                      >
+                        {file.newPath || file.oldPath}
+                      </button>
+                    ))}
+                  </div>
+                  {compareFile?.binary ? (
+                    <div className="binary-preview-card">
+                      <div className="diff-state">{t("Binary file")}: {compareFile.oldPath} → {compareFile.newPath}</div>
+                      {binaryPreviewBusy ? (
+                        <p className="diff-state">{t("Loading binary preview…")}</p>
+                      ) : binaryPreview?.mimeType?.startsWith("image/") ? (
+                        <>
+                          <div className="binary-preview-controls" role="group" aria-label={t("Image comparison")}>
+                            <button type="button" aria-pressed={!binaryOverlay} onClick={() => setBinaryOverlay(false)}>{t("Side by side")}</button>
+                            <button type="button" aria-pressed={binaryOverlay} onClick={() => setBinaryOverlay(true)}>{t("Overlay")}</button>
+                          </div>
+                          <div className={binaryOverlay ? "binary-images binary-images--overlay" : "binary-images"}>
+                            {binaryPreview.oldDataUrl && <figure><img src={binaryPreview.oldDataUrl} alt={t("Old image")} /><figcaption>{t("Old image")} · {binaryPreview.oldSize ?? 0} B</figcaption></figure>}
+                            {binaryPreview.newDataUrl && <figure><img src={binaryPreview.newDataUrl} alt={t("New image")} /><figcaption>{t("New image")} · {binaryPreview.newSize ?? 0} B</figcaption></figure>}
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : compareDiffDocument ? (
+                    <DiffRenderer
+                      diff={compareDiffDocument}
+                      selectedLines={new Set()}
+                      onSelectionChange={() => undefined}
+                      onToggleLine={() => undefined}
+                      onApplyHunk={() => undefined}
+                      actionLabel={t("Compare")}
+                      actionDisabled
+                      readOnly
+                      displayMode={compareViewMode}
+                      wordDiff
+                      wordWrap
+                    />
+                  ) : null}
+                </div>
+              )}
+            </div>
+          </form>
         </div>
       )}
     </div>

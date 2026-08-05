@@ -72,6 +72,54 @@ export type DiffDto = {
   }>;
 };
 
+export type CompareFileDto = {
+  oldPath: string;
+  newPath: string;
+  binary: boolean;
+  hunks: DiffDto["hunks"];
+};
+
+export type CompareDto = {
+  schemaVersion: 1;
+  files: CompareFileDto[];
+};
+
+export type ComparePatchDto = {
+  schemaVersion: number;
+  patch: string;
+  fileCount: number;
+  binary: boolean;
+};
+
+export type PatchValidationDto = {
+  schemaVersion: number;
+  valid: boolean;
+  message?: string | null;
+};
+
+export type ExternalDiffToolDto = {
+  schemaVersion: number;
+  configured?: string | null;
+  mergeConfigured?: string | null;
+};
+
+export type ExternalDiffResultDto = {
+  schemaVersion: number;
+  tool: string;
+  exitCode: number;
+};
+
+export type BinaryPreviewDto = {
+  schemaVersion: number;
+  oldPath: string;
+  newPath: string;
+  mimeType?: string | null;
+  oldSize?: number | null;
+  newSize?: number | null;
+  oldDataUrl?: string | null;
+  newDataUrl?: string | null;
+};
+
 export type FileBlameDto = {
   schemaVersion: 1;
   path: number[];
@@ -953,6 +1001,80 @@ export function getDiff(
   target: DiffTarget,
 ): Promise<DiffDto> {
   return invoke<DiffDto>("diff_get", { repoId, pathBytes, target });
+}
+
+export function compareDiff(
+  repoId: string,
+  left: string,
+  right: string,
+): Promise<CompareDto> {
+  return invoke<CompareDto>("compare_get", { repoId, request: { left, right } });
+}
+
+export function getComparePatch(
+  repoId: string,
+  left: string,
+  right: string,
+): Promise<ComparePatchDto> {
+  return invoke<ComparePatchDto>("compare_patch_get", { repoId, request: { left, right } });
+}
+
+export function validateComparePatch(repoId: string, patch: string): Promise<PatchValidationDto> {
+  return invoke<PatchValidationDto>("compare_patch_validate", { repoId, patch });
+}
+
+export function applyComparePatch(
+  repoId: string,
+  revision: number,
+  patch: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("compare_patch_apply", { repoId, revision, patch });
+}
+
+export function saveComparePatch(repoId: string, path: string, patch: string): Promise<void> {
+  return invoke<void>("compare_patch_save", { repoId, path, patch });
+}
+
+export function getExternalDiffTool(repoId: string): Promise<ExternalDiffToolDto> {
+  return invoke<ExternalDiffToolDto>("external_diff_tool_get", { repoId });
+}
+
+export function updateExternalDiffTool(
+  repoId: string,
+  tool?: string,
+  mergeTool?: string,
+): Promise<ExternalDiffToolDto> {
+  return invoke<ExternalDiffToolDto>("external_diff_tool_update", {
+    repoId,
+    request: { tool: tool?.trim() || null, mergeTool: mergeTool?.trim() || null },
+  });
+}
+
+export function runExternalDiff(
+  repoId: string,
+  left: string,
+  right: string,
+): Promise<ExternalDiffResultDto> {
+  return invoke<ExternalDiffResultDto>("external_diff_run", {
+    repoId,
+    request: { left, right },
+  });
+}
+
+export function runExternalMerge(repoId: string): Promise<ExternalDiffResultDto> {
+  return invoke<ExternalDiffResultDto>("external_merge_run", { repoId });
+}
+
+export function getBinaryPreview(
+  repoId: string,
+  left: string,
+  right: string,
+  path: string,
+): Promise<BinaryPreviewDto> {
+  return invoke<BinaryPreviewDto>("binary_preview_get", {
+    repoId,
+    request: { left, right, path },
+  });
 }
 
 export function getFileBlame(

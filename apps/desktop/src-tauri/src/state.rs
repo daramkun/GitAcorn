@@ -6,11 +6,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use app_core::{
-    AppError, BranchRequest, CloneRequest, CommitRequest, ConflictResolution, DiffTarget,
-    FileBlame, GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
-    HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection,
-    PathHistory, ReflogEntry, RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler,
-    RepositoryService, RepositorySidebar, StashRequest, WorktreeCreateRequest,
+    AppError, BinaryPreview, BranchRequest, CloneRequest, CommitRequest, ComparePatch,
+    ConflictResolution, DiffTarget, ExternalDiffResult, ExternalDiffTool, FileBlame, GitIdentity,
+    GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryOperation,
+    InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection, PathHistory, ReflogEntry,
+    RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler, RepositoryService,
+    RepositorySidebar, StashRequest, WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -518,6 +519,122 @@ impl ApplicationState {
                 .get(&repo_id)
                 .ok_or(AppError::RepositoryNotOpen)?;
             self.service.diff(&repository.descriptor, path, target)
+        })
+    }
+
+    pub fn repository_compare(
+        &self,
+        repo_id: &str,
+        left: &str,
+        right: &str,
+    ) -> Result<DiffDocument, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.compare(&descriptor, left, right))
+    }
+
+    pub fn repository_compare_patch(
+        &self,
+        repo_id: &str,
+        left: &str,
+        right: &str,
+    ) -> Result<ComparePatch, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.read(repo_id, || {
+            self.service.compare_patch(&descriptor, left, right)
+        })
+    }
+
+    pub fn repository_validate_patch(&self, repo_id: &str, patch: &[u8]) -> Result<(), AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.validate_patch(&descriptor, patch))
+    }
+
+    pub fn repository_apply_patch(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        patch: &[u8],
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.apply_patch(repository, patch)
+        })
+    }
+
+    pub fn repository_save_patch(
+        &self,
+        repo_id: &str,
+        path: &std::path::Path,
+        patch: &[u8],
+    ) -> Result<(), AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.save_patch(path, patch))
+    }
+
+    pub fn repository_external_diff_tool(
+        &self,
+        repo_id: &str,
+    ) -> Result<ExternalDiffTool, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.external_diff_tool(&descriptor))
+    }
+
+    pub fn update_repository_external_tools(
+        &self,
+        repo_id: &str,
+        diff_tool: Option<&str>,
+        merge_tool: Option<&str>,
+    ) -> Result<ExternalDiffTool, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            self.service
+                .set_external_tools(&descriptor, diff_tool, merge_tool)
+        })
+    }
+
+    pub fn run_repository_external_diff(
+        &self,
+        repo_id: &str,
+        left: &str,
+        right: &str,
+    ) -> Result<ExternalDiffResult, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.read(repo_id, || {
+            self.service.run_external_diff(&descriptor, left, right)
+        })
+    }
+
+    pub fn run_repository_external_merge(
+        &self,
+        repo_id: &str,
+    ) -> Result<ExternalDiffResult, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.run_external_merge(&descriptor))
+    }
+
+    pub fn repository_binary_preview(
+        &self,
+        repo_id: &str,
+        left: &str,
+        right: &str,
+        path: &str,
+    ) -> Result<BinaryPreview, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.read(repo_id, || {
+            self.service.binary_preview(&descriptor, left, right, path)
         })
     }
 
