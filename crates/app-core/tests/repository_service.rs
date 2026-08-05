@@ -86,6 +86,36 @@ fn reads_blame_and_tracks_renames_in_file_and_directory_history() {
 }
 
 #[test]
+fn includes_merge_commits_in_directory_history() {
+    let fixture = TestRepository::init();
+    fixture.git(["switch", "-c", "history-feature"]);
+    fs::create_dir_all(fixture.path().join("src")).expect("create history directory");
+    fixture.write("src/feature.txt", "feature\n");
+    fixture.git(["add", "src/feature.txt"]);
+    fixture.git(["commit", "-m", "feature history"]);
+    fixture.git(["switch", "main"]);
+    fs::create_dir_all(fixture.path().join("src")).expect("recreate history directory");
+    fixture.write("src/main.txt", "main\n");
+    fixture.git(["add", "src/main.txt"]);
+    fixture.git(["commit", "-m", "main history"]);
+    fixture.git(["merge", "--no-ff", "history-feature", "-m", "merge history"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let history = service
+        .path_history(&repository, b"src", true, None, 20)
+        .expect("merge directory history");
+    assert!(
+        history
+            .entries
+            .iter()
+            .any(|entry| entry.subject == "merge history"),
+        "merge commit should remain visible in directory history: {:?}",
+        history.entries
+    );
+}
+
+#[test]
 fn soft_head_recovery_undoes_and_redoes_a_commit_without_losing_the_index() {
     let fixture = TestRepository::init();
     let before = commit_independent_file(&fixture, "baseline.txt", "baseline");
