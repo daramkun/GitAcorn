@@ -1108,11 +1108,12 @@ export function getBinaryPreview(
   repoId: string,
   left: string,
   right: string,
-  path: string,
+  oldPath: string,
+  newPath: string,
 ): Promise<BinaryPreviewDto> {
   return invoke<BinaryPreviewDto>("binary_preview_get", {
     repoId,
-    request: { left, right, path },
+    request: { left, right, oldPath, newPath },
   });
 }
 

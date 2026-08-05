@@ -8984,14 +8984,16 @@ function HistoryView({
       setBinaryPreview(undefined);
       return;
     }
-    const path = compareFile.newPath || compareFile.oldPath;
+    const oldPath = compareFile.oldPath || compareFile.newPath;
+    const newPath = compareFile.newPath || compareFile.oldPath;
     let active = true;
     setBinaryPreviewBusy(true);
     getBinaryPreview(
       snapshot.repository.id,
       compareDialog.left,
       compareDialog.right,
-      path,
+      oldPath,
+      newPath,
     )
       .then((preview) => active && setBinaryPreview(preview))
       .catch(() => active && setBinaryPreview(undefined))

@@ -733,12 +733,14 @@ impl ApplicationState {
         repo_id: &str,
         left: &str,
         right: &str,
-        path: &str,
+        old_path: &str,
+        new_path: &str,
     ) -> Result<BinaryPreview, AppError> {
         let repo_id = parse_repo_id(repo_id)?;
         let descriptor = self.descriptor(repo_id)?;
         self.scheduler.read(repo_id, || {
-            self.service.binary_preview(&descriptor, left, right, path)
+            self.service
+                .binary_preview(&descriptor, left, right, old_path, new_path)
         })
     }
 

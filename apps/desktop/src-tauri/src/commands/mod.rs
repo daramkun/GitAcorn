@@ -1258,7 +1258,13 @@ pub fn binary_preview_get(
     state: State<'_, ApplicationState>,
 ) -> CommandResult<BinaryPreviewDto> {
     state
-        .repository_binary_preview(&repo_id, &request.left, &request.right, &request.path)
+        .repository_binary_preview(
+            &repo_id,
+            &request.left,
+            &request.right,
+            &request.old_path,
+            &request.new_path,
+        )
         .map(BinaryPreviewDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }

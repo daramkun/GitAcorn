@@ -1850,10 +1850,25 @@ fn generates_validates_applies_and_previews_compare_artifacts() {
         .expect("image head oid")
         .trim()
         .to_owned();
+    fixture.git(["mv", "image.png", "renamed.png"]);
+    fixture.git(["commit", "-m", "rename image"]);
+    let rename_head = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("rename head oid")
+        .trim()
+        .to_owned();
     let preview = service
-        .binary_preview(&repository, &head, &image_head, "image.png")
+        .binary_preview(
+            &repository,
+            &image_head,
+            &rename_head,
+            "image.png",
+            "renamed.png",
+        )
         .expect("binary preview");
     assert_eq!(preview.mime_type.as_deref(), Some("image/png"));
+    assert_eq!(preview.old_path, "image.png");
+    assert_eq!(preview.new_path, "renamed.png");
+    assert_eq!(preview.old_size, Some(4));
     assert_eq!(preview.new_size, Some(4));
 }
 

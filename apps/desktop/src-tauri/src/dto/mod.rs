@@ -695,7 +695,8 @@ pub struct ExternalDiffToolRequestDto {
 pub struct BinaryPreviewRequestDto {
     pub left: String,
     pub right: String,
-    pub path: String,
+    pub old_path: String,
+    pub new_path: String,
 }
 
 #[derive(Debug, Serialize)]

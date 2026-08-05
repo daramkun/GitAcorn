@@ -2800,18 +2800,20 @@ impl RepositoryService {
         repository: &RepositoryDescriptor,
         left: &str,
         right: &str,
-        path: &str,
+        old_path: &str,
+        new_path: &str,
     ) -> Result<BinaryPreview, AppError> {
-        let path = validate_relative_file_path(path)?;
+        let old_path = validate_relative_file_path(old_path)?;
+        let new_path = validate_relative_file_path(new_path)?;
         let left_ref = validate_compare_ref(self, repository, left)?;
         let right_ref = validate_compare_ref(self, repository, right)?;
-        let old = self.binary_side(repository, left_ref.as_ref(), &path)?;
-        let new = self.binary_side(repository, right_ref.as_ref(), &path)?;
-        let mime_type = image_mime_type(&path);
+        let old = self.binary_side(repository, left_ref.as_ref(), &old_path)?;
+        let new = self.binary_side(repository, right_ref.as_ref(), &new_path)?;
+        let mime_type = image_mime_type(&new_path).or_else(|| image_mime_type(&old_path));
         const PREVIEW_LIMIT: usize = 8 * 1024 * 1024;
         Ok(BinaryPreview {
-            old_path: path.clone(),
-            new_path: path,
+            old_path,
+            new_path,
             mime_type,
             old_size: old.as_ref().map(|bytes| bytes.len() as u64),
             new_size: new.as_ref().map(|bytes| bytes.len() as u64),
