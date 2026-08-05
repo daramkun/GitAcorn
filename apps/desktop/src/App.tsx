@@ -43,6 +43,10 @@ import {
   getBinaryPreview,
   getComparePatch,
   getExternalDiffTool,
+  getLfsLocks,
+  getLfsStatus,
+  getSignatureSettings,
+  getSignatureStatus,
   createBranch,
   createCommit,
   createStash,
@@ -90,6 +94,7 @@ import {
   restoreReflogReference,
   startClone,
   startInteractiveRebase,
+  startLfsSync,
   startRemoteOperation,
   skipRebase,
   skipHistory,
@@ -97,13 +102,16 @@ import {
   stagePaths,
   unstagePaths,
   undoOperation,
+  lockLfsPath,
   unlockWorktree,
+  unlockLfsPath,
   lockWorktree,
   updateSessionTab,
   updateRemote,
   updateGlobalGitIdentity,
   updateExternalDiffTool,
   updateRepositoryGitIdentity,
+  updateSignatureSettings,
   runExternalDiff,
   runExternalMerge,
   validateComparePatch,
@@ -113,6 +121,10 @@ import {
   type CompareDto,
   type ComparePatchDto,
   type ExternalDiffToolDto,
+  type LfsLockDto,
+  type LfsStatusDto,
+  type SignatureSettingsDto,
+  type SignatureStatusDto,
   type CommitFileDto,
   type DiffDto,
   type DiffTarget,
@@ -535,6 +547,13 @@ export function App() {
   const [identitySaving, setIdentitySaving] = useState<"global" | "repository">();
   const [identityMessage, setIdentityMessage] = useState("");
   const [identityError, setIdentityError] = useState("");
+  const [lfsStatus, setLfsStatus] = useState<LfsStatusDto>();
+  const [lfsLocks, setLfsLocks] = useState<LfsLockDto[]>([]);
+  const [lfsLoading, setLfsLoading] = useState(false);
+  const [lfsMessage, setLfsMessage] = useState("");
+  const [signatureSettings, setSignatureSettings] = useState<SignatureSettingsDto>();
+  const [signatureLoading, setSignatureLoading] = useState(false);
+  const [signatureSaving, setSignatureSaving] = useState(false);
   const [showOperationCenter, setShowOperationCenter] = useState(false);
   const [showSidebarSearch, setShowSidebarSearch] = useState(false);
   const [sidebarFilter, setSidebarFilter] = useState("");
@@ -809,6 +828,39 @@ export function App() {
     showRepositorySettings,
     showSettings,
   ]);
+
+  useEffect(() => {
+    if (!showRepositorySettings || !activeRepoId) {
+      setLfsStatus(undefined);
+      setLfsLocks([]);
+      setSignatureSettings(undefined);
+      return;
+    }
+    let active = true;
+    setLfsLoading(true);
+    setSignatureLoading(true);
+    Promise.all([
+      getLfsStatus(activeRepoId),
+      getLfsLocks(activeRepoId),
+      getSignatureSettings(activeRepoId),
+    ])
+      .then(([status, locks, settings]) => {
+        if (!active) return;
+        setLfsStatus(status);
+        setLfsLocks(locks);
+        setSignatureSettings(settings);
+      })
+      .catch((reason: unknown) => active && setLfsMessage(normalizeAppError(reason).message))
+      .finally(() => {
+        if (active) {
+          setLfsLoading(false);
+          setSignatureLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeRepoId, showRepositorySettings]);
 
   const handleSaveGlobalIdentity = async (event: FormEvent) => {
     event.preventDefault();
@@ -1482,6 +1534,31 @@ export function App() {
     reorderSessionTabs(next.map((tab) => tab.repoId)).catch((reason: unknown) =>
       setError(normalizeAppError(reason)),
     );
+  }
+
+  function handleLfs(kind: "fetch" | "pull" | "prune", remote?: string) {
+    if (!activeTab) return;
+    const repoId = activeTab.repoId;
+    setError(undefined);
+    startLfsSync(
+      repoId,
+      kind,
+      (event) => {
+        if (event.repoId !== repoId) return;
+        setRemoteOperations((current) =>
+          updateRepositoryOperation(current, repoId, event),
+        );
+        if (event.snapshot) {
+          setTabs((current) =>
+            current.map((tab) =>
+              tab.repoId === repoId ? { ...tab, snapshot: event.snapshot } : tab,
+            ),
+          );
+        }
+        if (event.error) setError(event.error);
+      },
+      remote,
+    ).catch((reason: unknown) => setError(normalizeAppError(reason)));
   }
 
   function tabDropEdge(
@@ -3062,6 +3139,69 @@ export function App() {
                     }}
                   />
                 </label>
+              </div>
+              <div className="settings-section" aria-label={t("Git LFS")}> 
+                <h3>{t("Git LFS")}</h3>
+                {lfsLoading ? (
+                  <p className="identity-state">{t("Loading LFS status…")}</p>
+                ) : lfsStatus?.installed ? (
+                  <>
+                    <p className="settings-section-desc">
+                      {t("{count} tracked LFS files", { count: lfsStatus.tracked.length })}
+                    </p>
+                    <div className="remote-form-actions">
+                      <button type="button" onClick={() => handleLfs("fetch")}>{t("LFS fetch")}</button>
+                      <button type="button" onClick={() => handleLfs("pull")}>{t("LFS pull")}</button>
+                      <button type="button" onClick={() => handleLfs("prune")}>{t("LFS prune")}</button>
+                    </div>
+                    <ul className="lfs-file-list">
+                      {lfsStatus.tracked.slice(0, 20).map((file) => (
+                        <li key={file.path}>
+                          <span>{file.path}</span>
+                          <small>{file.downloaded ? t("Downloaded") : t("Pointer only")}</small>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="lfs-locks">
+                      <strong>{t("LFS locks")}</strong>
+                      {lfsLocks.length === 0 ? <small>{t("No LFS locks.")}</small> : lfsLocks.map((lock) => (
+                        <div className="lfs-lock-row" key={lock.id}>
+                          <span>{lock.path} · {lock.owner}</span>
+                          <button type="button" onClick={() => {
+                            if (!activeRepoId) return;
+                            void unlockLfsPath(activeRepoId, undefined, lock.id).then(setLfsLocks).catch((reason: unknown) => setLfsMessage(normalizeAppError(reason).message));
+                          }}>{t("Unlock")}</button>
+                        </div>
+                      ))}
+                      <button type="button" onClick={() => {
+                        if (!activeRepoId) return;
+                        const path = window.prompt(t("LFS lock path"));
+                        if (!path?.trim()) return;
+                        void lockLfsPath(activeRepoId, path.trim()).then(setLfsLocks).catch((reason: unknown) => setLfsMessage(normalizeAppError(reason).message));
+                      }}>{t("Lock path")}</button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="settings-section-desc">{t("Git LFS is not installed or this repository has no LFS files.")}</p>
+                )}
+                {lfsMessage && <p className="identity-feedback" role="status">{lfsMessage}</p>}
+              </div>
+              <div className="settings-section" aria-label={t("Commit signing")}> 
+                <h3>{t("Commit and tag signing")}</h3>
+                {signatureSettings ? (
+                  <div className="signature-settings-grid">
+                    <label className="settings-toggle-row"><span>{t("Sign commits")}</span><input type="checkbox" checked={signatureSettings.commitSign} onChange={(event) => setSignatureSettings((current) => current && { ...current, commitSign: event.target.checked })} /></label>
+                    <label className="settings-toggle-row"><span>{t("Sign tags")}</span><input type="checkbox" checked={signatureSettings.tagSign} onChange={(event) => setSignatureSettings((current) => current && { ...current, tagSign: event.target.checked })} /></label>
+                    <label>{t("Signature format")}<select value={signatureSettings.format ?? ""} onChange={(event) => setSignatureSettings((current) => current && { ...current, format: event.target.value || null })}><option value="">{t("System default")}</option><option value="openpgp">OpenPGP</option><option value="ssh">SSH</option><option value="x509">X.509</option></select></label>
+                    <label>{t("Signing key")}<input value={signatureSettings.signingKey ?? ""} onChange={(event) => setSignatureSettings((current) => current && { ...current, signingKey: event.target.value || null })} /></label>
+                    <label>{t("SSH allowed signers file")}<input value={signatureSettings.sshAllowedSignersFile ?? ""} onChange={(event) => setSignatureSettings((current) => current && { ...current, sshAllowedSignersFile: event.target.value || null })} /></label>
+                    <button type="button" disabled={signatureSaving} onClick={() => {
+                      if (!activeRepoId || !signatureSettings) return;
+                      setSignatureSaving(true);
+                      void updateSignatureSettings(activeRepoId, signatureSettings).then(setSignatureSettings).catch((reason: unknown) => setLfsMessage(normalizeAppError(reason).message)).finally(() => setSignatureSaving(false));
+                    }}>{signatureSaving ? t("Saving…") : t("Save signing settings")}</button>
+                  </div>
+                ) : signatureLoading ? <p className="identity-state">{t("Loading signature settings…")}</p> : null}
               </div>
               <div className="settings-section git-identity-settings">
                 <h3>{t("Git author identity")}</h3>
@@ -8115,6 +8255,7 @@ function HistoryView({
   const [binaryPreview, setBinaryPreview] = useState<BinaryPreviewDto>();
   const [binaryPreviewBusy, setBinaryPreviewBusy] = useState(false);
   const [binaryOverlay, setBinaryOverlay] = useState(false);
+  const [signatureStatus, setSignatureStatus] = useState<SignatureStatusDto>();
   const [rebasePreview, setRebasePreview] =
     useState<InteractiveRebasePreviewDto>();
   const [rebasePlan, setRebasePlan] = useState<
@@ -8151,6 +8292,20 @@ function HistoryView({
   const selected =
     visibleCommits.find((commit) => commit.oid === selectedOid) ??
     visibleCommits[0];
+
+  useEffect(() => {
+    if (!selected?.oid) {
+      setSignatureStatus(undefined);
+      return;
+    }
+    let active = true;
+    getSignatureStatus(snapshot.repository.id, selected.oid, "commit")
+      .then((status) => active && setSignatureStatus(status))
+      .catch(() => active && setSignatureStatus(undefined));
+    return () => {
+      active = false;
+    };
+  }, [selected?.oid, snapshot.repository.id]);
   const commitFileFilterQuery = commitFileFilter.trim().toLocaleLowerCase();
   const filteredCommitFiles = useMemo(
     () =>
@@ -9067,6 +9222,11 @@ function HistoryView({
               <time dateTime={new Date(selected.authoredAt * 1000).toISOString()}>
                 {new Date(selected.authoredAt * 1000).toLocaleString(localeTag())}
               </time>
+              {signatureStatus && (
+                <span className={`signature-badge signature-${signatureStatus.status.toLowerCase()}`}>
+                  {t("Signature")}: {signatureStatus.status}{signatureStatus.signer ? ` · ${signatureStatus.signer}` : ""}
+                </span>
+              )}
               {selected.body && <pre>{selected.body}</pre>}
               <div className="detail-refs">
                 {selected.references.map((item) => <span key={item}>{shortRef(item)}</span>)}

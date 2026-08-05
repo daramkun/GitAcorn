@@ -16,8 +16,9 @@ pub use repository::{
     ExternalDiffResult, ExternalDiffTool, GitIdentity, GitIdentitySettings, GitReference,
     GitRemote, GitVersion, HistoryFilter, HistoryOperation, InteractiveRebaseAction,
     InteractiveRebaseCommit, InteractiveRebaseItem, InteractiveRebasePreview,
-    InteractiveRebaseRequest, PatchSelection, RefSummary, ReferenceKind, ReflogEntry,
-    RemoteTagSummary, RepositoryService, RepositorySidebar, StashSummary, WorktreeCreateRequest,
+    InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsOperationKind, LfsRequest, LfsStatus,
+    PatchSelection, RefSummary, ReferenceKind, ReflogEntry, RemoteTagSummary, RepositoryService,
+    RepositorySidebar, SignatureSettings, SignatureStatus, StashSummary, WorktreeCreateRequest,
     WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;

@@ -109,6 +109,45 @@ export type ExternalDiffResultDto = {
   exitCode: number;
 };
 
+export type LfsFileStatusDto = {
+  path: string;
+  oid?: string | null;
+  size?: number | null;
+  downloaded: boolean;
+};
+
+export type LfsStatusDto = {
+  schemaVersion: number;
+  installed: boolean;
+  tracked: LfsFileStatusDto[];
+};
+
+export type LfsLockDto = {
+  id: string;
+  path: string;
+  owner: string;
+  lockedAt?: string | null;
+};
+
+export type SignatureStatusDto = {
+  schemaVersion: number;
+  revision: string;
+  kind: string;
+  status: string;
+  signer?: string | null;
+  keyId?: string | null;
+  fingerprint?: string | null;
+};
+
+export type SignatureSettingsDto = {
+  schemaVersion: number;
+  commitSign: boolean;
+  tagSign: boolean;
+  format?: string | null;
+  signingKey?: string | null;
+  sshAllowedSignersFile?: string | null;
+};
+
 export type BinaryPreviewDto = {
   schemaVersion: number;
   oldPath: string;
@@ -324,7 +363,7 @@ export type OperationEventDto = {
   schemaVersion: 1;
   operationId: string;
   repoId?: string;
-  kind: "clone" | "fetch" | "pull" | "push";
+  kind: "clone" | "fetch" | "pull" | "push" | "lfs-fetch" | "lfs-pull" | "lfs-prune";
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   message?: string;
   stream?: "stdout" | "stderr";
@@ -1074,6 +1113,66 @@ export function getBinaryPreview(
   return invoke<BinaryPreviewDto>("binary_preview_get", {
     repoId,
     request: { left, right, path },
+  });
+}
+
+export function startLfsSync(
+  repoId: string,
+  kind: "fetch" | "pull" | "prune",
+  onEvent: (event: OperationEventDto) => void,
+  remote?: string,
+): Promise<OperationStartedDto> {
+  const channel = new Channel<OperationEventDto>();
+  channel.onmessage = onEvent;
+  return invoke<OperationStartedDto>("lfs_sync", {
+    repoId,
+    request: { kind, remote: remote?.trim() || null },
+    channel,
+  });
+}
+
+export function getLfsStatus(repoId: string): Promise<LfsStatusDto> {
+  return invoke<LfsStatusDto>("lfs_status_get", { repoId });
+}
+
+export function getLfsLocks(repoId: string): Promise<LfsLockDto[]> {
+  return invoke<LfsLockDto[]>("lfs_locks_get", { repoId });
+}
+
+export function lockLfsPath(repoId: string, path: string): Promise<LfsLockDto[]> {
+  return invoke<LfsLockDto[]>("lfs_lock", { repoId, path });
+}
+
+export function unlockLfsPath(
+  repoId: string,
+  path?: string,
+  lockId?: string,
+): Promise<LfsLockDto[]> {
+  return invoke<LfsLockDto[]>("lfs_unlock", {
+    repoId,
+    request: { path: path?.trim() || null, lockId: lockId?.trim() || null },
+  });
+}
+
+export function getSignatureStatus(
+  repoId: string,
+  revision: string,
+  kind: "commit" | "tag",
+): Promise<SignatureStatusDto> {
+  return invoke<SignatureStatusDto>("signature_status_get", { repoId, revision, kind });
+}
+
+export function getSignatureSettings(repoId: string): Promise<SignatureSettingsDto> {
+  return invoke<SignatureSettingsDto>("signature_settings_get", { repoId });
+}
+
+export function updateSignatureSettings(
+  repoId: string,
+  settings: Omit<SignatureSettingsDto, "schemaVersion">,
+): Promise<SignatureSettingsDto> {
+  return invoke<SignatureSettingsDto>("signature_settings_update", {
+    repoId,
+    request: settings,
   });
 }
 

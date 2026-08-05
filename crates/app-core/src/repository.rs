@@ -173,6 +173,70 @@ pub struct BinaryPreview {
     pub new_bytes: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LfsOperationKind {
+    Fetch,
+    Pull,
+    Prune,
+}
+
+impl LfsOperationKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Fetch => "lfs-fetch",
+            Self::Pull => "lfs-pull",
+            Self::Prune => "lfs-prune",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LfsRequest {
+    pub kind: LfsOperationKind,
+    pub remote: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LfsFileStatus {
+    pub path: String,
+    pub oid: Option<String>,
+    pub size: Option<u64>,
+    pub downloaded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LfsStatus {
+    pub installed: bool,
+    pub tracked: Vec<LfsFileStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LfsLock {
+    pub id: String,
+    pub path: String,
+    pub owner: String,
+    pub locked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureStatus {
+    pub revision: String,
+    pub kind: String,
+    pub status: String,
+    pub signer: Option<String>,
+    pub key_id: Option<String>,
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SignatureSettings {
+    pub commit_sign: bool,
+    pub tag_sign: bool,
+    pub format: Option<String>,
+    pub signing_key: Option<String>,
+    pub ssh_allowed_signers_file: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatchSelection {
     pub hunk_index: usize,
@@ -336,6 +400,322 @@ impl RepositoryService {
         self.update_config_value(Some(repository), "--local", "user.name", name)?;
         self.update_config_value(Some(repository), "--local", "user.email", email)?;
         self.repository_identity(repository)
+    }
+
+    pub fn lfs_status(&self, repository: &RepositoryDescriptor) -> Result<LfsStatus, AppError> {
+        let version = self.lfs_request(
+            repository,
+            [OsString::from("version")],
+            Duration::from_secs(10),
+        );
+        let installed = matches!(version, Ok(output) if output.exit_code == 0);
+        if !installed {
+            return Ok(LfsStatus {
+                installed: false,
+                tracked: Vec::new(),
+            });
+        }
+        let output = self.lfs_request(
+            repository,
+            [OsString::from("ls-files"), OsString::from("--long")],
+            Duration::from_secs(30),
+        )?;
+        let tracked = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(parse_lfs_file_status)
+            .collect();
+        Ok(LfsStatus { installed, tracked })
+    }
+
+    pub fn lfs_sync(
+        &self,
+        repository: &RepositoryDescriptor,
+        request: &LfsRequest,
+        cancellation: &CancellationToken,
+        mut progress: impl FnMut(crate::RemoteProgress),
+    ) -> Result<(), AppError> {
+        let mut args = vec![OsString::from(match request.kind {
+            LfsOperationKind::Fetch => "fetch",
+            LfsOperationKind::Pull => "pull",
+            LfsOperationKind::Prune => "prune",
+        })];
+        if let Some(remote) = request.remote.as_deref() {
+            let remote = validate_lfs_remote(remote)?;
+            args.push(OsString::from(remote));
+        }
+        let mut git_request = GitRequest::new(args);
+        git_request.working_directory = Some(repository.worktree_path.clone());
+        git_request.timeout = Duration::from_secs(30 * 60);
+        let output = self
+            .executor
+            .execute_streaming(git_request, cancellation, |is_stderr, chunk| {
+                let message = String::from_utf8_lossy(chunk)
+                    .split(['\r', '\n'])
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !message.is_empty() {
+                    progress(crate::RemoteProgress {
+                        stream: if is_stderr { "stderr" } else { "stdout" },
+                        message,
+                    });
+                }
+            })
+            .map_err(map_execution_error)?;
+        if output.exit_code == 0 {
+            Ok(())
+        } else {
+            Err(AppError::GitFailed {
+                diagnostic_id: Uuid::new_v4(),
+                detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            })
+        }
+    }
+
+    pub fn lfs_locks(&self, repository: &RepositoryDescriptor) -> Result<Vec<LfsLock>, AppError> {
+        if !self.lfs_status(repository)?.installed {
+            return Ok(Vec::new());
+        }
+        let output = self.lfs_request(
+            repository,
+            [OsString::from("locks"), OsString::from("--json")],
+            Duration::from_secs(30),
+        )?;
+        let payload: LfsLocksPayload = serde_json::from_slice(&output.stdout)
+            .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
+        Ok(payload
+            .locks
+            .into_iter()
+            .map(|lock| LfsLock {
+                id: lock.id,
+                path: lock.path,
+                owner: lock.owner.name,
+                locked_at: lock.locked_at,
+            })
+            .collect())
+    }
+
+    pub fn lfs_lock(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &str,
+    ) -> Result<Vec<LfsLock>, AppError> {
+        let path = validate_relative_file_path(path)?;
+        self.lfs_unit(
+            repository,
+            [
+                OsString::from("lock"),
+                OsString::from("--"),
+                OsString::from(path),
+            ],
+        )?;
+        self.lfs_locks(repository)
+    }
+
+    pub fn lfs_unlock(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: Option<&str>,
+        lock_id: Option<&str>,
+    ) -> Result<Vec<LfsLock>, AppError> {
+        let mut args = vec![OsString::from("unlock")];
+        if let Some(lock_id) = lock_id.map(str::trim).filter(|value| !value.is_empty()) {
+            if lock_id.starts_with('-') || lock_id.contains(['\0', '\r', '\n']) {
+                return Err(AppError::InvalidRequest(
+                    "LFS lock ID is invalid".to_owned(),
+                ));
+            }
+            args.extend([OsString::from("--id"), OsString::from(lock_id)]);
+        } else if let Some(path) = path {
+            args.extend([
+                OsString::from("--"),
+                OsString::from(validate_relative_file_path(path)?),
+            ]);
+        } else {
+            return Err(AppError::InvalidRequest(
+                "Provide an LFS lock path or ID".to_owned(),
+            ));
+        }
+        self.lfs_unit(repository, args)?;
+        self.lfs_locks(repository)
+    }
+
+    pub fn signature_status(
+        &self,
+        repository: &RepositoryDescriptor,
+        revision: &str,
+        kind: &str,
+    ) -> Result<SignatureStatus, AppError> {
+        let kind = match kind {
+            "commit" => "commit",
+            "tag" => "tag",
+            _ => {
+                return Err(AppError::InvalidRequest(
+                    "Signature kind must be commit or tag".to_owned(),
+                ));
+            }
+        };
+        let revision = revision.trim();
+        if kind == "tag" {
+            if revision.is_empty()
+                || revision.starts_with('-')
+                || revision.contains(['\0', '\r', '\n'])
+            {
+                return Err(AppError::InvalidRequest(
+                    "Signature revision is invalid".to_owned(),
+                ));
+            }
+            let mut request = GitRequest::new([
+                OsString::from("verify-tag"),
+                OsString::from("--raw"),
+                OsString::from("--"),
+                OsString::from(revision),
+            ]);
+            request.working_directory = Some(repository.worktree_path.clone());
+            request.timeout = Duration::from_secs(15);
+            let output = self.run(request)?;
+            let diagnostic = String::from_utf8_lossy(&output.stderr).into_owned();
+            let status = if output.exit_code == 0 {
+                "G"
+            } else if diagnostic.to_ascii_lowercase().contains("badsig") {
+                "B"
+            } else {
+                "N"
+            };
+            let signer = diagnostic
+                .lines()
+                .find(|line| line.to_ascii_lowercase().contains("good signature"))
+                .and_then(|line| line.split(" is ").nth(1))
+                .map(str::trim)
+                .map(str::to_owned);
+            return Ok(SignatureStatus {
+                revision: revision.to_owned(),
+                kind: kind.to_owned(),
+                status: status.to_owned(),
+                signer,
+                key_id: None,
+                fingerprint: None,
+            });
+        }
+        let resolved = self
+            .git_text(
+                repository,
+                [
+                    OsString::from("rev-parse"),
+                    OsString::from("--verify"),
+                    OsString::from("--end-of-options"),
+                    OsString::from(format!("{revision}^{{commit}}")),
+                ],
+            )?
+            .trim()
+            .to_owned();
+        let output = self.git_text(
+            repository,
+            [
+                OsString::from("show"),
+                OsString::from("-s"),
+                OsString::from("--format=%H%x00%G?%x00%GS%x00%GK%x00%GF"),
+                OsString::from(&resolved),
+            ],
+        )?;
+        let mut fields = output.trim_end_matches(['\r', '\n']).split('\0');
+        let _formatted_revision = fields.next();
+        Ok(SignatureStatus {
+            revision: resolved,
+            kind: kind.to_owned(),
+            status: fields.next().unwrap_or_default().to_owned(),
+            signer: non_empty(fields.next()),
+            key_id: non_empty(fields.next()),
+            fingerprint: non_empty(fields.next()),
+        })
+    }
+
+    pub fn signature_settings(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<SignatureSettings, AppError> {
+        Ok(SignatureSettings {
+            commit_sign: self
+                .config_value(Some(repository), "--get", "commit.gpgsign")?
+                .is_some_and(|value| value == "true"),
+            tag_sign: self
+                .config_value(Some(repository), "--get", "tag.gpgSign")?
+                .is_some_and(|value| value == "true"),
+            format: self.config_value(Some(repository), "--get", "gpg.format")?,
+            signing_key: self.config_value(Some(repository), "--get", "user.signingkey")?,
+            ssh_allowed_signers_file: self.config_value(
+                Some(repository),
+                "--get",
+                "gpg.ssh.allowedSignersFile",
+            )?,
+        })
+    }
+
+    pub fn update_signature_settings(
+        &self,
+        repository: &RepositoryDescriptor,
+        settings: &SignatureSettings,
+    ) -> Result<SignatureSettings, AppError> {
+        self.update_config_bool(repository, "commit.gpgsign", settings.commit_sign)?;
+        self.update_config_bool(repository, "tag.gpgSign", settings.tag_sign)?;
+        self.update_config_value(
+            Some(repository),
+            "--local",
+            "gpg.format",
+            settings.format.as_deref(),
+        )?;
+        self.update_config_value(
+            Some(repository),
+            "--local",
+            "user.signingkey",
+            settings.signing_key.as_deref(),
+        )?;
+        self.update_config_value(
+            Some(repository),
+            "--local",
+            "gpg.ssh.allowedSignersFile",
+            settings.ssh_allowed_signers_file.as_deref(),
+        )?;
+        self.signature_settings(repository)
+    }
+
+    fn lfs_request<I, S>(
+        &self,
+        repository: &RepositoryDescriptor,
+        args: I,
+        timeout: Duration,
+    ) -> Result<GitOutput, AppError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let mut request = GitRequest::new(args);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = timeout;
+        self.run(request)
+    }
+
+    fn lfs_unit<I, S>(&self, repository: &RepositoryDescriptor, args: I) -> Result<(), AppError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        ensure_success(self.lfs_request(repository, args, Duration::from_secs(30))?).map(|_| ())
+    }
+
+    fn update_config_bool(
+        &self,
+        repository: &RepositoryDescriptor,
+        key: &str,
+        enabled: bool,
+    ) -> Result<(), AppError> {
+        self.update_config_value(
+            Some(repository),
+            "--local",
+            key,
+            Some(if enabled { "true" } else { "false" }),
+        )
     }
 
     pub fn discover(&self, selected_path: &Path) -> Result<RepositoryDescriptor, AppError> {
@@ -3373,6 +3753,66 @@ fn validate_tool_name(tool: Option<&str>) -> Result<Option<String>, AppError> {
         ));
     }
     Ok(Some(tool.to_owned()))
+}
+
+#[derive(Debug, Deserialize)]
+struct LfsLocksPayload {
+    #[serde(default)]
+    locks: Vec<LfsLockPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LfsLockPayload {
+    id: String,
+    path: String,
+    owner: LfsLockOwnerPayload,
+    #[serde(default)]
+    locked_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LfsLockOwnerPayload {
+    #[serde(default)]
+    name: String,
+}
+
+fn parse_lfs_file_status(line: &str) -> Option<LfsFileStatus> {
+    let mut parts = line
+        .splitn(3, char::is_whitespace)
+        .filter(|part| !part.is_empty());
+    let oid = parts.next()?.to_owned();
+    let marker = parts.next()?;
+    let path = parts.next()?.trim().to_owned();
+    if path.is_empty() {
+        return None;
+    }
+    let size = oid
+        .strip_prefix("size:")
+        .and_then(|value| value.parse::<u64>().ok());
+    let oid = (!oid.starts_with("-") && !oid.starts_with("size:")).then_some(oid);
+    Some(LfsFileStatus {
+        path,
+        oid,
+        size,
+        downloaded: marker == "*",
+    })
+}
+
+fn validate_lfs_remote(remote: &str) -> Result<&str, AppError> {
+    let remote = remote.trim();
+    if remote.is_empty() || remote.starts_with('-') || remote.contains(['\0', '\r', '\n']) {
+        return Err(AppError::InvalidRequest(
+            "LFS remote name is invalid".to_owned(),
+        ));
+    }
+    Ok(remote)
+}
+
+fn non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn validate_relative_file_path(path: &str) -> Result<String, AppError> {

@@ -25,6 +25,10 @@ import {
   getBinaryPreview,
   getComparePatch,
   getExternalDiffTool,
+  getLfsLocks,
+  getLfsStatus,
+  getSignatureSettings,
+  getSignatureStatus,
   createBranch,
   createCommit,
   createStash,
@@ -99,7 +103,7 @@ vi.mock("./windowControls", () => ({
   toggleMaximizeAppWindow: vi.fn(),
 }));
 
-vi.mock("./repository", () => ({
+  vi.mock("./repository", () => ({
   abortHistory: vi.fn(),
   abortRebase: vi.fn(),
   addSubmodule: vi.fn(),
@@ -120,6 +124,14 @@ vi.mock("./repository", () => ({
   getBinaryPreview: vi.fn(),
   getComparePatch: vi.fn(),
   getExternalDiffTool: vi.fn(),
+  getLfsLocks: vi.fn(),
+  getLfsStatus: vi.fn(),
+  getSignatureSettings: vi.fn(),
+  getSignatureStatus: vi.fn(),
+  lockLfsPath: vi.fn(),
+  unlockLfsPath: vi.fn(),
+  startLfsSync: vi.fn(),
+  updateSignatureSettings: vi.fn(),
   createBranch: vi.fn(),
   createCommit: vi.fn(),
   createStash: vi.fn(),
@@ -208,6 +220,10 @@ const mockedCompareDiff = vi.mocked(compareDiff);
 const mockedGetExternalDiffTool = vi.mocked(getExternalDiffTool);
 const mockedGetBinaryPreview = vi.mocked(getBinaryPreview);
 const mockedGetComparePatch = vi.mocked(getComparePatch);
+const mockedGetLfsLocks = vi.mocked(getLfsLocks);
+const mockedGetLfsStatus = vi.mocked(getLfsStatus);
+const mockedGetSignatureSettings = vi.mocked(getSignatureSettings);
+const mockedGetSignatureStatus = vi.mocked(getSignatureStatus);
 const mockedCreateBranch = vi.mocked(createBranch);
 const mockedCreateTag = vi.mocked(createTag);
 const mockedCreateWorktree = vi.mocked(createWorktree);
@@ -343,6 +359,10 @@ describe("App", () => {
     mockedGetExternalDiffTool.mockResolvedValue({ schemaVersion: 1, configured: null, mergeConfigured: null });
     mockedGetBinaryPreview.mockResolvedValue({ schemaVersion: 1, oldPath: "", newPath: "" });
     mockedGetComparePatch.mockResolvedValue({ schemaVersion: 1, patch: "", fileCount: 0, binary: false });
+    mockedGetLfsLocks.mockResolvedValue([]);
+    mockedGetLfsStatus.mockResolvedValue({ schemaVersion: 1, installed: false, tracked: [] });
+    mockedGetSignatureSettings.mockResolvedValue({ schemaVersion: 1, commitSign: false, tagSign: false, format: null, signingKey: null, sshAllowedSignersFile: null });
+    mockedGetSignatureStatus.mockResolvedValue({ schemaVersion: 1, revision: "", kind: "commit", status: "N" });
     mockedCreateWorktree.mockResolvedValue({
       schemaVersion: 1,
       worktrees: [],

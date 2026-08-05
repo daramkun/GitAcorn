@@ -3373,6 +3373,63 @@ button:disabled {
   mix-blend-mode: multiply;
 }
 
+.lfs-file-list,
+.lfs-locks,
+.signature-settings-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.lfs-file-list {
+  max-height: 180px;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.lfs-file-list li,
+.lfs-lock-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.lfs-file-list small,
+.lfs-locks small {
+  color: var(--text-muted);
+}
+
+.signature-settings-grid label {
+  display: grid;
+  gap: 4px;
+}
+
+.signature-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 6px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.signature-valid,
+.signature-good {
+  color: var(--success);
+}
+
+.signature-bad,
+.signature-error,
+.signature-unknown {
+  color: var(--danger);
+}
+
 .compare-file-tabs {
   display: flex;
   gap: 4px;

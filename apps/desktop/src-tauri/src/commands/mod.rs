@@ -13,12 +13,13 @@ use crate::dto::{
     CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto, DiffDto,
     ExternalDiffResultDto, ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto,
     GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto, HistoryPageDto,
-    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, OperationEventDto,
-    OperationRecordDto, OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto,
-    ReflogEntryDto, RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto,
-    RemoteTagDto, RepositoryGitIdentityDto, RepositoryOpenSourceDto, RepositorySidebarDto,
-    RepositorySnapshotDto, SessionDto, SessionTabUpdateDto, StashRequestDto,
-    SubmoduleAddRequestDto, WorktreeCreateRequestDto,
+    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto,
+    LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
+    OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
+    RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
+    RepositoryGitIdentityDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
+    SessionDto, SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto,
+    SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorktreeCreateRequestDto,
 };
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
@@ -169,6 +170,181 @@ pub async fn remote_sync(
         schema_version: 1,
         operation_id: operation_id.to_string(),
     })
+}
+
+#[tauri::command]
+pub async fn lfs_sync(
+    repo_id: String,
+    request: LfsOperationRequestDto,
+    channel: Channel<OperationEventDto>,
+    app: AppHandle,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<OperationStartedDto> {
+    let request = parse_lfs_request(request).map_err(|error| AppErrorDto::from(&error))?;
+    let (operation_id, parsed_repo_id) = state
+        .begin_lfs_operation(&repo_id)
+        .map_err(|error| AppErrorDto::from(&error))?;
+    let operation_id_string = operation_id.to_string();
+    let event_repo_id = repo_id.clone();
+    let kind = request.kind.label().to_owned();
+    state
+        .start_operation_record(
+            &operation_id_string,
+            Some(&repo_id),
+            &kind,
+            &format!("{kind} queued"),
+        )
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
+    let _ = channel.send(operation_event(
+        &operation_id_string,
+        Some(event_repo_id.clone()),
+        kind.clone(),
+        "queued",
+    ));
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ApplicationState>();
+        let _ = channel.send(operation_event(
+            &operation_id_string,
+            Some(event_repo_id.clone()),
+            kind.clone(),
+            "running",
+        ));
+        let result = state.run_lfs_operation(operation_id, parsed_repo_id, &request, |progress| {
+            let mut event = operation_event(
+                &operation_id_string,
+                Some(event_repo_id.clone()),
+                kind.clone(),
+                "running",
+            );
+            event.message = Some(progress.message);
+            event.stream = Some(progress.stream);
+            let _ = channel.send(event);
+        });
+        let mut event = operation_event(
+            &operation_id_string,
+            Some(event_repo_id),
+            kind,
+            match &result {
+                Ok(_) => "succeeded",
+                Err(AppError::Cancelled) => "cancelled",
+                Err(_) => "failed",
+            },
+        );
+        match result {
+            Ok(snapshot) => event.snapshot = Some(snapshot.into()),
+            Err(error) => event.error = Some(AppErrorDto::from(&error)),
+        }
+        let diagnostic = event
+            .error
+            .as_ref()
+            .and_then(|error| error.details.as_deref());
+        let summary = event
+            .message
+            .as_deref()
+            .unwrap_or(if event.state == "succeeded" {
+                "Operation completed"
+            } else {
+                "Operation did not complete"
+            });
+        let _ = tauri::async_runtime::block_on(state.finish_operation_record(
+            &operation_id_string,
+            event.state,
+            summary,
+            diagnostic,
+        ));
+        let _ = channel.send(event);
+    });
+    Ok(OperationStartedDto {
+        schema_version: 1,
+        operation_id: operation_id.to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn lfs_status_get(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<LfsStatusDto> {
+    state
+        .repository_lfs_status(&repo_id)
+        .map(LfsStatusDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn lfs_locks_get(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<Vec<LfsLockDto>> {
+    state
+        .repository_lfs_locks(&repo_id)
+        .map(|locks| locks.into_iter().map(LfsLockDto::from).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn lfs_lock(
+    repo_id: String,
+    path: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<Vec<LfsLockDto>> {
+    state
+        .lock_lfs_path(&repo_id, &path)
+        .map(|locks| locks.into_iter().map(LfsLockDto::from).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn lfs_unlock(
+    repo_id: String,
+    request: LfsLockRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<Vec<LfsLockDto>> {
+    state
+        .unlock_lfs_path(
+            &repo_id,
+            request.path.as_deref(),
+            request.lock_id.as_deref(),
+        )
+        .map(|locks| locks.into_iter().map(LfsLockDto::from).collect())
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn signature_status_get(
+    repo_id: String,
+    revision: String,
+    kind: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<SignatureStatusDto> {
+    state
+        .repository_signature_status(&repo_id, &revision, &kind)
+        .map(SignatureStatusDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn signature_settings_get(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<SignatureSettingsDto> {
+    state
+        .repository_signature_settings(&repo_id)
+        .map(SignatureSettingsDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn signature_settings_update(
+    repo_id: String,
+    request: SignatureSettingsRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<SignatureSettingsDto> {
+    state
+        .update_repository_signature_settings(&repo_id, &request.into())
+        .map(SignatureSettingsDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
 }
 
 #[tauri::command]
@@ -1548,4 +1724,26 @@ fn parse_diff_target(value: &str) -> Result<DiffTarget, AppErrorDto> {
             "Diff target must be staged or unstaged".to_owned(),
         ))),
     }
+}
+
+fn parse_lfs_request(request: LfsOperationRequestDto) -> Result<app_core::LfsRequest, AppError> {
+    let kind = match request.kind.trim().to_ascii_lowercase().as_str() {
+        "fetch" | "lfs-fetch" => app_core::LfsOperationKind::Fetch,
+        "pull" | "lfs-pull" => app_core::LfsOperationKind::Pull,
+        "prune" | "lfs-prune" => app_core::LfsOperationKind::Prune,
+        _ => {
+            return Err(AppError::InvalidRequest(
+                "LFS operation must be fetch, pull, or prune".to_owned(),
+            ));
+        }
+    };
+    if matches!(kind, app_core::LfsOperationKind::Prune) && request.remote.is_some() {
+        return Err(AppError::InvalidRequest(
+            "LFS prune does not accept a remote".to_owned(),
+        ));
+    }
+    Ok(app_core::LfsRequest {
+        kind,
+        remote: request.remote,
+    })
 }

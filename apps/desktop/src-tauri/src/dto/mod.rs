@@ -2,8 +2,9 @@ use app_core::{
     AppErrorDto, BinaryPreview, BranchRequest, CloneRequest, CommitFile, CommitRequest,
     ComparePatch, ExternalDiffResult, ExternalDiffTool, GitIdentity, GitReference, GitRemote,
     InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
-    InteractiveRebaseRequest, PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind,
-    RemoteRequest, RemoteTagSummary, RepositorySidebar, WorktreeCreateRequest,
+    InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus, PatchSelection, ReferenceKind,
+    ReflogEntry, RemoteOperationKind, RemoteRequest, RemoteTagSummary, RepositorySidebar,
+    SignatureSettings, SignatureStatus, WorktreeCreateRequest,
 };
 use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
@@ -65,6 +66,150 @@ pub struct GitIdentitySettingsDto {
     pub schema_version: u16,
     pub global: GitIdentityDto,
     pub repository: Option<RepositoryGitIdentityDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LfsFileStatusDto {
+    pub path: String,
+    pub oid: Option<String>,
+    pub size: Option<u64>,
+    pub downloaded: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LfsStatusDto {
+    pub schema_version: u16,
+    pub installed: bool,
+    pub tracked: Vec<LfsFileStatusDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LfsLockDto {
+    pub id: String,
+    pub path: String,
+    pub owner: String,
+    pub locked_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LfsLockRequestDto {
+    pub path: Option<String>,
+    pub lock_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LfsOperationRequestDto {
+    pub kind: String,
+    pub remote: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureStatusDto {
+    pub schema_version: u16,
+    pub revision: String,
+    pub kind: String,
+    pub status: String,
+    pub signer: Option<String>,
+    pub key_id: Option<String>,
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureSettingsDto {
+    pub schema_version: u16,
+    pub commit_sign: bool,
+    pub tag_sign: bool,
+    pub format: Option<String>,
+    pub signing_key: Option<String>,
+    pub ssh_allowed_signers_file: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureSettingsRequestDto {
+    pub commit_sign: bool,
+    pub tag_sign: bool,
+    pub format: Option<String>,
+    pub signing_key: Option<String>,
+    pub ssh_allowed_signers_file: Option<String>,
+}
+
+impl From<LfsStatus> for LfsStatusDto {
+    fn from(status: LfsStatus) -> Self {
+        Self {
+            schema_version: 1,
+            installed: status.installed,
+            tracked: status.tracked.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<LfsFileStatus> for LfsFileStatusDto {
+    fn from(file: LfsFileStatus) -> Self {
+        Self {
+            path: file.path,
+            oid: file.oid,
+            size: file.size,
+            downloaded: file.downloaded,
+        }
+    }
+}
+
+impl From<LfsLock> for LfsLockDto {
+    fn from(lock: LfsLock) -> Self {
+        Self {
+            id: lock.id,
+            path: lock.path,
+            owner: lock.owner,
+            locked_at: lock.locked_at,
+        }
+    }
+}
+
+impl From<SignatureStatus> for SignatureStatusDto {
+    fn from(status: SignatureStatus) -> Self {
+        Self {
+            schema_version: 1,
+            revision: status.revision,
+            kind: status.kind,
+            status: status.status,
+            signer: status.signer,
+            key_id: status.key_id,
+            fingerprint: status.fingerprint,
+        }
+    }
+}
+
+impl From<SignatureSettings> for SignatureSettingsDto {
+    fn from(settings: SignatureSettings) -> Self {
+        Self {
+            schema_version: 1,
+            commit_sign: settings.commit_sign,
+            tag_sign: settings.tag_sign,
+            format: settings.format,
+            signing_key: settings.signing_key,
+            ssh_allowed_signers_file: settings.ssh_allowed_signers_file,
+        }
+    }
+}
+
+impl From<SignatureSettingsRequestDto> for SignatureSettings {
+    fn from(settings: SignatureSettingsRequestDto) -> Self {
+        Self {
+            commit_sign: settings.commit_sign,
+            tag_sign: settings.tag_sign,
+            format: settings.format,
+            signing_key: settings.signing_key,
+            ssh_allowed_signers_file: settings.ssh_allowed_signers_file,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

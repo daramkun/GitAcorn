@@ -9,9 +9,10 @@ use app_core::{
     AppError, BinaryPreview, BranchRequest, CloneRequest, CommitRequest, ComparePatch,
     ConflictResolution, DiffTarget, ExternalDiffResult, ExternalDiffTool, FileBlame, GitIdentity,
     GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryOperation,
-    InteractiveRebasePreview, InteractiveRebaseRequest, PatchSelection, PathHistory, ReflogEntry,
-    RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryScheduler, RepositoryService,
-    RepositorySidebar, StashRequest, WorktreeCreateRequest,
+    InteractiveRebasePreview, InteractiveRebaseRequest, LfsLock, LfsRequest, LfsStatus,
+    PatchSelection, PathHistory, ReflogEntry, RemoteProgress, RemoteRequest, RemoteTagSummary,
+    RepositoryScheduler, RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus,
+    StashRequest, WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -368,6 +369,109 @@ impl ApplicationState {
         let descriptor = self.descriptor(repo_id)?;
         self.scheduler
             .read(repo_id, || self.service.remotes(&descriptor))
+    }
+
+    pub fn repository_lfs_status(&self, repo_id: &str) -> Result<LfsStatus, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.lfs_status(&descriptor))
+    }
+
+    pub fn repository_lfs_locks(&self, repo_id: &str) -> Result<Vec<LfsLock>, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.lfs_locks(&descriptor))
+    }
+
+    pub fn lock_lfs_path(&self, repo_id: &str, path: &str) -> Result<Vec<LfsLock>, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .write(repo_id, || self.service.lfs_lock(&descriptor, path))
+    }
+
+    pub fn unlock_lfs_path(
+        &self,
+        repo_id: &str,
+        path: Option<&str>,
+        lock_id: Option<&str>,
+    ) -> Result<Vec<LfsLock>, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            self.service.lfs_unlock(&descriptor, path, lock_id)
+        })
+    }
+
+    pub fn begin_lfs_operation(&self, repo_id: &str) -> Result<(Uuid, RepoId), AppError> {
+        self.begin_remote_operation(repo_id)
+    }
+
+    pub fn run_lfs_operation(
+        &self,
+        operation_id: Uuid,
+        repo_id: RepoId,
+        request: &LfsRequest,
+        progress: impl FnMut(RemoteProgress),
+    ) -> Result<RepositorySnapshot, AppError> {
+        let cancellation = self.operation_token(operation_id)?;
+        let result = self.scheduler.write(repo_id, || {
+            let descriptor = self.descriptor(repo_id)?;
+            self.service
+                .lfs_sync(&descriptor, request, &cancellation, progress)?;
+            let next_revision = {
+                let mut repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get_mut(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                repository.revision += 1;
+                repository.revision
+            };
+            self.service.snapshot(&descriptor, next_revision)
+        });
+        self.finish_operation(operation_id);
+        result
+    }
+
+    pub fn repository_signature_status(
+        &self,
+        repo_id: &str,
+        revision: &str,
+        kind: &str,
+    ) -> Result<SignatureStatus, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.read(repo_id, || {
+            self.service.signature_status(&descriptor, revision, kind)
+        })
+    }
+
+    pub fn repository_signature_settings(
+        &self,
+        repo_id: &str,
+    ) -> Result<SignatureSettings, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.signature_settings(&descriptor))
+    }
+
+    pub fn update_repository_signature_settings(
+        &self,
+        repo_id: &str,
+        settings: &SignatureSettings,
+    ) -> Result<SignatureSettings, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            self.service
+                .update_signature_settings(&descriptor, settings)
+        })
     }
 
     pub fn global_identity(&self) -> Result<GitIdentity, AppError> {

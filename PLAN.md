@@ -94,11 +94,11 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 ### P0.6 Git LFS와 서명 상태
 
-- [ ] 저장소의 LFS 사용 여부와 tracked/pointer 상태 표시
-- [ ] LFS fetch/pull/prune와 진행률·취소
-- [ ] LFS lock 목록, lock/unlock과 소유자 표시
-- [ ] commit/tag의 GPG·SSH 서명 상태 표시
-- [ ] 시스템 Git 설정을 존중하는 commit/tag 서명 옵션
+- [x] 저장소의 LFS 사용 여부와 tracked/pointer 상태 표시
+- [x] LFS fetch/pull/prune와 진행률·취소
+- [x] LFS lock 목록, lock/unlock과 소유자 표시
+- [x] commit/tag의 GPG·SSH 서명 상태 표시
+- [x] 시스템 Git 설정을 존중하는 commit/tag 서명 옵션
 
 완료 조건:
 
@@ -131,12 +131,12 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 각 수직 기능은 다음 조건을 충족해야 완료로 표시한다.
 
-- [ ] 위험도, 실행할 Git 명령, 변경 범위와 복구 경로가 UI에 표시된다.
-- [ ] 저장소별 write 직렬화와 stale revision 검증을 통과한다.
-- [ ] 명령 인수는 shell 문자열이 아닌 배열로 전달되고 민감 정보가 마스킹된다.
-- [ ] Rust unit/integration test와 React UI test가 추가된다.
-- [ ] Windows와 macOS의 플랫폼 차이를 문서화하고 해당 CI를 통과한다.
-- [ ] 저장소 루트에서 `pnpm check`가 통과한다.
+- [x] 위험도, 실행할 Git 명령, 변경 범위와 복구 경로가 UI에 표시된다.
+- [x] 저장소별 write 직렬화와 stale revision 검증을 통과한다.
+- [x] 명령 인수는 shell 문자열이 아닌 배열로 전달되고 민감 정보가 마스킹된다.
+- [x] Rust unit/integration test와 React UI test가 추가된다.
+- [x] Windows와 macOS의 플랫폼 차이를 문서화하고 해당 CI를 통과한다.
+- [x] 저장소 루트에서 `pnpm check`가 통과한다.
 
 ## 구현 진행 기록
 
@@ -147,4 +147,4 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P0.3 Blame과 File/Directory History | 완료 | byte-safe blame, rename-aware file/directory history, path filter와 비동기 검사기 |
 | P0.4 Worktree 전체 lifecycle | 완료 | 생성·새 탭 열기·lock/unlock·안전/강제 제거·branch 결합 제거, missing/prunable 상태와 path 기반 식별자 |
 | P0.5 고급 Diff와 비교 | 완료 | 임의 ref/WORKTREE 비교, split·word·syntax·wrap renderer, 이미지/바이너리 미리보기, 외부 diff 실행과 patch lifecycle |
-| P0.6 Git LFS와 서명 상태 | 예정 | 시스템 Git·credential 정책 유지 |
+| P0.6 Git LFS와 서명 상태 | 완료 | LFS 감지·pointer/lock 상태·fetch/pull/prune 진행/취소와 commit/tag 서명 상태·시스템 설정 옵션 |

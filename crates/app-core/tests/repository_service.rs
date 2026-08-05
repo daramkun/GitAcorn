@@ -1,7 +1,7 @@
 use app_core::{
     BranchRequest, CommitRequest, DiffTarget, HistoryFilter, HistoryOperation,
     InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebaseRequest, PatchSelection,
-    ReferenceKind, RepositoryService, WorktreeCreateRequest,
+    ReferenceKind, RepositoryService, SignatureSettings, WorktreeCreateRequest,
 };
 use git_cli::GitExecutor;
 use git_domain::{DiffLineKind, HeadState, RepositoryOperation};
@@ -1855,6 +1855,55 @@ fn generates_validates_applies_and_previews_compare_artifacts() {
         .expect("binary preview");
     assert_eq!(preview.mime_type.as_deref(), Some("image/png"));
     assert_eq!(preview.new_size, Some(4));
+}
+
+#[test]
+fn reads_lfs_availability_and_signature_state_without_private_keys() {
+    let fixture = TestRepository::init();
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let head = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("head oid")
+        .trim()
+        .to_owned();
+
+    let lfs = service.lfs_status(&repository).expect("LFS status");
+    if !lfs.installed {
+        assert!(lfs.tracked.is_empty());
+    }
+
+    let settings = service
+        .signature_settings(&repository)
+        .expect("signature settings");
+    let updated = service
+        .update_signature_settings(
+            &repository,
+            &SignatureSettings {
+                commit_sign: true,
+                tag_sign: false,
+                format: Some("ssh".to_owned()),
+                signing_key: Some("key-id".to_owned()),
+                ssh_allowed_signers_file: Some("allowed.signers".to_owned()),
+            },
+        )
+        .expect("update signature settings");
+    assert!(updated.commit_sign);
+    assert_eq!(updated.format.as_deref(), Some("ssh"));
+    assert_eq!(updated.signing_key.as_deref(), Some("key-id"));
+
+    let status = service
+        .signature_status(&repository, &head, "commit")
+        .expect("unsigned commit status");
+    assert_eq!(status.status, "N");
+    assert_eq!(status.kind, "commit");
+    assert!(settings.signing_key.is_none());
+
+    fixture.git(["tag", "unsigned-tag", &head]);
+    let tag_status = service
+        .signature_status(&repository, "unsigned-tag", "tag")
+        .expect("unsigned tag status");
+    assert_eq!(tag_status.kind, "tag");
+    assert_eq!(tag_status.status, "N");
 }
 
 #[test]
