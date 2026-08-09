@@ -1316,6 +1316,34 @@ button:disabled {
   overflow: hidden;
 }
 
+.init-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  font-size: 11px;
+}
+
+.init-bar #init-path {
+  flex: 1 1 260px;
+}
+
+.init-bar .init-branch {
+  width: 90px;
+}
+
+.init-bar .init-holder {
+  flex: 0 1 180px;
+  min-width: 140px;
+}
+
+.init-bar select {
+  min-width: 110px;
+  min-height: var(--control-height-md);
+}
 .clone-bar {
   display: flex;
   align-items: center;

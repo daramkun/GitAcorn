@@ -18,8 +18,8 @@ pub use repository::{
     InteractiveRebaseAction, InteractiveRebaseCommit, InteractiveRebaseItem,
     InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsOperationKind,
     LfsRequest, LfsStatus, PatchSelection, RefSummary, ReferenceKind, ReflogEntry,
-    RemoteTagSummary, RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus,
-    StashSummary, WorktreeCreateRequest, WorktreeSummary,
+    RemoteTagSummary, RepositoryInitRequest, RepositoryService, RepositorySidebar,
+    SignatureSettings, SignatureStatus, StashSummary, WorktreeCreateRequest, WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;
 pub use workspace::{ConflictFile, ConflictResolution, ConflictSegment, StashRequest};

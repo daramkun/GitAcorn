@@ -42,6 +42,7 @@ pub fn run() {
             commands::remote_sync,
             commands::repository_clone,
             commands::operation_cancel,
+            commands::repository_initialize,
             commands::repository_open,
             commands::repository_snapshot,
             commands::repository_sidebar,

@@ -19,6 +19,16 @@ use crate::AppError;
 const MAX_DIFF_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryInitRequest {
+    pub path: PathBuf,
+    pub initial_branch: String,
+    pub gitignore_template: Option<String>,
+    pub license_template: Option<String>,
+    pub license_holder: Option<String>,
+    pub license_year: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySidebar {
     pub worktrees: Vec<WorktreeSummary>,
     pub submodules: Vec<SubmoduleSummary>,
@@ -367,6 +377,63 @@ impl RepositoryService {
     pub fn detect_git(&self) -> Result<GitVersion, AppError> {
         let output = self.run(GitRequest::new(["--version"]))?;
         ensure_success(output).and_then(|output| parse_git_version(&output.stdout))
+    }
+
+    pub fn initialize_repository(&self, request: &RepositoryInitRequest) -> Result<(), AppError> {
+        let path = fs::canonicalize(&request.path).map_err(|_| AppError::InvalidPath)?;
+        if !path.is_dir() {
+            return Err(AppError::InvalidPath);
+        }
+        let branch = request.initial_branch.trim();
+        if branch.is_empty() || branch.starts_with('-') || branch.chars().any(char::is_whitespace) {
+            return Err(AppError::InvalidRequest(
+                "Initial branch name must not be empty, start with '-', or contain whitespace"
+                    .to_owned(),
+            ));
+        }
+        if path.join(".git").exists() {
+            return Err(AppError::InvalidRequest(
+                "The selected folder is already a Git repository".to_owned(),
+            ));
+        }
+
+        let gitignore = render_gitignore(request.gitignore_template.as_deref())?;
+        let license = render_license(
+            request.license_template.as_deref(),
+            request.license_holder.as_deref(),
+            request.license_year,
+        )?;
+        for (name, selected) in [
+            (".gitignore", gitignore.is_some()),
+            ("LICENSE", license.is_some()),
+        ] {
+            if selected && path.join(name).exists() {
+                return Err(AppError::InvalidRequest(format!(
+                    "{name} already exists; GitAcorn will not overwrite it"
+                )));
+            }
+        }
+
+        let mut init = GitRequest::new([
+            OsString::from("init"),
+            OsString::from("-b"),
+            OsString::from(branch),
+        ]);
+        init.working_directory = Some(path.clone());
+        init.timeout = Duration::from_secs(15);
+        ensure_success(self.run(init)?)?;
+
+        if let Some(content) = gitignore {
+            fs::write(path.join(".gitignore"), content).map_err(|error| {
+                AppError::InvalidRequest(format!("Could not create .gitignore: {error}"))
+            })?;
+        }
+        if let Some(content) = license {
+            fs::write(path.join("LICENSE"), content).map_err(|error| {
+                AppError::InvalidRequest(format!("Could not create LICENSE: {error}"))
+            })?;
+        }
+        Ok(())
     }
 
     pub fn global_identity(&self) -> Result<GitIdentity, AppError> {
@@ -4142,6 +4209,51 @@ fn validate_identity_value(value: Option<&str>) -> Result<Option<String>, AppErr
     Ok(Some(value.to_owned()))
 }
 
+fn render_gitignore(template: Option<&str>) -> Result<Option<&'static str>, AppError> {
+    match template.unwrap_or("none") {
+        "none" => Ok(None),
+        "node" => Ok(Some("node_modules/\ndist/\n.env\n*.log\n")),
+        "rust" => Ok(Some("/target/\n**/*.rs.bk\n")),
+        "python" => Ok(Some("__pycache__/\n*.py[cod]\n.venv/\ndist/\n.env\n")),
+        "go" => Ok(Some("/bin/\n*.test\n*.out\nvendor/\n")),
+        other => Err(AppError::InvalidRequest(format!(
+            "Unknown .gitignore template: {other}"
+        ))),
+    }
+}
+
+fn render_license(
+    template: Option<&str>,
+    holder: Option<&str>,
+    year: u16,
+) -> Result<Option<String>, AppError> {
+    let template = template.unwrap_or("none");
+    if template == "none" {
+        return Ok(None);
+    }
+    let holder = holder
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::InvalidRequest(
+                "A copyright holder is required for the selected license".to_owned(),
+            )
+        })?;
+    let text = match template {
+        "mit" => format!(
+            "MIT License\n\nCopyright (c) {year} {holder}\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        ),
+        "bsd-3-clause" => format!(
+            "BSD 3-Clause License\n\nCopyright (c) {year}, {holder}\nAll rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are met:\n\n1. Redistributions of source code must retain the above copyright notice, this\n   list of conditions and the following disclaimer.\n\n2. Redistributions in binary form must reproduce the above copyright notice,\n   this list of conditions and the following disclaimer in the documentation\n   and/or other materials provided with the distribution.\n\n3. Neither the name of the copyright holder nor the names of its\n   contributors may be used to endorse or promote products derived from\n   this software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"\nAND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE\nIMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\nDISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE\nFOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL\nDAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR\nSERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER\nCAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,\nOR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\nOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n"
+        ),
+        other => {
+            return Err(AppError::InvalidRequest(format!(
+                "Unknown license template: {other}"
+            )));
+        }
+    };
+    Ok(Some(text))
+}
 fn ensure_success(output: GitOutput) -> Result<GitOutput, AppError> {
     if output.exit_code == 0 {
         return Ok(output);

@@ -22,6 +22,7 @@ import {
   activateWorktree,
   checkoutBranch,
   chooseRepositoryDirectory,
+  chooseRepositoryInitDirectory,
   closeSessionTab,
   compareDiff,
   getBinaryPreview,
@@ -60,6 +61,7 @@ import {
   getRemoteTags,
   getRepositorySidebar,
   getRepositorySnapshot,
+  initializeRepository,
   initializeSubmodule,
   listenForRepositoryChanges,
   mergeBranch,
@@ -126,6 +128,7 @@ vi.mock("./windowControls", () => ({
   addRemote: vi.fn(),
   abortMerge: vi.fn(),
   chooseRepositoryDirectory: vi.fn(),
+  chooseRepositoryInitDirectory: vi.fn(),
   openRepository: vi.fn(),
   restoreSession: vi.fn(),
   restoreReflogReference: vi.fn(),
@@ -174,6 +177,7 @@ vi.mock("./windowControls", () => ({
   getReferences: vi.fn(),
   getRemoteTags: vi.fn(),
   getRepositorySidebar: vi.fn(),
+  initializeRepository: vi.fn(),
   initializeSubmodule: vi.fn(),
   reorderSessionTabs: vi.fn(),
   removeRemote: vi.fn(),
@@ -225,6 +229,8 @@ const mockedCloseAppWindow = vi.mocked(closeAppWindow);
 const mockedMinimizeAppWindow = vi.mocked(minimizeAppWindow);
 const mockedToggleMaximizeAppWindow = vi.mocked(toggleMaximizeAppWindow);
 const mockedChooseRepository = vi.mocked(chooseRepositoryDirectory);
+const mockedChooseRepositoryInit = vi.mocked(chooseRepositoryInitDirectory);
+const mockedInitializeRepository = vi.mocked(initializeRepository);
 const mockedOpenRepository = vi.mocked(openRepository);
 const mockedAddSubmodule = vi.mocked(addSubmodule);
 const mockedPreviewInteractiveRebase = vi.mocked(previewInteractiveRebase);
@@ -390,6 +396,8 @@ describe("App", () => {
     });
     mockedGetSystemFileIcons.mockResolvedValue({});
     mockedChooseRepository.mockResolvedValue(null);
+    mockedChooseRepositoryInit.mockResolvedValue(null);
+    mockedInitializeRepository.mockResolvedValue(sessionWithSnapshot);
     mockedOpenRepository.mockResolvedValue(sessionWithSnapshot);
     mockedRestoreSession.mockResolvedValue({ schemaVersion: 1, tabs: [] });
     mockedActivateTab.mockResolvedValue();
@@ -1636,6 +1644,28 @@ describe("App", () => {
     expect(mockedOpenRepository).toHaveBeenCalledWith("C:\\Code\\acorn-demo");
   });
 
+  it("initializes a repository with the selected templates", async () => {
+    mockedChooseRepositoryInit.mockResolvedValue("C:\\Code\\new-acorn");
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "New repository" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder" }));
+    await waitFor(() => expect(screen.getByLabelText("Folder")).toHaveValue("C:\\Code\\new-acorn"));
+    fireEvent.change(screen.getByLabelText(".gitignore"), { target: { value: "rust" } });
+    fireEvent.change(screen.getByLabelText("License"), { target: { value: "mit" } });
+    fireEvent.change(screen.getByLabelText("Copyright holder"), { target: { value: "Acorn Team" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create repository" }));
+
+    await waitFor(() => expect(mockedInitializeRepository).toHaveBeenCalledWith({
+      path: "C:\\Code\\new-acorn",
+      initialBranch: "main",
+      gitignoreTemplate: "rust",
+      licenseTemplate: "mit",
+      licenseHolder: "Acorn Team",
+      licenseYear: new Date().getFullYear(),
+    }));
+    expect(await screen.findByText("acorn-demo")).toBeInTheDocument();
+  });
   it("lists submodules and opens an initialized submodule on double-click", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedGetSidebar.mockResolvedValue({

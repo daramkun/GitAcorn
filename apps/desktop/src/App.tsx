@@ -40,6 +40,7 @@ import {
   checkoutBranch,
   chooseCloneParentDirectory,
   chooseRepositoryDirectory,
+  chooseRepositoryInitDirectory,
   closeSessionTab,
   compareDiff,
   getBinaryPreview,
@@ -78,6 +79,7 @@ import {
   getReferences,
   getRepositorySidebar,
   getRepositorySnapshot,
+  initializeRepository,
   initializeSubmodule,
   listenForRepositoryChanges,
   mutateHistory,
@@ -542,6 +544,13 @@ export function App() {
   const [cloneUrl, setCloneUrl] = useState("");
   const [showClone, setShowClone] = useState(false);
   const [cloneOperation, setCloneOperation] = useState<OperationEventDto>();
+  const [showInit, setShowInit] = useState(false);
+  const [initPath, setInitPath] = useState("");
+  const [initBranch, setInitBranch] = useState("main");
+  const [initGitignore, setInitGitignore] = useState("");
+  const [initLicense, setInitLicense] = useState("");
+  const [initLicenseHolder, setInitLicenseHolder] = useState("");
+  const [initializing, setInitializing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showRepositorySettings, setShowRepositorySettings] = useState(false);
   const [globalIdentityName, setGlobalIdentityName] = useState("");
@@ -1485,6 +1494,38 @@ export function App() {
     ).catch((reason: unknown) => setError(normalizeAppError(reason)));
   }
 
+  async function handleChooseInitFolder() {
+    try {
+      const path = await chooseRepositoryInitDirectory();
+      if (path) setInitPath(path);
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+    }
+  }
+
+  async function handleInitializeRepository() {
+    if (!initPath || !initBranch.trim()) return;
+    try {
+      setInitializing(true);
+      setError(undefined);
+      const session = await initializeRepository({
+        path: initPath,
+        initialBranch: initBranch.trim(),
+        gitignoreTemplate: initGitignore ? initGitignore as "node" | "rust" | "python" | "go" : undefined,
+        licenseTemplate: initLicense ? initLicense as "mit" | "bsd-3-clause" : undefined,
+        licenseHolder: initLicense ? initLicenseHolder.trim() : undefined,
+        licenseYear: new Date().getFullYear(),
+      });
+      setTabs(session.tabs);
+      setShowInit(false);
+      setInitPath("");
+    } catch (reason: unknown) {
+      setError(normalizeAppError(reason));
+    } finally {
+      setInitializing(false);
+      setSessionLoading(false);
+    }
+  }
   async function handleClone() {
     const remoteUrl = cloneUrl.trim();
     if (!remoteUrl) return;
@@ -2403,7 +2444,8 @@ export function App() {
         <button className="control-button control-button--primary open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
           <span aria-hidden="true">＋</span>{" "}{opening ? t("Opening…") : t("Open a repository")}
         </button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => setShowClone((value) => !value)}>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowInit((value) => !value); setShowClone(false); }}>{t("New repository")}</button>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowClone((value) => !value); setShowInit(false); }}>
           {t("Clone")}
         </button>
       </div>
@@ -2814,6 +2856,26 @@ export function App() {
                 )}
             </div>}
           </div>
+          {showInit && (
+            <form className="init-bar" onSubmit={(event) => { event.preventDefault(); void handleInitializeRepository(); }}>
+              <label htmlFor="init-path">{t("Folder")}</label>
+              <input className="control-input" id="init-path" value={initPath} readOnly placeholder={t("Choose an existing folder")} />
+              <button className="control-button control-button--secondary" type="button" onClick={() => void handleChooseInitFolder()}>{t("Choose folder")}</button>
+              <label htmlFor="init-branch">{t("Initial branch")}</label>
+              <input className="control-input init-branch" id="init-branch" value={initBranch} onChange={(event) => setInitBranch(event.target.value)} />
+              <label htmlFor="init-gitignore">.gitignore</label>
+              <select className="control-input" id="init-gitignore" value={initGitignore} onChange={(event) => setInitGitignore(event.target.value)}>
+                <option value="">{t("No template")}</option>
+                <option value="node">Node</option><option value="rust">Rust</option><option value="python">Python</option><option value="go">Go</option>
+              </select>
+              <label htmlFor="init-license">{t("License")}</label>
+              <select className="control-input" id="init-license" value={initLicense} onChange={(event) => setInitLicense(event.target.value)}>
+                <option value="">{t("No license")}</option><option value="mit">MIT</option><option value="bsd-3-clause">BSD 3-Clause</option>
+              </select>
+              {initLicense && <input aria-label={t("Copyright holder")} className="control-input init-holder" value={initLicenseHolder} onChange={(event) => setInitLicenseHolder(event.target.value)} placeholder={t("Copyright holder")} />}
+              <button className="control-button control-button--primary" type="submit" disabled={initializing || !initPath || !initBranch.trim() || Boolean(initLicense && !initLicenseHolder.trim())}>{initializing ? t("Creating repository…") : t("Create repository")}</button>
+            </form>
+          )}
           {showClone && (
             <form className="clone-bar" onSubmit={(event) => { event.preventDefault(); void handleClone(); }}>
               <label htmlFor="clone-url">{t("Repository URL")}</label>

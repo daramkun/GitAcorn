@@ -1,7 +1,8 @@
 use app_core::{
     BranchRequest, CommitRequest, DiffTarget, HistoryFilter, HistoryOperation,
     InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebaseRequest, PatchSelection,
-    ReferenceKind, RepositoryService, SignatureSettings, WorktreeCreateRequest,
+    ReferenceKind, RepositoryInitRequest, RepositoryService, SignatureSettings,
+    WorktreeCreateRequest,
 };
 use git_cli::GitExecutor;
 use git_domain::{DiffLineKind, HeadState, RepositoryOperation};
@@ -12,6 +13,71 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use test_support::TestRepository;
 
+#[test]
+fn initializes_repository_with_selected_templates_without_touching_existing_files() {
+    let directory = tempfile::tempdir().expect("repository directory");
+    fs::write(directory.path().join("README.md"), "keep me\n").expect("seed existing file");
+    let service = RepositoryService::default();
+
+    service
+        .initialize_repository(&RepositoryInitRequest {
+            path: directory.path().to_path_buf(),
+            initial_branch: "main".to_owned(),
+            gitignore_template: Some("rust".to_owned()),
+            license_template: Some("mit".to_owned()),
+            license_holder: Some("GitAcorn Test".to_owned()),
+            license_year: 2026,
+        })
+        .expect("initialize repository");
+
+    assert_eq!(
+        fs::read_to_string(directory.path().join("README.md")).expect("read existing file"),
+        "keep me\n"
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join(".gitignore")).expect("read gitignore"),
+        "/target/\n**/*.rs.bk\n"
+    );
+    assert!(
+        fs::read_to_string(directory.path().join("LICENSE"))
+            .expect("read license")
+            .contains("Copyright (c) 2026 GitAcorn Test")
+    );
+    let branch = Command::new("git")
+        .current_dir(directory.path())
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .output()
+        .expect("read initial branch");
+    assert!(branch.status.success());
+    assert_eq!(String::from_utf8_lossy(&branch.stdout).trim(), "main");
+}
+
+#[test]
+fn initialization_refuses_to_overwrite_a_selected_template_file() {
+    let directory = tempfile::tempdir().expect("repository directory");
+    fs::write(directory.path().join(".gitignore"), "custom\n").expect("seed gitignore");
+    let service = RepositoryService::default();
+
+    let error = service
+        .initialize_repository(&RepositoryInitRequest {
+            path: directory.path().to_path_buf(),
+            initial_branch: "main".to_owned(),
+            gitignore_template: Some("node".to_owned()),
+            license_template: None,
+            license_holder: None,
+            license_year: 2026,
+        })
+        .expect_err("existing template must be preserved");
+
+    assert!(
+        matches!(error, app_core::AppError::InvalidRequest(message) if message.contains(".gitignore already exists"))
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join(".gitignore")).expect("read gitignore"),
+        "custom\n"
+    );
+    assert!(!directory.path().join(".git").exists());
+}
 fn sequence_editor_helper(directory: &Path) -> PathBuf {
     #[cfg(windows)]
     {

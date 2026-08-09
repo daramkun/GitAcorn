@@ -4,8 +4,8 @@ use app_core::{
     GitReference, GitRemote, HistoryMutationPreview, InteractiveRebaseAction,
     InteractiveRebaseItem, InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus,
     LfsLock, LfsStatus, PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind,
-    RemoteRequest, RemoteTagSummary, RepositorySidebar, SignatureSettings, SignatureStatus,
-    WorktreeCreateRequest,
+    RemoteRequest, RemoteTagSummary, RepositoryInitRequest, RepositorySidebar, SignatureSettings,
+    SignatureStatus, WorktreeCreateRequest,
 };
 use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
@@ -354,6 +354,30 @@ impl TryFrom<RemoteRequestDto> for RemoteRequest {
                 .unwrap_or(kind == RemoteOperationKind::Pull),
             force_with_lease: request.force_with_lease,
         })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryInitRequestDto {
+    pub path: String,
+    pub initial_branch: String,
+    pub gitignore_template: Option<String>,
+    pub license_template: Option<String>,
+    pub license_holder: Option<String>,
+    pub license_year: u16,
+}
+
+impl From<RepositoryInitRequestDto> for RepositoryInitRequest {
+    fn from(request: RepositoryInitRequestDto) -> Self {
+        Self {
+            path: request.path.into(),
+            initial_branch: request.initial_branch,
+            gitignore_template: request.gitignore_template,
+            license_template: request.license_template,
+            license_holder: request.license_holder,
+            license_year: request.license_year,
+        }
     }
 }
 

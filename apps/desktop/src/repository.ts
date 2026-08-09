@@ -421,6 +421,14 @@ export type OperationRecordDto = {
   recoveryState?: "ready" | "undone";
 };
 
+export type RepositoryInitRequest = {
+  path: string;
+  initialBranch: string;
+  gitignoreTemplate?: "node" | "rust" | "python" | "go";
+  licenseTemplate?: "mit" | "bsd-3-clause";
+  licenseHolder?: string;
+  licenseYear: number;
+};
 export type RemoteOperationOptions = {
   remote?: string;
   fetchTags?: boolean;
@@ -438,6 +446,17 @@ export async function chooseRepositoryDirectory(): Promise<string | null> {
   return path;
 }
 
+export async function chooseRepositoryInitDirectory(): Promise<string | null> {
+  return open({
+    title: "Choose a folder for the new repository",
+    directory: true,
+    multiple: false,
+  });
+}
+
+export function initializeRepository(request: RepositoryInitRequest): Promise<SessionDto> {
+  return invoke<SessionDto>("repository_initialize", { request });
+}
 export function openRepository(
   path: string,
   openedFrom?: { repositoryName: string; worktreePath: string },

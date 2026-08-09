@@ -11,8 +11,8 @@ use app_core::{
     GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
     HistoryMutationPreview, HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest,
     LfsLock, LfsRequest, LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress,
-    RemoteRequest, RemoteTagSummary, RepositoryScheduler, RepositoryService, RepositorySidebar,
-    SignatureSettings, SignatureStatus, StashRequest, WorktreeCreateRequest,
+    RemoteRequest, RemoteTagSummary, RepositoryInitRequest, RepositoryScheduler, RepositoryService,
+    RepositorySidebar, SignatureSettings, SignatureStatus, StashRequest, WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -92,6 +92,14 @@ impl ApplicationState {
         }
     }
 
+    pub async fn initialize_repository(
+        &self,
+        request: &RepositoryInitRequest,
+        app: &AppHandle,
+    ) -> Result<Vec<SessionTabState>, AppError> {
+        self.service.initialize_repository(request)?;
+        self.open_repository(&request.path, None, app).await
+    }
     pub async fn open_repository(
         &self,
         path: &Path,

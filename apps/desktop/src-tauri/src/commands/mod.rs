@@ -18,9 +18,10 @@ use crate::dto::{
     LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
     OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
     RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
-    RepositoryGitIdentityDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
-    SessionDto, SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto,
-    SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorktreeCreateRequestDto,
+    RepositoryGitIdentityDto, RepositoryInitRequestDto, RepositoryOpenSourceDto,
+    RepositorySidebarDto, RepositorySnapshotDto, SessionDto, SessionTabUpdateDto,
+    SignatureSettingsDto, SignatureSettingsRequestDto, SignatureStatusDto, StashRequestDto,
+    SubmoduleAddRequestDto, WorktreeCreateRequestDto,
 };
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
@@ -451,6 +452,19 @@ fn operation_event(
     }
 }
 
+#[tauri::command]
+pub async fn repository_initialize(
+    request: RepositoryInitRequestDto,
+    app: AppHandle,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<SessionDto> {
+    let request = request.into();
+    state
+        .initialize_repository(&request, &app)
+        .await
+        .map(SessionDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
 #[tauri::command]
 pub async fn repository_open(
     path: String,
