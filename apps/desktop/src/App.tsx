@@ -3529,7 +3529,7 @@ export function App() {
                 />
               </label>
               <p className="settings-note">{t("The path must not already exist. A remote branch can be used as the start point.")}</p>
-              <button className="primary-action" type="submit" disabled={worktreeDialogBusy || !worktreeDialog.path.trim()}>
+              <button className="control-button control-button--primary" type="submit" disabled={worktreeDialogBusy || !worktreeDialog.path.trim()}>
                 {worktreeDialogBusy ? t("Creating…") : t("Create worktree")}
               </button>
             </div>

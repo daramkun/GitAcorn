@@ -33,6 +33,8 @@
   --motion-fast: 120ms;
   --motion-standard: 150ms;
   --subtle-hover: color-mix(in srgb, var(--surface-soft) 72%, transparent);
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --mono: var(--font-mono);
 }
 
 :root,
@@ -66,6 +68,13 @@
   --modal-bg: #211710;
   --modal-border: #5b402d;
   --shadow-color: rgba(0, 0, 0, 0.35);
+  --border-subtle: #432f22;
+  --surface-muted: #1c140f;
+  --text-muted: #b5a18d;
+  --fg: #f2e7d7;
+  --success: #8ce4b1;
+  --warning: #d99a2b;
+  --warning-strong: #f0bc6a;
 
   --diff-bg: #15100d;
   --diff-hunk-bg: #292015;
@@ -127,6 +136,13 @@
   --modal-bg: #ffffff;
   --modal-border: #cbb9a7;
   --shadow-color: rgba(60, 39, 21, 0.2);
+  --border-subtle: #e2d5c7;
+  --surface-muted: #f8f4ee;
+  --text-muted: #6e5d4e;
+  --fg: #2b2016;
+  --success: #1b6e4d;
+  --warning: #b86b24;
+  --warning-strong: #8f5014;
 
   --diff-bg: #ffffff;
   --diff-hunk-bg: #f3e8dc;
@@ -3223,7 +3239,7 @@ button:disabled {
   width: 440px;
   max-width: 90vw;
   border: 1px solid var(--modal-border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--modal-bg);
   box-shadow: 0 16px 32px var(--shadow-color);
   overflow: hidden;
@@ -3276,33 +3292,64 @@ button:disabled {
 }
 
 .settings-modal-body {
-  padding: 20px;
+  padding: var(--space-5) var(--space-6);
+}
+
+.settings-modal-body > label {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-size-md);
+}
+
+.settings-modal-body > label + label {
+  margin-top: var(--space-4);
+}
+
+.settings-modal-body > label .control-input {
+  width: 100%;
+}
+
+.settings-note {
+  display: block;
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-md);
+  line-height: 1.45;
 }
 
 .compare-modal {
   width: min(960px, 94vw);
+  max-height: min(720px, 86vh);
+  display: flex;
+  flex-direction: column;
+}
+
+.compare-modal .settings-modal-body {
+  min-height: 0;
+  overflow: auto;
 }
 
 .compare-input-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .compare-input-grid label {
   display: grid;
-  gap: 5px;
+  gap: var(--space-2);
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: 650;
 }
 
 .compare-result {
   display: grid;
   min-height: 0;
-  margin-top: 14px;
+  margin-top: var(--space-4);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -3311,79 +3358,106 @@ button:disabled {
 .compare-patch-preview,
 .binary-preview-card {
   display: grid;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .compare-actions {
-  grid-template-columns: repeat(auto-fit, minmax(120px, max-content));
-  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 .compare-patch-preview {
-  margin-top: 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  margin-top: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   overflow: hidden;
 }
 
 .compare-patch-header {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  padding: 8px 10px;
-  background: var(--surface-muted);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: var(--font-size-md);
 }
 
 .compare-patch-preview pre {
   max-height: 220px;
   margin: 0;
-  padding: 10px;
+  padding: var(--space-4);
   overflow: auto;
   white-space: pre-wrap;
-  font: 12px/1.5 var(--font-mono);
+  color: var(--text);
+  font: var(--font-size-base)/1.5 var(--font-mono);
 }
 
 .external-diff-settings {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: end;
-  margin-top: 12px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 .external-diff-settings label {
   display: grid;
-  gap: 4px;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-size-md);
+}
+
+.external-diff-settings > .remote-form-actions {
+  grid-column: 1 / -1;
 }
 
 .binary-preview-controls {
   display: flex;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.binary-preview-card {
+  padding: var(--space-4);
+  background: var(--surface);
 }
 
 .binary-preview-controls button {
-  border: 1px solid var(--border-subtle);
-  border-radius: 5px;
-  background: transparent;
-  color: inherit;
-  padding: 4px 8px;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
 }
 
+.binary-preview-controls button:hover,
 .binary-preview-controls button[aria-pressed="true"] {
   background: var(--accent-soft);
   border-color: var(--accent);
+  color: var(--text);
 }
 
 .binary-images {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .binary-images figure {
   min-width: 0;
   margin: 0;
-  padding: 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--surface-muted);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
 }
 
 .binary-images img {
@@ -3395,9 +3469,9 @@ button:disabled {
 }
 
 .binary-images figcaption {
-  margin-top: 6px;
+  margin-top: var(--space-2);
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-size-md);
 }
 
 .binary-images--overlay {
@@ -3420,7 +3494,7 @@ button:disabled {
 .lfs-locks,
 .signature-settings-grid {
   display: grid;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .lfs-file-list {
@@ -3434,32 +3508,46 @@ button:disabled {
 .lfs-lock-row {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
   align-items: center;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: var(--font-size-md);
 }
 
 .lfs-file-list small,
 .lfs-locks small {
-  color: var(--text-muted);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.lfs-file-list li > span,
+.lfs-lock-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .signature-settings-grid label {
   display: grid;
-  gap: 4px;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-size-md);
 }
 
 .signature-badge {
   display: inline-flex;
   align-items: center;
   width: fit-content;
-  margin-top: 6px;
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: var(--surface-muted);
-  color: var(--text-muted);
-  font-size: 11px;
+  margin-top: var(--space-2);
+  padding: 3px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
 }
 
 .signature-valid,
@@ -3475,8 +3563,8 @@ button:disabled {
 
 .compare-file-tabs {
   display: flex;
-  gap: 4px;
-  padding: 6px;
+  gap: var(--space-1);
+  padding: var(--space-2);
   overflow-x: auto;
   background: var(--surface-soft);
   border-bottom: 1px solid var(--border);
@@ -3484,13 +3572,24 @@ button:disabled {
 
 .compare-file-tabs button,
 .diff-view-controls button {
-  padding: 4px 7px;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: var(--surface-raised);
   color: var(--muted);
   cursor: pointer;
-  font-size: 9px;
+  font-size: var(--font-size-sm);
+  transition:
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+
+.compare-file-tabs button:hover,
+.diff-view-controls button:hover {
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 .compare-file-tabs button[aria-selected="true"],
@@ -3503,7 +3602,7 @@ button:disabled {
 .diff-view-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .git-settings-modal {
@@ -3512,6 +3611,14 @@ button:disabled {
 
 .repository-settings-modal {
   width: 500px;
+  max-height: min(760px, 90vh);
+  display: flex;
+  flex-direction: column;
+}
+
+.repository-settings-modal .settings-modal-body {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .git-settings-modal .settings-modal-body {
