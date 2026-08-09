@@ -9854,6 +9854,11 @@ function HistoryView({
                   count: snapshot.changes.length,
                 })}
               </p>
+              <p className="reset-recovery-note">
+                {t("Recovery reference: the current HEAD reflog entry ({oid}) is kept for Undo when the worktree is clean.", {
+                  oid: snapshot.head.oid?.slice(0, 8) ?? "unborn",
+                })}
+              </p>
               <label>
                 <span>{t("Reset mode")}</span>
                 <select
@@ -9869,7 +9874,23 @@ function HistoryView({
                 </select>
               </label>
               {resetMode === "hard" && (
-                <p className="rebase-warning">{t("Hard reset discards uncommitted changes ({count} working-tree or index changes). Ensure they are backed up before continuing.", { count: snapshot.changes.length })}</p>
+                <>
+                  <p className="rebase-warning">{t("Hard reset discards uncommitted changes ({count} working-tree or index changes). Ensure they are backed up before continuing.", { count: snapshot.changes.length })}</p>
+                  {snapshot.changes.length > 0 && (
+                    <div className="reset-impact" role="region" aria-label={t("Hard reset will discard these paths:")}>
+                      <strong>{t("Hard reset will discard these paths:")}</strong>
+                      <ul>
+                        {snapshot.changes.map((change) => (
+                          <li key={`${change.path}-${change.indexStatus}-${change.worktreeStatus}`}>
+                            <code>{change.path}</code>
+                            {change.originalPath ? <small> ← {change.originalPath}</small> : null}
+                            <span>{t("index {index} · worktree {worktree}", { index: change.indexStatus, worktree: change.worktreeStatus })}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
               )}
               <div className="remote-form-actions">
                 <button

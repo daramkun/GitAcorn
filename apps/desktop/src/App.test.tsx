@@ -4571,6 +4571,12 @@ describe("App", () => {
     expect(
       within(dialog).getByText(/Hard reset discards uncommitted changes/i),
     ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("region", { name: /Hard reset will discard these paths/i }),
+    ).toHaveTextContent("tracked.txt");
+    expect(within(dialog).getByText(/Recovery reference: the current HEAD reflog entry/i)).toHaveTextContent(
+      "abcdef12",
+    );
 
     fireEvent.click(
       within(dialog).getByRole("button", {
