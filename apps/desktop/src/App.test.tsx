@@ -28,6 +28,7 @@ import {
   getExternalDiffTool,
   getLfsLocks,
   getLfsStatus,
+  lockLfsPath,
   getSignatureSettings,
   getSignatureStatus,
   createBranch,
@@ -78,15 +79,18 @@ import {
   stagePaths,
   startInteractiveRebase,
   startRemoteOperation,
+  startLfsSync,
   unstagePaths,
   undoOperation,
   lockWorktree,
   unlockWorktree,
+  unlockLfsPath,
   runExternalDiff,
   saveComparePatch,
   updateExternalDiffTool,
   validateComparePatch,
   updateGlobalGitIdentity,
+  updateSignatureSettings,
   updateRepositoryGitIdentity,
   updateSessionTab,
   updateRemote,
@@ -235,8 +239,12 @@ const mockedUpdateExternalDiffTool = vi.mocked(updateExternalDiffTool);
 const mockedValidateComparePatch = vi.mocked(validateComparePatch);
 const mockedGetLfsLocks = vi.mocked(getLfsLocks);
 const mockedGetLfsStatus = vi.mocked(getLfsStatus);
+const mockedLockLfsPath = vi.mocked(lockLfsPath);
+const mockedUnlockLfsPath = vi.mocked(unlockLfsPath);
+const mockedStartLfsSync = vi.mocked(startLfsSync);
 const mockedGetSignatureSettings = vi.mocked(getSignatureSettings);
 const mockedGetSignatureStatus = vi.mocked(getSignatureStatus);
+const mockedUpdateSignatureSettings = vi.mocked(updateSignatureSettings);
 const mockedCreateBranch = vi.mocked(createBranch);
 const mockedCreateTag = vi.mocked(createTag);
 const mockedCreateWorktree = vi.mocked(createWorktree);
@@ -388,8 +396,12 @@ describe("App", () => {
     mockedValidateComparePatch.mockResolvedValue({ schemaVersion: 1, valid: true, message: "Patch is valid." });
     mockedGetLfsLocks.mockResolvedValue([]);
     mockedGetLfsStatus.mockResolvedValue({ schemaVersion: 1, installed: false, tracked: [] });
+    mockedLockLfsPath.mockResolvedValue([]);
+    mockedUnlockLfsPath.mockResolvedValue([]);
+    mockedStartLfsSync.mockResolvedValue({ schemaVersion: 1, operationId: "lfs-operation" });
     mockedGetSignatureSettings.mockResolvedValue({ schemaVersion: 1, commitSign: false, tagSign: false, format: null, signingKey: null, sshAllowedSignersFile: null });
     mockedGetSignatureStatus.mockResolvedValue({ schemaVersion: 1, revision: "", kind: "commit", status: "N" });
+    mockedUpdateSignatureSettings.mockResolvedValue({ schemaVersion: 1, commitSign: false, tagSign: false, format: null, signingKey: null, sshAllowedSignersFile: null });
     mockedCreateWorktree.mockResolvedValue({
       schemaVersion: 1,
       worktrees: [],
@@ -4361,6 +4373,93 @@ describe("App", () => {
     fireEvent.click(closeBtn);
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows a recoverable LFS authentication error without exposing credentials", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetLfsStatus.mockRejectedValueOnce({
+      code: "git_failed",
+      message: "LFS authentication required",
+    });
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(
+      screen.getByRole("button", { name: /Repository settings|저장소 설정/i }),
+    );
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(await screen.findByText("LFS authentication required")).toBeInTheDocument();
+    expect(screen.queryByText(/password|credential|private key/i)).not.toBeInTheDocument();
+  });
+
+  it("shows LFS pointers and locks and saves signing options without private key material", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetLfsStatus.mockResolvedValue({
+      schemaVersion: 1,
+      installed: true,
+      tracked: [
+        { path: "assets/model.bin", oid: "oid-1", size: 42, downloaded: false },
+      ],
+    });
+    mockedGetLfsLocks.mockResolvedValue([
+      { id: "lock-1", path: "assets/model.bin", owner: "Ada", lockedAt: "2026-08-09T00:00:00Z" },
+    ]);
+    mockedUnlockLfsPath.mockResolvedValue([]);
+    mockedLockLfsPath.mockResolvedValue([]);
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue("assets/other.bin");
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(
+      screen.getByRole("button", { name: /Repository settings|저장소 설정/i }),
+    );
+
+    expect(await screen.findByText("1 tracked LFS files")).toBeInTheDocument();
+    expect(screen.getByText("assets/model.bin")).toBeInTheDocument();
+    expect(screen.getByText("Pointer only")).toBeInTheDocument();
+    expect(screen.getByText(/assets\/model\.bin · Ada/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "LFS fetch" }));
+    await waitFor(() =>
+      expect(mockedStartLfsSync).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        "fetch",
+        expect.any(Function),
+        undefined,
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    await waitFor(() =>
+      expect(mockedUnlockLfsPath).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        undefined,
+        "lock-1",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Lock path" }));
+    await waitFor(() =>
+      expect(mockedLockLfsPath).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        "assets/other.bin",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Sign commits" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Sign tags" }));
+    fireEvent.change(screen.getByLabelText("Signature format"), { target: { value: "ssh" } });
+    fireEvent.change(screen.getByLabelText("Signing key"), { target: { value: "key-id" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save signing settings" }));
+    await waitFor(() => expect(mockedUpdateSignatureSettings).toHaveBeenCalled());
+    const signingCall = mockedUpdateSignatureSettings.mock.calls.at(-1);
+    expect(signingCall?.[0]).toBe(snapshot.repository.id);
+    expect(signingCall?.[1]).toMatchObject({
+      commitSign: true,
+      tagSign: true,
+      format: "ssh",
+      signingKey: "key-id",
+    });
+    prompt.mockRestore();
   });
 
   it("uses a one-line compact layout for the commit graph when enabled", async () => {

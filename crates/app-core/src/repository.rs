@@ -430,6 +430,7 @@ impl RepositoryService {
             [OsString::from("ls-files"), OsString::from("--long")],
             Duration::from_secs(30),
         )?;
+        let output = ensure_success(output)?;
         let tracked = String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter_map(parse_lfs_file_status)
@@ -444,11 +445,14 @@ impl RepositoryService {
         cancellation: &CancellationToken,
         mut progress: impl FnMut(crate::RemoteProgress),
     ) -> Result<(), AppError> {
-        let mut args = vec![OsString::from(match request.kind {
-            LfsOperationKind::Fetch => "fetch",
-            LfsOperationKind::Pull => "pull",
-            LfsOperationKind::Prune => "prune",
-        })];
+        let mut args = vec![
+            OsString::from("lfs"),
+            OsString::from(match request.kind {
+                LfsOperationKind::Fetch => "fetch",
+                LfsOperationKind::Pull => "pull",
+                LfsOperationKind::Prune => "prune",
+            }),
+        ];
         if let Some(remote) = request.remote.as_deref() {
             let remote = validate_lfs_remote(remote)?;
             args.push(OsString::from(remote));
@@ -492,6 +496,7 @@ impl RepositoryService {
             [OsString::from("locks"), OsString::from("--json")],
             Duration::from_secs(30),
         )?;
+        let output = ensure_success(output)?;
         let payload: LfsLocksPayload = serde_json::from_slice(&output.stdout)
             .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
         Ok(payload
@@ -700,7 +705,9 @@ impl RepositoryService {
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let mut request = GitRequest::new(args);
+        let mut git_args = vec![OsString::from("lfs")];
+        git_args.extend(args.into_iter().map(Into::into));
+        let mut request = GitRequest::new(git_args);
         request.working_directory = Some(repository.worktree_path.clone());
         request.timeout = timeout;
         self.run(request)
@@ -4180,12 +4187,18 @@ fn parse_git_version(output: &[u8]) -> Result<GitVersion, AppError> {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::time::Duration;
+
+    use git_cli::GitOutput;
 
     use super::{
         GitVersion, InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
-        ReferenceKind, parse_git_version, parse_interactive_rebase_commits, parse_references,
-        parse_stashes, parse_submodules, parse_worktrees, summarize_refs, validate_rebase_plan,
+        ReferenceKind, ensure_success, parse_git_version, parse_interactive_rebase_commits,
+        parse_references, parse_stashes, parse_submodules, parse_worktrees, summarize_refs,
+        validate_rebase_plan,
     };
+
+    use crate::AppError;
 
     #[test]
     fn parses_windows_git_version_suffix() {
@@ -4197,6 +4210,24 @@ mod tests {
                 patch: 0
             }
         );
+    }
+
+    #[test]
+    fn maps_lfs_authentication_failure_to_recoverable_git_error() {
+        let error = ensure_success(GitOutput {
+            stdout: Vec::new(),
+            stderr: b"batch response: Authentication required".to_vec(),
+            exit_code: 1,
+            duration: Duration::from_millis(3),
+        })
+        .expect_err("failed LFS command");
+
+        match error {
+            AppError::GitFailed { detail, .. } => {
+                assert!(detail.contains("Authentication required"));
+            }
+            other => panic!("expected recoverable Git failure, got {other:?}"),
+        }
     }
 
     #[test]
