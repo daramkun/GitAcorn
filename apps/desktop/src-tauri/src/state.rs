@@ -8,12 +8,13 @@ use std::time::{Duration, Instant};
 use app_core::{
     AppError, BinaryPreview, BisectMark, BisectState, BranchRequest, CloneRequest, CommitRequest,
     ComparePatch, ConflictFile, ConflictResolution, DiffTarget, ExternalDiffResult,
-    ExternalDiffTool, FileBlame, GitIdentity, GitIdentitySettings, GitReference, GitRemote,
-    HistoryFilter, HistoryMutationPreview, HistoryOperation, InteractiveRebasePreview,
-    InteractiveRebaseRequest, LfsLock, LfsRequest, LfsStatus, PatchSelection, PathHistory,
-    ReflogEntry, RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryCommandResult,
-    RepositoryInitRequest, RepositoryScheduler, RepositoryService, RepositorySidebar,
-    SignatureSettings, SignatureStatus, StashRequest, WorktreeCreateRequest,
+    ExternalDiffTool, FileBlame, ForgeAccount, ForgeProvider, ForgeRepository, GitIdentity,
+    GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryMutationPreview,
+    HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest, LfsLock, LfsRequest,
+    LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress, RemoteRequest,
+    RemoteTagSummary, RepositoryCommandResult, RepositoryInitRequest, RepositoryScheduler,
+    RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus, StashRequest,
+    WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -21,9 +22,13 @@ use git_domain::{
     WorktreeId,
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use persistence::{OperationRecord, OperationRecovery, SessionStore, SessionTab};
+use persistence::{
+    ForgeAccountRecord, OperationRecord, OperationRecovery, SessionStore, SessionTab,
+};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
+
+use crate::forge::{ForgeConnectRequest, ForgeService};
 
 struct OpenRepository {
     descriptor: RepositoryDescriptor,
@@ -76,6 +81,7 @@ pub struct OperationRecoveryData {
 
 pub struct ApplicationState {
     service: RepositoryService,
+    forge: ForgeService,
     scheduler: RepositoryScheduler,
     repositories: Mutex<HashMap<RepoId, OpenRepository>>,
     watchers: Mutex<HashMap<WorktreeId, RecommendedWatcher>>,
@@ -88,6 +94,7 @@ impl ApplicationState {
     pub fn new(session: SessionStore) -> Self {
         Self {
             service: RepositoryService::default(),
+            forge: ForgeService::default(),
             scheduler: RepositoryScheduler::default(),
             repositories: Mutex::default(),
             watchers: Mutex::default(),
@@ -1627,6 +1634,92 @@ impl ApplicationState {
         })
     }
 
+    pub async fn forge_accounts(&self) -> Result<Vec<ForgeAccount>, AppError> {
+        self.session
+            .list_forge_accounts()
+            .await
+            .map_err(persistence_error)?
+            .into_iter()
+            .map(forge_account_from_record)
+            .collect()
+    }
+
+    pub async fn forge_connect(
+        &self,
+        request: &ForgeConnectRequest,
+    ) -> Result<ForgeAccount, AppError> {
+        let previous_accounts = self
+            .session
+            .list_forge_accounts()
+            .await
+            .map_err(persistence_error)?;
+        let (account, auth_username) = self.forge.connect(request).await?;
+        let previous = previous_accounts
+            .into_iter()
+            .find(|candidate| candidate.id == account.id);
+        let record = ForgeAccountRecord {
+            id: account.id.clone(),
+            provider: account.provider.label().to_owned(),
+            host: account.host.clone(),
+            login: account.login.clone(),
+            display_name: account.display_name.clone(),
+            auth_username: auth_username.clone(),
+            scope: account.scope.clone(),
+            avatar_url: account.avatar_url.clone(),
+        };
+        if let Err(error) = self.session.upsert_forge_account(&record).await {
+            let _ = self.forge.forget(&account, &auth_username);
+            return Err(persistence_error(error));
+        }
+        if let Some(previous) = previous.filter(|previous| {
+            previous.host != record.host || previous.auth_username != record.auth_username
+        }) {
+            if let Ok(previous_account) = forge_account_from_record(previous.clone()) {
+                if let Err(error) = self
+                    .forge
+                    .forget(&previous_account, &previous.auth_username)
+                {
+                    tracing::warn!(account_id = %account.id, %error, "could not remove replaced forge credential");
+                }
+            }
+        }
+        Ok(account)
+    }
+
+    pub async fn forge_repositories(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<ForgeRepository>, AppError> {
+        let record = self
+            .session
+            .list_forge_accounts()
+            .await
+            .map_err(persistence_error)?
+            .into_iter()
+            .find(|account| account.id == account_id)
+            .ok_or_else(|| AppError::InvalidRequest("Forge account was not found".to_owned()))?;
+        let account = forge_account_from_record(record.clone())?;
+        self.forge
+            .repositories(&account, &record.auth_username)
+            .await
+    }
+
+    pub async fn forge_disconnect(&self, account_id: &str) -> Result<(), AppError> {
+        let record = self
+            .session
+            .list_forge_accounts()
+            .await
+            .map_err(persistence_error)?
+            .into_iter()
+            .find(|account| account.id == account_id)
+            .ok_or_else(|| AppError::InvalidRequest("Forge account was not found".to_owned()))?;
+        let account = forge_account_from_record(record.clone())?;
+        self.forge.forget(&account, &record.auth_username)?;
+        self.session
+            .delete_forge_account(account_id)
+            .await
+            .map_err(persistence_error)
+    }
     pub async fn start_operation_record(
         &self,
         id: &str,
@@ -2174,6 +2267,29 @@ fn watcher_error(error: notify::Error) -> AppError {
         diagnostic_id: Uuid::new_v4(),
         detail: format!("Could not watch repository: {error}"),
     }
+}
+
+fn forge_account_from_record(record: ForgeAccountRecord) -> Result<ForgeAccount, AppError> {
+    let provider = match record.provider.as_str() {
+        "github" => ForgeProvider::GitHub,
+        "gitlab" => ForgeProvider::GitLab,
+        "bitbucket" => ForgeProvider::Bitbucket,
+        "azureDevOps" => ForgeProvider::AzureDevOps,
+        _ => {
+            return Err(AppError::Persistence {
+                detail: "Stored forge provider is invalid".to_owned(),
+            });
+        }
+    };
+    Ok(ForgeAccount {
+        id: record.id,
+        provider,
+        host: record.host,
+        login: record.login,
+        display_name: record.display_name,
+        scope: record.scope,
+        avatar_url: record.avatar_url,
+    })
 }
 
 #[cfg(test)]

@@ -1,11 +1,12 @@
 use app_core::{
     AppErrorDto, BinaryPreview, BisectState, BranchRequest, CloneRequest, CommitFile,
     CommitRequest, ComparePatch, ConflictFile, ConflictSegment, ExternalDiffResult,
-    ExternalDiffTool, GitIdentity, GitReference, GitRemote, HistoryMutationPreview,
-    InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
-    InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus, PatchSelection, ReferenceKind,
-    ReflogEntry, RemoteOperationKind, RemoteRequest, RemoteTagSummary, RepositoryInitRequest,
-    RepositorySidebar, SignatureSettings, SignatureStatus, WorktreeCreateRequest,
+    ExternalDiffTool, ForgeAccount, ForgeRepository, GitIdentity, GitReference, GitRemote,
+    HistoryMutationPreview, InteractiveRebaseAction, InteractiveRebaseItem,
+    InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus,
+    PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind, RemoteRequest,
+    RemoteTagSummary, RepositoryInitRequest, RepositorySidebar, SignatureSettings, SignatureStatus,
+    WorktreeCreateRequest,
 };
 use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
@@ -18,6 +19,94 @@ use std::path::Path;
 use crate::path_display::display_path;
 use crate::state::{RepositoryIdentityState, SessionTabState};
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeAccountDto {
+    pub id: String,
+    pub provider: String,
+    pub host: String,
+    pub login: String,
+    pub display_name: String,
+    pub scope: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+impl From<ForgeAccount> for ForgeAccountDto {
+    fn from(account: ForgeAccount) -> Self {
+        Self {
+            id: account.id,
+            provider: account.provider.label().to_owned(),
+            host: account.host,
+            login: account.login,
+            display_name: account.display_name,
+            scope: account.scope,
+            avatar_url: account.avatar_url,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeAccountsDto {
+    pub schema_version: u16,
+    pub accounts: Vec<ForgeAccountDto>,
+}
+
+impl From<Vec<ForgeAccount>> for ForgeAccountsDto {
+    fn from(accounts: Vec<ForgeAccount>) -> Self {
+        Self {
+            schema_version: 1,
+            accounts: accounts.into_iter().map(ForgeAccountDto::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeRepositoryDto {
+    pub id: String,
+    pub name: String,
+    pub full_name: String,
+    pub clone_url: String,
+    pub web_url: String,
+    pub private: bool,
+    pub archived: bool,
+    pub updated_at: Option<String>,
+}
+
+impl From<ForgeRepository> for ForgeRepositoryDto {
+    fn from(repository: ForgeRepository) -> Self {
+        Self {
+            id: repository.id,
+            name: repository.name,
+            full_name: repository.full_name,
+            clone_url: repository.clone_url,
+            web_url: repository.web_url,
+            private: repository.private,
+            archived: repository.archived,
+            updated_at: repository.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeRepositoriesDto {
+    pub schema_version: u16,
+    pub repositories: Vec<ForgeRepositoryDto>,
+}
+
+impl From<Vec<ForgeRepository>> for ForgeRepositoriesDto {
+    fn from(repositories: Vec<ForgeRepository>) -> Self {
+        Self {
+            schema_version: 1,
+            repositories: repositories
+                .into_iter()
+                .map(ForgeRepositoryDto::from)
+                .collect(),
+        }
+    }
+}
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConflictFileDto {

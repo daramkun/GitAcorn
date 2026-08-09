@@ -1,5 +1,6 @@
 mod commands;
 mod dto;
+mod forge;
 mod path_display;
 mod state;
 mod system_icons;
@@ -35,6 +36,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::forge_accounts,
+            commands::forge_account_connect,
+            commands::forge_account_disconnect,
+            commands::forge_repositories,
             commands::system_file_icons,
             commands::git_identity_get,
             commands::git_identity_update_global,

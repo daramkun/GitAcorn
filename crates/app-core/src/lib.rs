@@ -1,5 +1,6 @@
 //! Application use cases and errors shared by every UI adapter.
 
+mod forge;
 mod remote;
 mod repository;
 mod scheduler;
@@ -9,6 +10,10 @@ use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use forge::{
+    ForgeAccount, ForgeEndpointPlan, ForgeProfile, ForgeProvider, ForgeRepository,
+    parse_forge_profile, parse_forge_repositories,
+};
 pub use git_domain::{FileBlame, PathHistory};
 pub use remote::{CloneRequest, RemoteOperationKind, RemoteProgress, RemoteRequest};
 pub use repository::{

@@ -4730,3 +4730,287 @@ button:disabled {
   resize: vertical;
 }
 .custom-command-card-heading button { border: 0; background: transparent; color: var(--muted); font-size: 18px; }
+.forge-browser-modal {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 94vw);
+  height: min(700px, 86vh);
+}
+
+.forge-browser-modal .settings-modal-header p,
+.forge-content-heading p {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.forge-browser-layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+.forge-account-pane {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding: var(--space-4);
+  border-right: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.forge-pane-heading,
+.forge-content-heading,
+.forge-repository-toolbar,
+.forge-repository,
+.forge-form-actions,
+.forge-account-actions,
+.forge-disconnect-confirm,
+.forge-disconnect-confirm > div:last-child {
+  display: flex;
+  align-items: center;
+}
+
+.forge-pane-heading {
+  justify-content: space-between;
+  padding: 0 var(--space-1) var(--space-3);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.forge-pane-heading button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.forge-pane-heading button:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.forge-account-list {
+  display: grid;
+  gap: var(--space-1);
+  min-height: 0;
+  overflow: auto;
+}
+
+.forge-account {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.forge-account:hover,
+.forge-account.active {
+  border-color: var(--border);
+  background: var(--surface-soft);
+}
+
+.forge-account.active {
+  border-color: var(--accent-border);
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+.forge-account > span:last-child,
+.forge-repository > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.forge-account strong,
+.forge-account small,
+.forge-repository strong,
+.forge-repository span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-account small,
+.forge-repository span {
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.forge-provider-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--accent-strong);
+  font-size: var(--font-size-md);
+  font-weight: 800;
+}
+
+.forge-provider-mark--gitlab { color: #e47f47; }
+.forge-provider-mark--bitbucket { color: #65a2ff; }
+.forge-provider-mark--azureDevOps { color: #57a9e6; }
+
+.forge-add-account {
+  width: 100%;
+  margin-top: auto;
+}
+
+.forge-empty {
+  margin: auto;
+  padding: var(--space-5);
+  color: var(--muted);
+  font-size: var(--font-size-md);
+  text-align: center;
+}
+
+.forge-content-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  padding: var(--space-5) var(--space-6);
+}
+
+.forge-content-heading {
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: 42px;
+  padding-bottom: var(--space-4);
+}
+
+.forge-content-heading h3,
+.forge-disconnect-confirm h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-lg);
+}
+
+.forge-account-actions,
+.forge-form-actions,
+.forge-disconnect-confirm > div:last-child {
+  gap: var(--space-2);
+}
+
+.forge-connect-form {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.forge-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.forge-form-grid label {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-size-md);
+}
+
+.forge-token-field {
+  grid-column: 1 / -1;
+}
+
+.forge-connect-form .init-repository-note {
+  margin-top: var(--space-4);
+}
+
+.forge-form-actions {
+  justify-content: flex-end;
+  margin-top: auto;
+  padding-top: var(--space-5);
+}
+
+.forge-message {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: var(--font-size-md);
+}
+
+.forge-repository-toolbar {
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.forge-repository-toolbar input {
+  flex: 1;
+}
+
+.forge-repository-toolbar > span {
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.forge-repository-list {
+  display: grid;
+  align-content: start;
+  min-height: 0;
+  overflow: auto;
+}
+
+.forge-repository {
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: 58px;
+  padding: var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.forge-repository > div {
+  flex: 1;
+}
+
+.forge-disconnect-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  background: color-mix(in srgb, var(--modal-bg) 96%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.forge-disconnect-confirm p {
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-md);
+}
+
+@media (max-width: 900px) {
+  .forge-browser-layout { grid-template-columns: 190px minmax(0, 1fr); }
+  .forge-form-grid { grid-template-columns: 1fr; }
+  .forge-token-field { grid-column: auto; }
+}

@@ -55,6 +55,10 @@ import {
   getCommitFiles,
   getHistoryPage,
   getGitIdentity,
+  getForgeAccounts,
+  connectForgeAccount,
+  disconnectForgeAccount,
+  getForgeRepositories,
   getOperationHistory,
   getReflog,
   getRemotes,
@@ -175,6 +179,10 @@ vi.mock("./windowControls", () => ({
   getCommitFiles: vi.fn(),
   getHistoryPage: vi.fn(),
   getGitIdentity: vi.fn(),
+  getForgeAccounts: vi.fn(),
+  connectForgeAccount: vi.fn(),
+  disconnectForgeAccount: vi.fn(),
+  getForgeRepositories: vi.fn(),
   getDiagnostics: vi.fn(),
   getOperationHistory: vi.fn(),
   getReflog: vi.fn(),
@@ -291,6 +299,10 @@ const mockedGetCommitDiff = vi.mocked(getCommitDiff);
 const mockedGetCommitFiles = vi.mocked(getCommitFiles);
 const mockedGetHistory = vi.mocked(getHistoryPage);
 const mockedGetGitIdentity = vi.mocked(getGitIdentity);
+const mockedGetForgeAccounts = vi.mocked(getForgeAccounts);
+const mockedConnectForgeAccount = vi.mocked(connectForgeAccount);
+const mockedDisconnectForgeAccount = vi.mocked(disconnectForgeAccount);
+const mockedGetForgeRepositories = vi.mocked(getForgeRepositories);
 const mockedGetReferences = vi.mocked(getReferences);
 const mockedGetRemoteTags = vi.mocked(getRemoteTags);
 const mockedGetRemotes = vi.mocked(getRemotes);
@@ -407,6 +419,10 @@ describe("App", () => {
       runtime: "Tauri 2",
     });
     mockedGetSystemFileIcons.mockResolvedValue({});
+    mockedGetForgeAccounts.mockResolvedValue({ schemaVersion: 1, accounts: [] });
+    mockedConnectForgeAccount.mockRejectedValue(new Error("not configured"));
+    mockedDisconnectForgeAccount.mockResolvedValue();
+    mockedGetForgeRepositories.mockResolvedValue({ schemaVersion: 1, repositories: [] });
     mockedChooseRepository.mockResolvedValue(null);
     mockedChooseRepositoryInit.mockResolvedValue(null);
     mockedInitializeRepository.mockResolvedValue(sessionWithSnapshot);
@@ -1745,7 +1761,16 @@ describe("App", () => {
     }));
     expect(await screen.findByText("acorn-demo")).toBeInTheDocument();
   });
-  it("lists submodules and opens an initialized submodule on double-click", async () => {
+
+  it("opens the hosted repository browser from the repository action bar", async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Hosted repositories|호스팅 저장소/i }));
+
+    expect(await screen.findByRole("dialog", { name: /Hosted repositories|호스팅 저장소/i })).toBeInTheDocument();
+    expect(mockedGetForgeAccounts).toHaveBeenCalledOnce();
+    expect(screen.getByRole("heading", { name: /Connect hosting account|호스팅 계정 연결/i })).toBeVisible();
+  });  it("lists submodules and opens an initialized submodule on double-click", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedGetSidebar.mockResolvedValue({
       schemaVersion: 1,

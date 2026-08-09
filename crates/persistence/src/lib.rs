@@ -60,6 +60,18 @@ pub struct OperationRecord {
     pub recovery_oid: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeAccountRecord {
+    pub id: String,
+    pub provider: String,
+    pub host: String,
+    pub login: String,
+    pub display_name: String,
+    pub auth_username: String,
+    pub scope: Option<String>,
+    pub avatar_url: Option<String>,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationRecovery<'a> {
     pub action: &'a str,
@@ -107,6 +119,7 @@ impl SessionStore {
         .execute(&pool)
         .await?;
         create_operation_table(&pool).await?;
+        create_forge_account_table(&pool).await?;
         let has_worktree_id: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('session_tabs') WHERE name = 'worktree_id'",
         )
@@ -187,6 +200,7 @@ impl SessionStore {
         .execute(&pool)
         .await?;
         create_operation_table(&pool).await?;
+        create_forge_account_table(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -430,6 +444,61 @@ impl SessionStore {
         transaction.commit().await
     }
 
+    pub async fn list_forge_accounts(&self) -> Result<Vec<ForgeAccountRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, provider, host, login, display_name, auth_username, scope, avatar_url
+             FROM forge_accounts ORDER BY provider, display_name, login",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ForgeAccountRecord {
+                id: row.get("id"),
+                provider: row.get("provider"),
+                host: row.get("host"),
+                login: row.get("login"),
+                display_name: row.get("display_name"),
+                auth_username: row.get("auth_username"),
+                scope: row.get("scope"),
+                avatar_url: row.get("avatar_url"),
+            })
+            .collect())
+    }
+
+    pub async fn upsert_forge_account(
+        &self,
+        account: &ForgeAccountRecord,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO forge_accounts
+                (id, provider, host, login, display_name, auth_username, scope, avatar_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                provider = excluded.provider, host = excluded.host, login = excluded.login,
+                display_name = excluded.display_name, auth_username = excluded.auth_username,
+                scope = excluded.scope, avatar_url = excluded.avatar_url",
+        )
+        .bind(&account.id)
+        .bind(&account.provider)
+        .bind(&account.host)
+        .bind(&account.login)
+        .bind(&account.display_name)
+        .bind(&account.auth_username)
+        .bind(&account.scope)
+        .bind(&account.avatar_url)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_forge_account(&self, id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM forge_accounts WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
     pub async fn close(&self, repo_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM session_tabs WHERE repo_id = ?")
             .bind(repo_id)
@@ -451,6 +520,23 @@ impl SessionStore {
     }
 }
 
+async fn create_forge_account_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS forge_accounts (
+            id TEXT PRIMARY KEY NOT NULL,
+            provider TEXT NOT NULL,
+            host TEXT NOT NULL,
+            login TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            auth_username TEXT NOT NULL,
+            scope TEXT,
+            avatar_url TEXT
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
 async fn create_operation_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS operation_history (
@@ -496,8 +582,8 @@ async fn create_operation_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        OperationRecovery, PersistenceSettings, SessionStore, SessionTab, SqliteConnectOptions,
-        SqlitePool,
+        ForgeAccountRecord, OperationRecovery, PersistenceSettings, SessionStore, SessionTab,
+        SqliteConnectOptions, SqlitePool,
     };
 
     #[test]
@@ -715,6 +801,54 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn persists_forge_account_metadata_without_secret_columns() {
+        use sqlx::Row;
+        let store = SessionStore::memory().await.expect("memory store");
+        let account = ForgeAccountRecord {
+            id: "github:acorn".to_owned(),
+            provider: "github".to_owned(),
+            host: "github.com".to_owned(),
+            login: "acorn".to_owned(),
+            display_name: "Acorn User".to_owned(),
+            auth_username: "acorn".to_owned(),
+            scope: None,
+            avatar_url: Some("https://example.invalid/avatar".to_owned()),
+        };
+        store
+            .upsert_forge_account(&account)
+            .await
+            .expect("save account");
+        assert_eq!(
+            store.list_forge_accounts().await.expect("list accounts"),
+            vec![account]
+        );
+
+        let columns = sqlx::query("SELECT name FROM pragma_table_info('forge_accounts')")
+            .fetch_all(&store.pool)
+            .await
+            .expect("account columns")
+            .into_iter()
+            .map(|row| row.get::<String, _>("name"))
+            .collect::<Vec<_>>();
+        assert!(columns.iter().all(|name| {
+            !["token", "password", "secret", "credential"]
+                .iter()
+                .any(|forbidden| name.contains(forbidden))
+        }));
+
+        store
+            .delete_forge_account("github:acorn")
+            .await
+            .expect("delete account");
+        assert!(
+            store
+                .list_forge_accounts()
+                .await
+                .expect("list after delete")
+                .is_empty()
+        );
+    }
     #[tokio::test]
     async fn recovery_schema_only_allows_head_and_reference_metadata() {
         use sqlx::Row;

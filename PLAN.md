@@ -111,7 +111,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 - [x] 저장소 init, `.gitignore`/license template 선택
 - [x] bisect 시각화와 good/bad/skip 흐름
 - [x] command palette, repository terminal, 사용자 정의 command
-- [ ] GitHub/GitLab/Bitbucket/Azure DevOps 계정과 저장소 탐색
+- [x] GitHub/GitLab/Bitbucket/Azure DevOps 계정과 저장소 탐색
 - [ ] PR/MR 생성·조회·checkout·merge와 review/CI 상태
 - [ ] 여러 저장소 Workspace와 일괄 clone/fetch/pull
 - [ ] 다중 계정/profile, SSH key 및 Git identity profile
@@ -152,3 +152,4 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P1.2 저장소 초기화와 템플릿 | 완료 | 기존 폴더 보존형 init, 초기 브랜치 지정, Node·Rust·Python·Go `.gitignore`와 MIT·BSD 3-Clause 라이선스 선택, 기존 파일 덮어쓰기 방지 |
 | P1.3 Bisect 시각화 | 완료 | known-good·known-bad 범위 시작, History 그래프의 현재 후보·good·bad·skip 표식, good·bad·skip 판정과 원래 브랜치 복원, clean worktree·revision 보호 |
 | P1.4 명령 팔레트와 저장소 도구 | 완료 | 전역 명령 팔레트와 Ctrl+Shift+P, 저장소 터미널 열기, 배열 인자 기반 사용자 명령 저장·실행 확인·stdout/stderr 결과 팝업 |
+| P1.5 Forge 계정과 저장소 탐색 | 완료 | GitHub·GitLab·Bitbucket·Azure DevOps 토큰 검증, Git credential helper 보관, 비밀값 없는 계정 메타데이터, 저장소 검색·복제 브라우저 |

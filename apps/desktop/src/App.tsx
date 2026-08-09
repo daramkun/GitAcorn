@@ -166,6 +166,7 @@ import {
 } from "./repository";
 import { updateRepositoryOperation } from "./remote-operations";
 import { ConflictEditor } from "./conflict-editor";
+import { ForgeBrowser } from "./forge-browser";
 import { localeTag, t } from "./i18n";
 import { getSystemFileIcons } from "./fileIcons";
 import {
@@ -557,6 +558,7 @@ export function App() {
   >({});
   const [cloneUrl, setCloneUrl] = useState("");
   const [showClone, setShowClone] = useState(false);
+  const [showForge, setShowForge] = useState(false);
   const [cloneOperation, setCloneOperation] = useState<OperationEventDto>();
   const [showInit, setShowInit] = useState(false);
   const [initPath, setInitPath] = useState("");
@@ -742,6 +744,7 @@ export function App() {
         if (pendingCommand) setPendingCommand(undefined);
         else if (commandResult) setCommandResult(undefined);
         else if (showCommandPalette) setShowCommandPalette(false);
+        else if (showForge) setShowForge(false);
         else if (showSubmoduleAdd) setShowSubmoduleAdd(false);
         else if (remoteEditor) setRemoteEditor(undefined);
         else if (remoteDialog) setRemoteDialog(undefined);
@@ -767,6 +770,7 @@ export function App() {
     pendingCommand,
     commandResult,
     showCommandPalette,
+    showForge,
     referenceContextMenu,
     referenceDeleteDialog,
     referenceEditor,
@@ -2547,10 +2551,11 @@ export function App() {
         <button className="control-button control-button--primary open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
           <span aria-hidden="true">＋</span>{" "}{opening ? t("Opening…") : t("Open a repository")}
         </button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowInit((value) => !value); setShowClone(false); }}>{t("New repository")}</button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowClone((value) => !value); setShowInit(false); }}>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowInit((value) => !value); setShowClone(false); setShowForge(false); }}>{t("New repository")}</button>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowClone((value) => !value); setShowInit(false); setShowForge(false); }}>
           {t("Clone")}
         </button>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowForge(true); setShowClone(false); setShowInit(false); }}>{t("Hosted repositories")}</button>
       </div>
 
       <main
@@ -3074,6 +3079,17 @@ export function App() {
           )}
         </section>
       </main>
+      {showForge && (
+        <ForgeBrowser
+          onClose={() => setShowForge(false)}
+          onClone={(url) => {
+            setCloneUrl(url);
+            setShowForge(false);
+            setShowInit(false);
+            setShowClone(true);
+          }}
+        />
+      )}
       {showInit && (
         <div
           className="modal-overlay"
@@ -3162,6 +3178,7 @@ export function App() {
                 { id: "changes", label: t("Go to Changes"), hint: t("Navigation"), disabled: !activeSnapshot, run: () => openPalettePage("changes") },
                 { id: "history", label: t("Go to History"), hint: t("Navigation"), disabled: !activeSnapshot, run: () => openPalettePage("history") },
                 { id: "terminal", label: t("Open repository terminal"), hint: activeSnapshot?.repository.name ?? t("No repository open"), disabled: !activeSnapshot, run: () => void handleOpenTerminal() },
+                { id: "forge-browser", label: t("Hosted repositories"), hint: t("Accounts and repositories"), disabled: false, run: () => { setShowCommandPalette(false); setShowForge(true); } },
                 { id: "repository-settings", label: t("Open repository settings"), hint: t("Settings"), disabled: !activeSnapshot, run: () => { setShowCommandPalette(false); setShowRepositorySettings(true); } },
                 { id: "settings", label: t("Open settings"), hint: t("Settings"), disabled: false, run: () => { setShowCommandPalette(false); setShowSettings(true); } },
               ].filter((item) => `${item.label} ${item.hint}`.toLowerCase().includes(commandQuery.toLowerCase())).map((item) => (

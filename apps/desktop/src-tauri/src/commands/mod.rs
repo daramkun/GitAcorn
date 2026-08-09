@@ -12,10 +12,11 @@ use crate::dto::{
     AppInfoDto, BinaryPreviewDto, BisectStateDto, BranchRequestDto, CloneRequestDto, CommandResult,
     CommitFileDto, CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto,
     ConflictContentRequestDto, ConflictFileDto, DiffDto, ExternalDiffResultDto,
-    ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto, GitIdentityDto,
-    GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto,
-    HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto,
-    LfsLockRequestDto, LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
+    ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto, ForgeAccountDto,
+    ForgeAccountsDto, ForgeRepositoriesDto, GitIdentityDto, GitIdentitySettingsDto,
+    GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto, HistoryPageDto,
+    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto,
+    LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
     OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
     RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
     RepositoryCommandRequestDto, RepositoryCommandResultDto, RepositoryGitIdentityDto,
@@ -27,6 +28,49 @@ use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
 };
 
+#[tauri::command]
+pub async fn forge_accounts(state: State<'_, ApplicationState>) -> CommandResult<ForgeAccountsDto> {
+    state
+        .forge_accounts()
+        .await
+        .map(ForgeAccountsDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn forge_account_connect(
+    request: crate::forge::ForgeConnectRequest,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ForgeAccountDto> {
+    state
+        .forge_connect(&request)
+        .await
+        .map(ForgeAccountDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn forge_account_disconnect(
+    account_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<()> {
+    state
+        .forge_disconnect(&account_id)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn forge_repositories(
+    account_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ForgeRepositoriesDto> {
+    state
+        .forge_repositories(&account_id)
+        .await
+        .map(ForgeRepositoriesDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
 #[tauri::command]
 pub fn app_info() -> AppInfoDto {
     AppInfoDto::current()

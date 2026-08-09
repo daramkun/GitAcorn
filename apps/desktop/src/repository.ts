@@ -456,6 +456,63 @@ export type RemoteOperationOptions = {
   forceWithLease?: boolean;
 };
 
+
+export type ForgeProvider = "github" | "gitlab" | "bitbucket" | "azureDevOps";
+
+export type ForgeAccountDto = {
+  id: string;
+  provider: ForgeProvider;
+  host: string;
+  login: string;
+  displayName: string;
+  scope?: string | null;
+  avatarUrl?: string | null;
+};
+
+export type ForgeAccountsDto = {
+  schemaVersion: 1;
+  accounts: ForgeAccountDto[];
+};
+
+export type ForgeRepositoryDto = {
+  id: string;
+  name: string;
+  fullName: string;
+  cloneUrl: string;
+  webUrl: string;
+  private: boolean;
+  archived: boolean;
+  updatedAt?: string | null;
+};
+
+export type ForgeRepositoriesDto = {
+  schemaVersion: 1;
+  repositories: ForgeRepositoryDto[];
+};
+
+export type ForgeConnectRequest = {
+  provider: ForgeProvider;
+  host: string;
+  authUsername: string;
+  token: string;
+  scope?: string;
+};
+
+export function getForgeAccounts(): Promise<ForgeAccountsDto> {
+  return invoke<ForgeAccountsDto>("forge_accounts");
+}
+
+export function connectForgeAccount(request: ForgeConnectRequest): Promise<ForgeAccountDto> {
+  return invoke<ForgeAccountDto>("forge_account_connect", { request });
+}
+
+export function disconnectForgeAccount(accountId: string): Promise<void> {
+  return invoke<void>("forge_account_disconnect", { accountId });
+}
+
+export function getForgeRepositories(accountId: string): Promise<ForgeRepositoriesDto> {
+  return invoke<ForgeRepositoriesDto>("forge_repositories", { accountId });
+}
 export async function chooseRepositoryDirectory(): Promise<string | null> {
   const path = await open({
     title: "Open Git repository",
