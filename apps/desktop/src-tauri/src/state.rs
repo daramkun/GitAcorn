@@ -23,8 +23,8 @@ use git_domain::{
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use persistence::{
-    ForgeAccountRecord, OperationRecord, OperationRecovery, SessionStore, SessionTab,
-    WorkspaceRecord, WorkspaceRepositoryRecord,
+    ForgeAccountRecord, IdentityProfileRecord, OperationRecord, OperationRecovery, SessionStore,
+    SessionTab, WorkspaceRecord, WorkspaceRepositoryRecord,
 };
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
@@ -2182,6 +2182,116 @@ impl ApplicationState {
             .get(&repo_id)
             .ok_or(AppError::RepositoryNotOpen)
             .map(|repository| repository.descriptor.clone())
+    }
+
+    pub async fn identity_profiles(&self) -> Result<Vec<IdentityProfileRecord>, AppError> {
+        self.session
+            .list_identity_profiles()
+            .await
+            .map_err(persistence_error)
+    }
+
+    pub async fn repository_identity_profile(
+        &self,
+        repo_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        parse_repo_id(repo_id)?;
+        self.session
+            .repository_identity_profile(repo_id)
+            .await
+            .map_err(persistence_error)
+    }
+
+    pub async fn clear_repository_identity_profile(&self, repo_id: &str) -> Result<(), AppError> {
+        parse_repo_id(repo_id)?;
+        self.session
+            .set_repository_identity_profile(repo_id, None)
+            .await
+            .map_err(persistence_error)
+    }
+
+    pub async fn save_identity_profile(
+        &self,
+        id: Option<&str>,
+        label: &str,
+        name: &str,
+        email: &str,
+        ssh_key_path: Option<&str>,
+    ) -> Result<IdentityProfileRecord, AppError> {
+        fn required(value: &str, label: &str) -> Result<String, AppError> {
+            let value = value.trim();
+            if value.is_empty() || value.contains(['\0', '\r', '\n']) {
+                return Err(AppError::InvalidRequest(format!("Enter a valid {label}")));
+            }
+            Ok(value.to_owned())
+        }
+        let ssh_key_path = ssh_key_path
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(|path| {
+                if path.contains(['\0', '\r', '\n', '"']) || !Path::new(path).is_absolute() {
+                    Err(AppError::InvalidRequest(
+                        "Enter a valid absolute SSH private key path".to_owned(),
+                    ))
+                } else {
+                    Ok(path.to_owned())
+                }
+            })
+            .transpose()?;
+        let profile = IdentityProfileRecord {
+            id: id
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            label: required(label, "profile name")?,
+            name: required(name, "Git user name")?,
+            email: required(email, "Git email")?,
+            ssh_key_path,
+        };
+        self.session
+            .upsert_identity_profile(&profile)
+            .await
+            .map_err(persistence_error)?;
+        Ok(profile)
+    }
+
+    pub async fn delete_identity_profile(&self, id: &str) -> Result<(), AppError> {
+        self.session
+            .delete_identity_profile(id)
+            .await
+            .map_err(persistence_error)
+    }
+
+    pub async fn apply_identity_profile(
+        &self,
+        repo_id: &str,
+        profile_id: &str,
+    ) -> Result<RepositoryIdentityState, AppError> {
+        let profile = self
+            .identity_profiles()
+            .await?
+            .into_iter()
+            .find(|profile| profile.id == profile_id)
+            .ok_or_else(|| AppError::InvalidRequest("Identity profile was not found".to_owned()))?;
+        let parsed_repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(parsed_repo_id)?;
+        let settings = self.scheduler.write(parsed_repo_id, || {
+            self.service.apply_repository_identity_profile(
+                &descriptor,
+                &profile.name,
+                &profile.email,
+                profile.ssh_key_path.as_deref(),
+            )
+        })?;
+        self.session
+            .set_repository_identity_profile(repo_id, Some(profile_id))
+            .await
+            .map_err(persistence_error)?;
+        Ok(RepositoryIdentityState {
+            repo_id: repo_id.to_owned(),
+            repository_name: descriptor.name,
+            settings,
+        })
     }
 
     pub async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, AppError> {

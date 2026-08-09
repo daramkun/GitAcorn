@@ -55,6 +55,7 @@ import {
   getCommitFiles,
   getHistoryPage,
   getGitIdentity,
+  getIdentityProfiles,
   getForgeAccounts,
   connectForgeAccount,
   disconnectForgeAccount,
@@ -179,6 +180,11 @@ vi.mock("./windowControls", () => ({
   getCommitFiles: vi.fn(),
   getHistoryPage: vi.fn(),
   getGitIdentity: vi.fn(),
+  getIdentityProfiles: vi.fn(),
+  saveIdentityProfile: vi.fn(),
+  deleteIdentityProfile: vi.fn(),
+  applyIdentityProfile: vi.fn(),
+  chooseSshPrivateKey: vi.fn(),
   getForgeAccounts: vi.fn(),
   connectForgeAccount: vi.fn(),
   disconnectForgeAccount: vi.fn(),
@@ -299,6 +305,7 @@ const mockedGetCommitDiff = vi.mocked(getCommitDiff);
 const mockedGetCommitFiles = vi.mocked(getCommitFiles);
 const mockedGetHistory = vi.mocked(getHistoryPage);
 const mockedGetGitIdentity = vi.mocked(getGitIdentity);
+const mockedGetIdentityProfiles = vi.mocked(getIdentityProfiles);
 const mockedGetForgeAccounts = vi.mocked(getForgeAccounts);
 const mockedConnectForgeAccount = vi.mocked(connectForgeAccount);
 const mockedDisconnectForgeAccount = vi.mocked(disconnectForgeAccount);
@@ -495,6 +502,7 @@ describe("App", () => {
     });
     mockedReorderTabs.mockResolvedValue();
     mockedUpdateTab.mockResolvedValue();
+    mockedGetIdentityProfiles.mockResolvedValue({ schemaVersion: 1, profiles: [] });
     mockedGetGitIdentity.mockResolvedValue({
       schemaVersion: 1,
       global: {},
@@ -4715,8 +4723,9 @@ describe("App", () => {
     );
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(await screen.findByText("LFS authentication required")).toBeInTheDocument();
-    expect(screen.queryByText(/password|credential|private key/i)).not.toBeInTheDocument();
+    const lfsError = await screen.findByText("LFS authentication required");
+    expect(lfsError).toBeInTheDocument();
+    expect(lfsError).not.toHaveTextContent(/password|credential|private key/i);
   });
 
   it("shows LFS pointers and locks and saves signing options without private key material", async () => {
@@ -4924,6 +4933,7 @@ describe("App", () => {
 
   it("updates global and repository Git identity from separate settings menus", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetIdentityProfiles.mockResolvedValue({ schemaVersion: 1, profiles: [] });
     mockedGetGitIdentity.mockResolvedValue({
       schemaVersion: 1,
       global: {

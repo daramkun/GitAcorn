@@ -168,6 +168,7 @@ import { updateRepositoryOperation } from "./remote-operations";
 import { ConflictEditor } from "./conflict-editor";
 import { ForgeBrowser } from "./forge-browser";
 import { WorkspaceManager } from "./workspace-manager";
+import { IdentityProfiles } from "./identity-profiles";
 import { localeTag, t } from "./i18n";
 import { getSystemFileIcons } from "./fileIcons";
 import {
@@ -3262,6 +3263,7 @@ export function App() {
                 <p className="settings-section-desc">
                   {t("Configure the name and email Git uses for new commits.")}
                 </p>
+                <IdentityProfiles />
                 {identityLoading ? (
                   <p className="identity-state">{t("Loading Git identity…")}</p>
                 ) : (
@@ -3532,6 +3534,12 @@ export function App() {
                 <p className="settings-section-desc">
                   {t("Override the global Git identity for this repository.")}
                 </p>
+                {activeRepoId && (
+                  <IdentityProfiles
+                    repoId={activeRepoId}
+                    onApplied={() => void reloadGitIdentity()}
+                  />
+                )}
                 {identityLoading ? (
                   <p className="identity-state">{t("Loading Git identity…")}</p>
                 ) : repositoryIdentity ? (

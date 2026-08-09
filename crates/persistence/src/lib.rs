@@ -87,6 +87,16 @@ pub struct WorkspaceRecord {
     pub repositories: Vec<WorkspaceRepositoryRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityProfileRecord {
+    pub id: String,
+    pub label: String,
+    pub name: String,
+    pub email: String,
+    pub ssh_key_path: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationRecovery<'a> {
     pub action: &'a str,
@@ -136,6 +146,7 @@ impl SessionStore {
         create_operation_table(&pool).await?;
         create_forge_account_table(&pool).await?;
         create_workspace_tables(&pool).await?;
+        create_identity_profile_tables(&pool).await?;
         let has_worktree_id: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('session_tabs') WHERE name = 'worktree_id'",
         )
@@ -218,6 +229,7 @@ impl SessionStore {
         create_operation_table(&pool).await?;
         create_forge_account_table(&pool).await?;
         create_workspace_tables(&pool).await?;
+        create_identity_profile_tables(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -581,6 +593,86 @@ impl SessionStore {
         Ok(())
     }
 
+    pub async fn list_identity_profiles(&self) -> Result<Vec<IdentityProfileRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, label, name, email, ssh_key_path FROM identity_profiles ORDER BY label, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| IdentityProfileRecord {
+                id: row.get("id"),
+                label: row.get("label"),
+                name: row.get("name"),
+                email: row.get("email"),
+                ssh_key_path: row.get("ssh_key_path"),
+            })
+            .collect())
+    }
+
+    pub async fn upsert_identity_profile(
+        &self,
+        profile: &IdentityProfileRecord,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO identity_profiles (id, label, name, email, ssh_key_path)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                label = excluded.label, name = excluded.name, email = excluded.email,
+                ssh_key_path = excluded.ssh_key_path",
+        )
+        .bind(&profile.id)
+        .bind(&profile.label)
+        .bind(&profile.name)
+        .bind(&profile.email)
+        .bind(&profile.ssh_key_path)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_identity_profile(&self, id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM identity_profiles WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn repository_identity_profile(
+        &self,
+        repo_id: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        sqlx::query_scalar("SELECT profile_id FROM repository_identity_profiles WHERE repo_id = ?")
+            .bind(repo_id)
+            .fetch_optional(&self.pool)
+            .await
+    }
+
+    pub async fn set_repository_identity_profile(
+        &self,
+        repo_id: &str,
+        profile_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        if let Some(profile_id) = profile_id {
+            sqlx::query(
+                "INSERT INTO repository_identity_profiles (repo_id, profile_id) VALUES (?, ?)
+                 ON CONFLICT(repo_id) DO UPDATE SET profile_id = excluded.profile_id",
+            )
+            .bind(repo_id)
+            .bind(profile_id)
+            .execute(&self.pool)
+            .await?;
+        } else {
+            sqlx::query("DELETE FROM repository_identity_profiles WHERE repo_id = ?")
+                .bind(repo_id)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn close(&self, repo_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM session_tabs WHERE repo_id = ?")
             .bind(repo_id)
@@ -643,6 +735,30 @@ async fn create_workspace_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+async fn create_identity_profile_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS identity_profiles (
+            id TEXT PRIMARY KEY NOT NULL,
+            label TEXT NOT NULL,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            ssh_key_path TEXT
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS repository_identity_profiles (
+            repo_id TEXT PRIMARY KEY NOT NULL,
+            profile_id TEXT NOT NULL,
+            FOREIGN KEY (profile_id) REFERENCES identity_profiles(id) ON DELETE CASCADE
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn create_operation_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS operation_history (
@@ -688,8 +804,9 @@ async fn create_operation_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ForgeAccountRecord, OperationRecovery, PersistenceSettings, SessionStore, SessionTab,
-        SqliteConnectOptions, SqlitePool, WorkspaceRecord, WorkspaceRepositoryRecord,
+        ForgeAccountRecord, IdentityProfileRecord, OperationRecovery, PersistenceSettings,
+        SessionStore, SessionTab, SqliteConnectOptions, SqlitePool, WorkspaceRecord,
+        WorkspaceRepositoryRecord,
     };
 
     #[test]
@@ -1053,5 +1170,52 @@ mod tests {
                 .await
                 .expect("count workspace repositories");
         assert_eq!(repository_count, 0);
+    }
+    #[tokio::test]
+    async fn persists_identity_profiles_and_cascades_repository_selection() {
+        let store = SessionStore::memory().await.expect("memory store");
+        let profile = IdentityProfileRecord {
+            id: "work".to_owned(),
+            label: "Work".to_owned(),
+            name: "Work Author".to_owned(),
+            email: "work@example.invalid".to_owned(),
+            ssh_key_path: Some("C:/Users/test/.ssh/id_ed25519".to_owned()),
+        };
+        store
+            .upsert_identity_profile(&profile)
+            .await
+            .expect("save identity profile");
+        store
+            .set_repository_identity_profile("repository", Some(&profile.id))
+            .await
+            .expect("select identity profile");
+
+        assert_eq!(
+            store
+                .list_identity_profiles()
+                .await
+                .expect("list identity profiles"),
+            vec![profile]
+        );
+        assert_eq!(
+            store
+                .repository_identity_profile("repository")
+                .await
+                .expect("read selected profile")
+                .as_deref(),
+            Some("work")
+        );
+
+        store
+            .delete_identity_profile("work")
+            .await
+            .expect("delete identity profile");
+        assert!(
+            store
+                .repository_identity_profile("repository")
+                .await
+                .expect("read cascaded selection")
+                .is_none()
+        );
     }
 }

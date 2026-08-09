@@ -12,7 +12,7 @@ use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
     HeadState, HistoryPage, PathHistory, PathHistoryEntry, RepositoryOperation, RepositorySnapshot,
 };
-use persistence::{OperationRecord, WorkspaceRecord};
+use persistence::{IdentityProfileRecord, OperationRecord, WorkspaceRecord};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -275,6 +275,46 @@ impl From<ConflictFile> for ConflictFileDto {
 pub struct ConflictContentRequestDto {
     pub expected_worktree_oid: String,
     pub content: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityProfileDto {
+    pub id: String,
+    pub label: String,
+    pub name: String,
+    pub email: String,
+    pub ssh_key_path: Option<String>,
+}
+
+impl From<IdentityProfileRecord> for IdentityProfileDto {
+    fn from(profile: IdentityProfileRecord) -> Self {
+        Self {
+            id: profile.id,
+            label: profile.label,
+            name: profile.name,
+            email: profile.email,
+            ssh_key_path: profile.ssh_key_path,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityProfilesDto {
+    pub schema_version: u16,
+    pub profiles: Vec<IdentityProfileDto>,
+    pub selected_profile_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityProfileSaveRequestDto {
+    pub id: Option<String>,
+    pub label: String,
+    pub name: String,
+    pub email: String,
+    pub ssh_key_path: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

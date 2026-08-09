@@ -2687,3 +2687,69 @@ fn reads_configured_remotes_list() {
             .is_empty()
     );
 }
+
+#[test]
+fn applies_identity_profile_with_fixed_ssh_command_and_preserves_config_on_validation_error() {
+    let fixture = TestRepository::init();
+    let key_directory = tempfile::tempdir().expect("key directory");
+    let key_path = key_directory.path().join("id_ed25519");
+    fs::write(&key_path, "test fixture key path only").expect("write key fixture");
+    let service = RepositoryService::default();
+    let repository = service
+        .discover(fixture.path())
+        .expect("discover repository");
+
+    let applied = service
+        .apply_repository_identity_profile(
+            &repository,
+            "Work Author",
+            "work@example.invalid",
+            Some(key_path.to_string_lossy().as_ref()),
+        )
+        .expect("apply profile");
+    assert_eq!(applied.local.name.as_deref(), Some("Work Author"));
+    assert_eq!(applied.local.email.as_deref(), Some("work@example.invalid"));
+    let command = service
+        .repository_ssh_command(&repository)
+        .expect("read ssh command")
+        .expect("configured ssh command");
+    assert!(command.starts_with("ssh -i \""));
+    assert!(command.ends_with("\" -o IdentitiesOnly=yes"));
+    assert!(command.contains(&key_path.to_string_lossy().to_string()));
+
+    let missing = key_directory.path().join("missing");
+    service
+        .apply_repository_identity_profile(
+            &repository,
+            "Invalid Author",
+            "invalid@example.invalid",
+            Some(missing.to_string_lossy().as_ref()),
+        )
+        .expect_err("reject missing key");
+    let preserved = service
+        .repository_identity(&repository)
+        .expect("read preserved identity");
+    assert_eq!(preserved.local.name.as_deref(), Some("Work Author"));
+    assert_eq!(
+        service
+            .repository_ssh_command(&repository)
+            .expect("read preserved ssh command")
+            .as_deref(),
+        Some(command.as_str())
+    );
+
+    service
+        .apply_repository_identity_profile(
+            &repository,
+            "Personal Author",
+            "personal@example.invalid",
+            None,
+        )
+        .expect("apply profile without ssh");
+    assert!(
+        service
+            .repository_ssh_command(&repository)
+            .expect("read cleared ssh command")
+            .is_none()
+    );
+}

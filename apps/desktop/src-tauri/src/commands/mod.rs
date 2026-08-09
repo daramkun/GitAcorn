@@ -15,8 +15,9 @@ use crate::dto::{
     ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto, ForgeAccountDto,
     ForgeAccountsDto, ForgePullRequestsDto, ForgeRepositoriesDto, GitIdentityDto,
     GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto,
-    HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto,
-    LfsLockRequestDto, LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
+    HistoryPageDto, IdentityProfileDto, IdentityProfileSaveRequestDto, IdentityProfilesDto,
+    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto,
+    LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
     OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
     RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
     RepositoryCommandRequestDto, RepositoryCommandResultDto, RepositoryGitIdentityDto,
@@ -225,6 +226,71 @@ pub fn system_file_icons(worktree_path: String, paths: Vec<String>) -> HashMap<S
 }
 
 #[tauri::command]
+pub async fn identity_profiles(
+    repo_id: Option<String>,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<IdentityProfilesDto> {
+    let profiles = state
+        .identity_profiles()
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
+    let selected_profile_id = match repo_id.as_deref() {
+        Some(repo_id) => state
+            .repository_identity_profile(repo_id)
+            .await
+            .map_err(|error| AppErrorDto::from(&error))?,
+        None => None,
+    };
+    Ok(IdentityProfilesDto {
+        schema_version: 1,
+        profiles: profiles.into_iter().map(IdentityProfileDto::from).collect(),
+        selected_profile_id,
+    })
+}
+
+#[tauri::command]
+pub async fn identity_profile_save(
+    request: IdentityProfileSaveRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<IdentityProfileDto> {
+    state
+        .save_identity_profile(
+            request.id.as_deref(),
+            &request.label,
+            &request.name,
+            &request.email,
+            request.ssh_key_path.as_deref(),
+        )
+        .await
+        .map(IdentityProfileDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn identity_profile_delete(
+    id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<()> {
+    state
+        .delete_identity_profile(&id)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn identity_profile_apply(
+    repo_id: String,
+    profile_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositoryGitIdentityDto> {
+    state
+        .apply_identity_profile(&repo_id, &profile_id)
+        .await
+        .map(RepositoryGitIdentityDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
 pub fn git_identity_get(
     repo_id: Option<String>,
     state: State<'_, ApplicationState>,
@@ -259,15 +325,19 @@ pub fn git_identity_update_global(
 }
 
 #[tauri::command]
-pub fn git_identity_update_repository(
+pub async fn git_identity_update_repository(
     repo_id: String,
     request: GitIdentityUpdateDto,
     state: State<'_, ApplicationState>,
 ) -> CommandResult<RepositoryGitIdentityDto> {
-    state
+    let identity = state
         .update_repository_identity(&repo_id, request.name.as_deref(), request.email.as_deref())
-        .map(RepositoryGitIdentityDto::from)
-        .map_err(|error| AppErrorDto::from(&error))
+        .map_err(|error| AppErrorDto::from(&error))?;
+    state
+        .clear_repository_identity_profile(&repo_id)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?;
+    Ok(RepositoryGitIdentityDto::from(identity))
 }
 
 #[tauri::command]

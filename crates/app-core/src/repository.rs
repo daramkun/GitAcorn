@@ -507,6 +507,60 @@ impl RepositoryService {
         self.repository_identity(repository)
     }
 
+    pub fn repository_ssh_command(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<Option<String>, AppError> {
+        self.config_value(Some(repository), "--local", "core.sshCommand")
+    }
+
+    pub fn apply_repository_identity_profile(
+        &self,
+        repository: &RepositoryDescriptor,
+        name: &str,
+        email: &str,
+        ssh_key_path: Option<&str>,
+    ) -> Result<GitIdentitySettings, AppError> {
+        let name = validate_required_identity_value(name, "profile user name")?;
+        let email = validate_required_identity_value(email, "profile email")?;
+        let ssh_command = ssh_key_path.map(build_profile_ssh_command).transpose()?;
+        let previous = self.repository_identity(repository)?;
+        let previous_ssh = self.repository_ssh_command(repository)?;
+
+        let apply = (|| {
+            self.update_config_value(Some(repository), "--local", "user.name", Some(&name))?;
+            self.update_config_value(Some(repository), "--local", "user.email", Some(&email))?;
+            self.update_config_value(
+                Some(repository),
+                "--local",
+                "core.sshCommand",
+                ssh_command.as_deref(),
+            )
+        })();
+        if let Err(error) = apply {
+            let _ = self.update_config_value(
+                Some(repository),
+                "--local",
+                "user.name",
+                previous.local.name.as_deref(),
+            );
+            let _ = self.update_config_value(
+                Some(repository),
+                "--local",
+                "user.email",
+                previous.local.email.as_deref(),
+            );
+            let _ = self.update_config_value(
+                Some(repository),
+                "--local",
+                "core.sshCommand",
+                previous_ssh.as_deref(),
+            );
+            return Err(error);
+        }
+        self.repository_identity(repository)
+    }
+
     pub fn lfs_status(&self, repository: &RepositoryDescriptor) -> Result<LfsStatus, AppError> {
         let version = self.lfs_request(
             repository,
@@ -4532,6 +4586,35 @@ fn validate_identity_value(value: Option<&str>) -> Result<Option<String>, AppErr
         ));
     }
     Ok(Some(value.to_owned()))
+}
+
+fn validate_required_identity_value(value: &str, label: &str) -> Result<String, AppError> {
+    validate_identity_value(Some(value))?
+        .ok_or_else(|| AppError::InvalidRequest(format!("Enter a {label}")))
+}
+
+fn build_profile_ssh_command(path: &str) -> Result<String, AppError> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(AppError::InvalidRequest(
+            "Enter an SSH private key path".to_owned(),
+        ));
+    }
+    if path.contains(['\0', '\r', '\n', '"']) {
+        return Err(AppError::InvalidRequest(
+            "SSH private key path contains unsupported characters".to_owned(),
+        ));
+    }
+    let path = Path::new(path);
+    if !path.is_absolute() || !path.is_file() {
+        return Err(AppError::InvalidRequest(
+            "SSH private key path must point to an existing file".to_owned(),
+        ));
+    }
+    Ok(format!(
+        "ssh -i \"{}\" -o IdentitiesOnly=yes",
+        path.to_string_lossy()
+    ))
 }
 
 fn render_gitignore(template: Option<&str>) -> Result<Option<&'static str>, AppError> {

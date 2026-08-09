@@ -352,6 +352,24 @@ export type GitRemoteDto = {
   url: string;
 };
 
+export type IdentityProfileDto = {
+  id: string;
+  label: string;
+  name: string;
+  email: string;
+  sshKeyPath?: string;
+};
+
+export type IdentityProfilesDto = {
+  schemaVersion: 1;
+  profiles: IdentityProfileDto[];
+  selectedProfileId?: string;
+};
+
+export type IdentityProfileSaveRequest = Omit<IdentityProfileDto, "id"> & {
+  id?: string;
+};
+
 export type GitIdentityDto = {
   name?: string;
   email?: string;
@@ -841,6 +859,31 @@ export function getRemoteTags(
 
 export function getRemotes(repoId: string): Promise<GitRemoteDto[]> {
   return invoke<GitRemoteDto[]>("remotes_list", { repoId });
+}
+
+export function getIdentityProfiles(repoId?: string): Promise<IdentityProfilesDto> {
+  return invoke<IdentityProfilesDto>("identity_profiles", { repoId });
+}
+
+export function saveIdentityProfile(request: IdentityProfileSaveRequest): Promise<IdentityProfileDto> {
+  return invoke<IdentityProfileDto>("identity_profile_save", { request });
+}
+
+export function deleteIdentityProfile(id: string): Promise<void> {
+  return invoke<void>("identity_profile_delete", { id });
+}
+
+export function applyIdentityProfile(repoId: string, profileId: string): Promise<RepositoryGitIdentityDto> {
+  return invoke<RepositoryGitIdentityDto>("identity_profile_apply", { repoId, profileId });
+}
+
+export async function chooseSshPrivateKey(): Promise<string | null> {
+  const selected = await open({
+    title: "Choose SSH private key",
+    multiple: false,
+    directory: false,
+  });
+  return typeof selected === "string" ? selected : null;
 }
 
 export function getGitIdentity(repoId?: string): Promise<GitIdentitySettingsDto> {
