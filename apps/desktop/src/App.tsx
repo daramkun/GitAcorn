@@ -6110,14 +6110,14 @@ function ChangesView({
       });
   }
 
-  function openPathHistory(path: string, directory: boolean) {
+  function openPathHistory(path: string, directory: boolean, pathBytes?: number[]) {
     const requestId = ++pathInspectorRequestRef.current;
     setChangeContextMenu(undefined);
     setPathHistoryQuery("");
     setPathInspector({ mode: "history", path, directory, loading: true });
     getPathHistory(
       snapshot.repository.id,
-      Array.from(new TextEncoder().encode(path)),
+      pathBytes ?? Array.from(new TextEncoder().encode(path)),
       directory,
       undefined,
       100,
@@ -7104,6 +7104,11 @@ function ChangesView({
             const directory = selectedChange.path.includes("/")
               ? selectedChange.path.slice(0, selectedChange.path.lastIndexOf("/"))
               : ".";
+            const separatorIndex = selectedChange.pathBytes.lastIndexOf(47);
+            const directoryPathBytes =
+              separatorIndex >= 0
+                ? selectedChange.pathBytes.slice(0, separatorIndex)
+                : Array.from(new TextEncoder().encode("."));
             return (
               <>
                 <button
@@ -7116,14 +7121,16 @@ function ChangesView({
                 <button
                   type="button"
                   role="menuitem"
-                  onClick={() => openPathHistory(selectedChange.path, false)}
+                  onClick={() =>
+                    openPathHistory(selectedChange.path, false, selectedChange.pathBytes)
+                  }
                 >
                   {t("File history")}
                 </button>
                 <button
                   type="button"
                   role="menuitem"
-                  onClick={() => openPathHistory(directory, true)}
+                  onClick={() => openPathHistory(directory, true, directoryPathBytes)}
                 >
                   {t("Directory history")}
                 </button>

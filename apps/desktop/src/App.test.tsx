@@ -3585,6 +3585,36 @@ describe("App", () => {
     );
   });
 
+  it("virtualizes large blame results while retaining the full line count", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    const lines = Array.from({ length: 240 }, (_, index) => ({
+      line: index + 1,
+      commitOid: "abcdef123456",
+      authorName: "Ada",
+      authorEmail: "ada@example.com",
+      authoredAt: 1_700_000_000,
+      content: `line ${index + 1}`,
+    }));
+    mockedGetFileBlame.mockResolvedValue({
+      schemaVersion: 1,
+      path: snapshot.changes[0].pathBytes,
+      lines,
+    });
+    render(<App />);
+
+    const trackedRow = await screen.findByRole("button", { name: /tracked\.txt/ });
+    fireEvent.contextMenu(trackedRow, { clientX: 40, clientY: 50 });
+    fireEvent.click(
+      within(screen.getByRole("menu", { name: "File actions" })).getByRole("menuitem", {
+        name: "Blame file",
+      }),
+    );
+
+    const blameTable = await screen.findByRole("table", { name: "Blame lines" });
+    expect(blameTable).toHaveAttribute("aria-rowcount", "240");
+    expect(within(blameTable).getAllByRole("row").length).toBeLessThanOrEqual(72);
+  });
+
   it("keeps the staged and unstaged file selections mutually exclusive", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     render(<App />);

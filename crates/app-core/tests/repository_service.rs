@@ -85,6 +85,40 @@ fn reads_blame_and_tracks_renames_in_file_and_directory_history() {
     assert!(!directory_history.entries.is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn reads_non_utf8_paths_without_reencoding_them() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let fixture = TestRepository::init();
+    let path_bytes = vec![b's', b'r', b'c', b'/', b'c', 0xff, b'.', b't', b'x', b't'];
+    let path = OsString::from_vec(path_bytes.clone());
+    fs::create_dir_all(fixture.path().join("src")).expect("create source directory");
+    fs::write(fixture.path().join(&path), "non-utf8\n").expect("write non-utf8 path");
+    fixture.git(vec![OsString::from("add"), path.clone()]);
+    fixture.git(["commit", "-m", "add non-utf8 path"]);
+
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+    let blame = service
+        .blame(&repository, &path_bytes, None)
+        .expect("blame non-utf8 path");
+    assert_eq!(blame.path, path_bytes);
+    assert_eq!(blame.lines[0].content, "non-utf8");
+
+    let history = service
+        .path_history(&repository, &path_bytes, false, None, 20)
+        .expect("history non-utf8 path");
+    assert_eq!(history.path, path_bytes);
+    assert!(
+        history
+            .entries
+            .iter()
+            .any(|entry| entry.path == history.path)
+    );
+}
+
 #[test]
 fn includes_merge_commits_in_directory_history() {
     let fixture = TestRepository::init();
