@@ -53,6 +53,8 @@ pub enum AppError {
     Offline,
     #[error("Authentication failed; check your credential helper or SSH agent")]
     AuthenticationFailed,
+    #[error("Local and remote branches have diverged; merge or rebase them before pulling again")]
+    DivergedBranches,
     #[error("Push was rejected because the remote contains newer commits")]
     NonFastForward,
     #[error("{0}")]
@@ -90,6 +92,7 @@ impl From<&AppError> for AppErrorDto {
             AppError::AuthenticationFailed => {
                 ("authenticationFailed", vec!["checkCredentials", "retry"])
             }
+            AppError::DivergedBranches => ("divergedBranches", vec!["merge", "rebase"]),
             AppError::NonFastForward => ("nonFastForward", vec!["fetch", "pull", "retry"]),
             AppError::InvalidRequest(_) => ("invalidRequest", vec!["editRequest", "refresh"]),
             AppError::Persistence { .. } => ("persistenceFailed", vec!["retry"]),
@@ -133,5 +136,13 @@ mod tests {
     fn missing_repository_can_reopen_picker() {
         let dto = AppErrorDto::from(&AppError::RepositoryNotFound);
         assert_eq!(dto.recovery_actions, vec!["chooseRepository"]);
+    }
+
+    #[test]
+    fn diverged_branches_offer_history_integration_actions() {
+        let dto = AppErrorDto::from(&AppError::DivergedBranches);
+
+        assert_eq!(dto.code, "divergedBranches");
+        assert_eq!(dto.recovery_actions, vec!["merge", "rebase"]);
     }
 }

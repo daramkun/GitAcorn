@@ -2825,7 +2825,7 @@ export function App() {
             </form>
           )}
           {appInfo.status === "error" && <ErrorBanner title={t("Could not reach the GitAcorn core.")} message={appInfo.message} />}
-          {appInfo.status !== "error" && error && <ErrorBanner title={t("Repository session needs attention.")} message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? t("Choose another folder") : undefined} onAction={handleOpenRepository} />}
+          {appInfo.status !== "error" && error && <ErrorBanner title={error.code === "divergedBranches" ? t("Local and remote branches have diverged.") : t("Repository session needs attention.")} message={error.message} detail={error.details} actionLabel={error.code === "repositoryNotFound" ? t("Choose another folder") : undefined} onAction={handleOpenRepository} />}
           {alphaFeaturesEnabled && showOperationCenter ? (
             <OperationsView
               repoId={activeTab?.repoId}
@@ -4319,6 +4319,9 @@ function RemoteOperationDialog({
                   />
                   <span>{t("Use fast-forward only")}</span>
                 </label>
+                {fastForwardOnly && (
+                  <small>{t("Pull stops safely when local and remote branches have diverged.")}</small>
+                )}
               </>
             )}
             {kind === "push" && (

@@ -227,6 +227,12 @@ fn ensure_remote_success(output: GitOutput) -> Result<(), AppError> {
     {
         return Err(AppError::AuthenticationFailed);
     }
+    if lower.contains("not possible to fast-forward")
+        || lower.contains("can't be fast-forwarded")
+        || lower.contains("cannot fast-forward")
+    {
+        return Err(AppError::DivergedBranches);
+    }
     if lower.contains("non-fast-forward")
         || lower.contains("fetch first")
         || lower.contains("rejected")
@@ -260,10 +266,15 @@ fn map_execution_error(error: GitExecutionError) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use git_cli::GitOutput;
+
     use super::{
-        RemoteOperationKind, RemoteRequest, build_remote_args, redact_query_secret,
-        sanitize_progress,
+        RemoteOperationKind, RemoteRequest, build_remote_args, ensure_remote_success,
+        redact_query_secret, sanitize_progress,
     };
+    use crate::AppError;
 
     fn request(kind: RemoteOperationKind) -> RemoteRequest {
         RemoteRequest {
@@ -321,6 +332,19 @@ mod tests {
             string_args(&request),
             ["push", "--force-with-lease", "upstream"]
         );
+    }
+
+    #[test]
+    fn classifies_modern_diverged_branch_advice() {
+        let error = ensure_remote_success(GitOutput {
+            stdout: Vec::new(),
+            stderr: b"hint: Diverging branches can't be fast-forwarded\nfatal: Not possible to fast-forward, aborting.\n".to_vec(),
+            exit_code: 128,
+            duration: Duration::from_millis(1),
+        })
+        .expect_err("diverged pull must fail");
+
+        assert!(matches!(error, AppError::DivergedBranches));
     }
 
     #[test]

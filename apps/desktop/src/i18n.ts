@@ -198,6 +198,8 @@ const korean = {
   "Choose destination and clone": "대상을 선택하고 복제",
   "Could not reach the GitAcorn core.": "GitAcorn 코어에 연결할 수 없습니다.",
   "Repository session needs attention.": "저장소 세션을 확인해야 합니다.",
+  "Local and remote branches have diverged.": "로컬 및 원격 브랜치가 분기되었습니다.",
+  "Pull stops safely when local and remote branches have diverged.": "로컬 및 원격 브랜치가 분기된 경우 Pull을 안전하게 중단합니다.",
   "Choose another folder": "다른 폴더 선택",
   "{visible} of {total}": "{total}개 중 {visible}개",
   "Stashes": "스태시",
