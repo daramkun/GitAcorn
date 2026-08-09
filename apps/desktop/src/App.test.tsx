@@ -14,6 +14,7 @@ import {
   abortRebase,
   addSubmodule,
   applyPatchSelection,
+  applyComparePatch,
   applyStash,
   addRemote,
   activateSessionTab,
@@ -81,6 +82,10 @@ import {
   undoOperation,
   lockWorktree,
   unlockWorktree,
+  runExternalDiff,
+  saveComparePatch,
+  updateExternalDiffTool,
+  validateComparePatch,
   updateGlobalGitIdentity,
   updateRepositoryGitIdentity,
   updateSessionTab,
@@ -220,9 +225,14 @@ const mockedActivateWorktree = vi.mocked(activateWorktree);
 const mockedCheckoutBranch = vi.mocked(checkoutBranch);
 const mockedCloseTab = vi.mocked(closeSessionTab);
 const mockedCompareDiff = vi.mocked(compareDiff);
+const mockedApplyComparePatch = vi.mocked(applyComparePatch);
 const mockedGetExternalDiffTool = vi.mocked(getExternalDiffTool);
 const mockedGetBinaryPreview = vi.mocked(getBinaryPreview);
 const mockedGetComparePatch = vi.mocked(getComparePatch);
+const mockedRunExternalDiff = vi.mocked(runExternalDiff);
+const mockedSaveComparePatch = vi.mocked(saveComparePatch);
+const mockedUpdateExternalDiffTool = vi.mocked(updateExternalDiffTool);
+const mockedValidateComparePatch = vi.mocked(validateComparePatch);
 const mockedGetLfsLocks = vi.mocked(getLfsLocks);
 const mockedGetLfsStatus = vi.mocked(getLfsStatus);
 const mockedGetSignatureSettings = vi.mocked(getSignatureSettings);
@@ -368,9 +378,14 @@ describe("App", () => {
     mockedActivateTab.mockResolvedValue();
     mockedActivateWorktree.mockResolvedValue(sessionWithSnapshot);
     mockedCompareDiff.mockResolvedValue({ schemaVersion: 1, files: [] });
+    mockedApplyComparePatch.mockResolvedValue(snapshot);
     mockedGetExternalDiffTool.mockResolvedValue({ schemaVersion: 1, configured: null, mergeConfigured: null });
     mockedGetBinaryPreview.mockResolvedValue({ schemaVersion: 1, oldPath: "", newPath: "" });
     mockedGetComparePatch.mockResolvedValue({ schemaVersion: 1, patch: "", fileCount: 0, binary: false });
+    mockedRunExternalDiff.mockResolvedValue({ schemaVersion: 1, tool: "code", exitCode: 0 });
+    mockedSaveComparePatch.mockResolvedValue();
+    mockedUpdateExternalDiffTool.mockResolvedValue({ schemaVersion: 1, configured: null, mergeConfigured: null });
+    mockedValidateComparePatch.mockResolvedValue({ schemaVersion: 1, valid: true, message: "Patch is valid." });
     mockedGetLfsLocks.mockResolvedValue([]);
     mockedGetLfsStatus.mockResolvedValue({ schemaVersion: 1, installed: false, tracked: [] });
     mockedGetSignatureSettings.mockResolvedValue({ schemaVersion: 1, commitSign: false, tagSign: false, format: null, signingKey: null, sshAllowedSignersFile: null });
@@ -820,6 +835,129 @@ describe("App", () => {
       "aria-pressed",
       "true",
     );
+  });
+
+  it("renders binary image comparisons and completes the patch lifecycle", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedCompareDiff.mockResolvedValue({
+      schemaVersion: 1,
+      files: [
+        {
+          oldPath: "image.png",
+          newPath: "renamed.png",
+          binary: true,
+          hunks: [],
+        },
+      ],
+    });
+    mockedGetBinaryPreview.mockResolvedValue({
+      schemaVersion: 1,
+      oldPath: "image.png",
+      newPath: "renamed.png",
+      mimeType: "image/png",
+      oldSize: 4,
+      newSize: 5,
+      oldDataUrl: "data:image/png;base64,b2xk",
+      newDataUrl: "data:image/png;base64,bmV3",
+    });
+    mockedGetComparePatch.mockResolvedValue({
+      schemaVersion: 1,
+      patch: "diff --git a/image.png b/renamed.png\nGIT binary patch",
+      fileCount: 1,
+      binary: true,
+    });
+    mockedValidateComparePatch.mockResolvedValue({
+      schemaVersion: 1,
+      valid: true,
+      message: "Patch is valid.",
+    });
+    mockedGetExternalDiffTool.mockResolvedValue({
+      schemaVersion: 1,
+      configured: "code",
+      mergeConfigured: null,
+    });
+    mockedUpdateExternalDiffTool.mockResolvedValue({
+      schemaVersion: 1,
+      configured: "code",
+      mergeConfigured: null,
+    });
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue("comparison.patch");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Compare revisions" }));
+    const compareDialog = screen.getByRole("dialog", { name: "Compare revisions" });
+    fireEvent.change(screen.getByLabelText("Left revision"), { target: { value: "HEAD~1" } });
+    fireEvent.change(screen.getByLabelText("Right revision"), { target: { value: "HEAD" } });
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Compare" }));
+
+    expect(await within(compareDialog).findByText(/Binary file: image\.png/)).toBeInTheDocument();
+    expect(await within(compareDialog).findByRole("img", { name: "Old image" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,b2xk",
+    );
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Overlay" }));
+    expect(within(compareDialog).getByRole("button", { name: "Overlay" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Generate patch" }));
+    await waitFor(() =>
+      expect(mockedGetComparePatch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        "HEAD~1",
+        "HEAD",
+      ),
+    );
+    expect(await within(compareDialog).findByRole("region", { name: "Generated patch" })).toHaveTextContent(
+      "Binary file",
+    );
+
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Validate patch" }));
+    await waitFor(() => expect(mockedValidateComparePatch).toHaveBeenCalled());
+    expect(await within(compareDialog).findByRole("status")).toHaveTextContent("Patch is valid.");
+
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Save patch" }));
+    await waitFor(() =>
+      expect(mockedSaveComparePatch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        "comparison.patch",
+        expect.stringContaining("GIT binary patch"),
+      ),
+    );
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Apply patch" }));
+    await waitFor(() =>
+      expect(mockedApplyComparePatch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        expect.stringContaining("GIT binary patch"),
+      ),
+    );
+
+    fireEvent.change(within(compareDialog).getByLabelText("External diff tool"), {
+      target: { value: "code" },
+    });
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Save tool" }));
+    await waitFor(() =>
+      expect(mockedUpdateExternalDiffTool).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        "code",
+        "",
+      ),
+    );
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Run external diff" }));
+    await waitFor(() =>
+      expect(mockedRunExternalDiff).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        "HEAD~1",
+        "HEAD",
+      ),
+    );
+    prompt.mockRestore();
+    confirm.mockRestore();
   });
 
   it("opens and submits an interactive rebase plan from a commit context menu", async () => {
