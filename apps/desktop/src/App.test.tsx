@@ -86,6 +86,7 @@ import {
   unlockWorktree,
   unlockLfsPath,
   runExternalDiff,
+  runExternalMerge,
   saveComparePatch,
   updateExternalDiffTool,
   validateComparePatch,
@@ -183,6 +184,7 @@ vi.mock("./windowControls", () => ({
   updateRemote: vi.fn(),
   saveComparePatch: vi.fn(),
   runExternalDiff: vi.fn(),
+  runExternalMerge: vi.fn(),
   validateComparePatch: vi.fn(),
   getRepositorySnapshot: vi.fn(),
   stagePaths: vi.fn(),
@@ -234,6 +236,7 @@ const mockedGetExternalDiffTool = vi.mocked(getExternalDiffTool);
 const mockedGetBinaryPreview = vi.mocked(getBinaryPreview);
 const mockedGetComparePatch = vi.mocked(getComparePatch);
 const mockedRunExternalDiff = vi.mocked(runExternalDiff);
+const mockedRunExternalMerge = vi.mocked(runExternalMerge);
 const mockedSaveComparePatch = vi.mocked(saveComparePatch);
 const mockedUpdateExternalDiffTool = vi.mocked(updateExternalDiffTool);
 const mockedValidateComparePatch = vi.mocked(validateComparePatch);
@@ -391,6 +394,7 @@ describe("App", () => {
     mockedGetBinaryPreview.mockResolvedValue({ schemaVersion: 1, oldPath: "", newPath: "" });
     mockedGetComparePatch.mockResolvedValue({ schemaVersion: 1, patch: "", fileCount: 0, binary: false });
     mockedRunExternalDiff.mockResolvedValue({ schemaVersion: 1, tool: "code", exitCode: 0 });
+    mockedRunExternalMerge.mockResolvedValue({ schemaVersion: 1, tool: "code", exitCode: 0 });
     mockedSaveComparePatch.mockResolvedValue();
     mockedUpdateExternalDiffTool.mockResolvedValue({ schemaVersion: 1, configured: null, mergeConfigured: null });
     mockedValidateComparePatch.mockResolvedValue({ schemaVersion: 1, valid: true, message: "Patch is valid." });
@@ -886,12 +890,12 @@ describe("App", () => {
     mockedGetExternalDiffTool.mockResolvedValue({
       schemaVersion: 1,
       configured: "code",
-      mergeConfigured: null,
+      mergeConfigured: "code",
     });
     mockedUpdateExternalDiffTool.mockResolvedValue({
       schemaVersion: 1,
       configured: "code",
-      mergeConfigured: null,
+      mergeConfigured: "code",
     });
     const prompt = vi.spyOn(window, "prompt").mockReturnValue("comparison.patch");
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -957,7 +961,7 @@ describe("App", () => {
       expect(mockedUpdateExternalDiffTool).toHaveBeenCalledWith(
         snapshot.repository.id,
         "code",
-        "",
+        "code",
       ),
     );
     fireEvent.click(within(compareDialog).getByRole("button", { name: "Run external diff" }));
@@ -967,6 +971,10 @@ describe("App", () => {
         "HEAD~1",
         "HEAD",
       ),
+    );
+    fireEvent.click(within(compareDialog).getByRole("button", { name: "Run external merge" }));
+    await waitFor(() =>
+      expect(mockedRunExternalMerge).toHaveBeenCalledWith(snapshot.repository.id),
     );
     prompt.mockRestore();
     confirm.mockRestore();
@@ -1254,6 +1262,115 @@ describe("App", () => {
         1,
       ),
     );
+    confirm.mockRestore();
+  });
+
+  it("previews revert and exposes continue and abort controls when paused", async () => {
+    const targetOid = "4".repeat(40);
+    const headOid = "5".repeat(40);
+    const cleanSnapshot = {
+      ...snapshot,
+      changes: [],
+      head: { ...snapshot.head, oid: headOid },
+    };
+    const pausedSnapshot = {
+      ...cleanSnapshot,
+      revision: 2,
+      operation: "revert" as const,
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], page: "history", snapshot: cleanSnapshot }],
+    });
+    mockedGetSnapshot.mockResolvedValue(cleanSnapshot);
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: headOid,
+          parents: [targetOid],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_001,
+          subject: "Head commit",
+          body: "",
+          references: ["HEAD -> refs/heads/main"],
+          lane: 0,
+          laneCount: 1,
+        },
+        {
+          oid: targetOid,
+          parents: ["0".repeat(40)],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          subject: "Revert target",
+          body: "",
+          references: [],
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+    mockedPreviewHistoryMutation.mockResolvedValue({
+      schemaVersion: 1,
+      operation: "revert",
+      commitCount: 1,
+      worktreeClean: true,
+      canApply: true,
+      conflicts: [],
+      message: "No conflicts detected in the clean preview.",
+    });
+    mockedMutateHistory.mockResolvedValue(pausedSnapshot);
+    mockedContinueHistory.mockResolvedValue(pausedSnapshot);
+    mockedAbortHistory.mockResolvedValue({ ...cleanSnapshot, revision: 4 });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: /Revert target/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Revert this commit…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Revert commit" });
+    await waitFor(() =>
+      expect(mockedPreviewHistoryMutation).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "revert",
+        [targetOid],
+        undefined,
+      ),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Revert commit" }));
+    await waitFor(() =>
+      expect(mockedMutateHistory).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "revert",
+        [targetOid],
+      ),
+    );
+
+    expect(await screen.findByText("Revert is paused")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() =>
+      expect(mockedContinueHistory).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        pausedSnapshot.revision,
+        "revert",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Abort" }));
+    await waitFor(() =>
+      expect(mockedAbortHistory).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        pausedSnapshot.revision,
+        "revert",
+      ),
+    );
+    expect(confirm).toHaveBeenCalledTimes(2);
     confirm.mockRestore();
   });
 
