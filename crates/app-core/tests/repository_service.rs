@@ -1786,6 +1786,44 @@ fn manages_worktree_create_lock_unlock_and_force_remove_lifecycle() {
 }
 
 #[test]
+fn distinguishes_a_same_named_worktree_folder_from_a_submodule() {
+    let fixture = TestRepository::init();
+    let child = TestRepository::init();
+    let linked_root = tempfile::tempdir().expect("create linked worktree parent");
+    let linked_path = linked_root.path().join("child");
+    let service = RepositoryService::default();
+    let repository = service
+        .discover(fixture.path())
+        .expect("discover repository");
+
+    service
+        .add_submodule(&repository, &child.path().to_string_lossy(), "vendor/child")
+        .expect("add child submodule");
+    service
+        .create_worktree(
+            &repository,
+            &WorktreeCreateRequest {
+                path: linked_path.clone(),
+                branch: Some("feature/child".to_owned()),
+                start_point: Some("HEAD".to_owned()),
+            },
+        )
+        .expect("create same-named worktree folder");
+
+    let sidebar = service.sidebar(&repository).expect("read sidebar");
+    assert_eq!(sidebar.submodules.len(), 1);
+    assert_eq!(sidebar.submodules[0].path, "vendor/child");
+    let worktree = sidebar
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.branch.as_deref() == Some("feature/child"))
+        .expect("same-named linked worktree");
+    assert_eq!(worktree.branch.as_deref(), Some("feature/child"));
+    assert!(worktree.path.ends_with("child"));
+    assert_ne!(worktree.path, sidebar.submodules[0].absolute_path);
+}
+
+#[test]
 fn reports_locked_missing_and_prunable_worktrees_from_git_fixture() {
     let fixture = TestRepository::init();
     let linked_root = tempfile::tempdir().expect("create linked worktree parent");
