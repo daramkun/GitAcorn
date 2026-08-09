@@ -3081,6 +3081,18 @@ export function App() {
       </main>
       {showForge && (
         <ForgeBrowser
+          activeRepoId={activeSnapshot?.repository.id}
+          activeRevision={activeSnapshot?.revision}
+          onSnapshot={(snapshot) => {
+            setTabs((current) =>
+              current.map((tab) =>
+                tab.repoId === snapshot.repository.id &&
+                (!tab.snapshot || snapshot.revision >= tab.snapshot.revision)
+                  ? { ...tab, snapshot, unavailable: false }
+                  : tab,
+              ),
+            );
+          }}
           onClose={() => setShowForge(false)}
           onClone={(url) => {
             setCloneUrl(url);

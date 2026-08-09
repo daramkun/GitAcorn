@@ -11,8 +11,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use forge::{
-    ForgeAccount, ForgeEndpointPlan, ForgeProfile, ForgeProvider, ForgeRepository,
-    parse_forge_profile, parse_forge_repositories,
+    ForgeAccount, ForgeCiStatus, ForgeEndpointPlan, ForgeMergeability, ForgeProfile, ForgeProvider,
+    ForgePullRequest, ForgeRepository, ForgeReviewStatus, parse_forge_profile,
+    parse_forge_pull_request, parse_forge_pull_requests, parse_forge_repositories,
 };
 pub use git_domain::{FileBlame, PathHistory};
 pub use remote::{CloneRequest, RemoteOperationKind, RemoteProgress, RemoteRequest};

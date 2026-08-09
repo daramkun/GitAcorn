@@ -112,7 +112,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 - [x] bisect 시각화와 good/bad/skip 흐름
 - [x] command palette, repository terminal, 사용자 정의 command
 - [x] GitHub/GitLab/Bitbucket/Azure DevOps 계정과 저장소 탐색
-- [ ] PR/MR 생성·조회·checkout·merge와 review/CI 상태
+- [x] PR/MR 생성·조회·checkout·merge와 review/CI 상태
 - [ ] 여러 저장소 Workspace와 일괄 clone/fetch/pull
 - [ ] 다중 계정/profile, SSH key 및 Git identity profile
 - [ ] Git-flow와 branch naming preset

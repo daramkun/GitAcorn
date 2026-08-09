@@ -1,8 +1,8 @@
 use app_core::{
     AppErrorDto, BinaryPreview, BisectState, BranchRequest, CloneRequest, CommitFile,
     CommitRequest, ComparePatch, ConflictFile, ConflictSegment, ExternalDiffResult,
-    ExternalDiffTool, ForgeAccount, ForgeRepository, GitIdentity, GitReference, GitRemote,
-    HistoryMutationPreview, InteractiveRebaseAction, InteractiveRebaseItem,
+    ExternalDiffTool, ForgeAccount, ForgePullRequest, ForgeRepository, GitIdentity, GitReference,
+    GitRemote, HistoryMutationPreview, InteractiveRebaseAction, InteractiveRebaseItem,
     InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus,
     PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind, RemoteRequest,
     RemoteTagSummary, RepositoryInitRequest, RepositorySidebar, SignatureSettings, SignatureStatus,
@@ -104,6 +104,21 @@ impl From<Vec<ForgeRepository>> for ForgeRepositoriesDto {
                 .into_iter()
                 .map(ForgeRepositoryDto::from)
                 .collect(),
+        }
+    }
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgePullRequestsDto {
+    pub schema_version: u16,
+    pub pull_requests: Vec<ForgePullRequest>,
+}
+
+impl From<Vec<ForgePullRequest>> for ForgePullRequestsDto {
+    fn from(pull_requests: Vec<ForgePullRequest>) -> Self {
+        Self {
+            schema_version: 1,
+            pull_requests,
         }
     }
 }

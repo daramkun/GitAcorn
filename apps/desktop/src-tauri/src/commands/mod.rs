@@ -13,10 +13,10 @@ use crate::dto::{
     CommitFileDto, CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto,
     ConflictContentRequestDto, ConflictFileDto, DiffDto, ExternalDiffResultDto,
     ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto, ForgeAccountDto,
-    ForgeAccountsDto, ForgeRepositoriesDto, GitIdentityDto, GitIdentitySettingsDto,
-    GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto, HistoryPageDto,
-    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto,
-    LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
+    ForgeAccountsDto, ForgePullRequestsDto, ForgeRepositoriesDto, GitIdentityDto,
+    GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto,
+    HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto,
+    LfsLockRequestDto, LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
     OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
     RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
     RepositoryCommandRequestDto, RepositoryCommandResultDto, RepositoryGitIdentityDto,
@@ -24,6 +24,7 @@ use crate::dto::{
     SessionDto, SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto,
     SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorktreeCreateRequestDto,
 };
+use crate::forge::{ForgePullRequestCreateRequest, ForgePullRequestMergeRequest};
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
 };
@@ -69,6 +70,69 @@ pub async fn forge_repositories(
         .forge_repositories(&account_id)
         .await
         .map(ForgeRepositoriesDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+#[tauri::command]
+pub async fn forge_pull_requests(
+    account_id: String,
+    repository_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ForgePullRequestsDto> {
+    state
+        .forge_pull_requests(&account_id, &repository_id)
+        .await
+        .map(ForgePullRequestsDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn forge_pull_request_create(
+    account_id: String,
+    repository_id: String,
+    request: ForgePullRequestCreateRequest,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<app_core::ForgePullRequest> {
+    state
+        .forge_pull_request_create(&account_id, &repository_id, &request)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn forge_pull_request_merge(
+    account_id: String,
+    repository_id: String,
+    number: u64,
+    request: ForgePullRequestMergeRequest,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<()> {
+    state
+        .forge_pull_request_merge(&account_id, &repository_id, number, &request)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn forge_pull_request_checkout(
+    account_id: String,
+    repository_id: String,
+    number: u64,
+    repo_id: String,
+    revision: u64,
+    expected_source_oid: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .forge_pull_request_checkout(
+            &account_id,
+            &repository_id,
+            number,
+            &repo_id,
+            revision,
+            &expected_source_oid,
+        )
+        .await
+        .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
 #[tauri::command]

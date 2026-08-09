@@ -490,6 +490,46 @@ export type ForgeRepositoriesDto = {
   repositories: ForgeRepositoryDto[];
 };
 
+export type ForgeMergeability = "mergeable" | "conflicting" | "blocked" | "checking" | "unknown";
+export type ForgeReviewStatus = "approved" | "changesRequested" | "pending" | "unknown";
+export type ForgeCiStatus = "success" | "failure" | "pending" | "cancelled" | "unknown";
+
+export type ForgePullRequestDto = {
+  id: string;
+  number: number;
+  title: string;
+  author: string;
+  sourceBranch: string;
+  targetBranch: string;
+  sourceOid: string;
+  sourceCloneUrl?: string | null;
+  webUrl: string;
+  state: string;
+  draft: boolean;
+  mergeability: ForgeMergeability;
+  reviewStatus: ForgeReviewStatus;
+  ciStatus: ForgeCiStatus;
+  updatedAt?: string | null;
+};
+
+export type ForgePullRequestsDto = {
+  schemaVersion: 1;
+  pullRequests: ForgePullRequestDto[];
+};
+
+export type ForgePullRequestCreateRequest = {
+  title: string;
+  description: string;
+  sourceBranch: string;
+  targetBranch: string;
+  draft: boolean;
+};
+
+export type ForgePullRequestMergeRequest = {
+  expectedSourceOid: string;
+  squash: boolean;
+  deleteSourceBranch: boolean;
+};
 export type ForgeConnectRequest = {
   provider: ForgeProvider;
   host: string;
@@ -512,6 +552,21 @@ export function disconnectForgeAccount(accountId: string): Promise<void> {
 
 export function getForgeRepositories(accountId: string): Promise<ForgeRepositoriesDto> {
   return invoke<ForgeRepositoriesDto>("forge_repositories", { accountId });
+}
+export function getForgePullRequests(accountId: string, repositoryId: string): Promise<ForgePullRequestsDto> {
+  return invoke<ForgePullRequestsDto>("forge_pull_requests", { accountId, repositoryId });
+}
+
+export function createForgePullRequest(accountId: string, repositoryId: string, request: ForgePullRequestCreateRequest): Promise<ForgePullRequestDto> {
+  return invoke<ForgePullRequestDto>("forge_pull_request_create", { accountId, repositoryId, request });
+}
+
+export function mergeForgePullRequest(accountId: string, repositoryId: string, number: number, request: ForgePullRequestMergeRequest): Promise<void> {
+  return invoke<void>("forge_pull_request_merge", { accountId, repositoryId, number, request });
+}
+
+export function checkoutForgePullRequest(accountId: string, repositoryId: string, number: number, repoId: string, revision: number, expectedSourceOid: string): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("forge_pull_request_checkout", { accountId, repositoryId, number, repoId, revision, expectedSourceOid });
 }
 export async function chooseRepositoryDirectory(): Promise<string | null> {
   const path = await open({

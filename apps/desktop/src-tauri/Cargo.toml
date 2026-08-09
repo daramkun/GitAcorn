@@ -27,6 +27,7 @@ png = "0.17"
 persistence = { path = "../../../crates/persistence" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
 tauri = { version = "2.8", features = [] }
 tauri-plugin-dialog = "2.4"
@@ -56,6 +57,3 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
   "NSDictionary",
   "NSString",
 ] }
-
-[dev-dependencies]
-serde_json.workspace = true

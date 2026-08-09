@@ -8,13 +8,13 @@ use std::time::{Duration, Instant};
 use app_core::{
     AppError, BinaryPreview, BisectMark, BisectState, BranchRequest, CloneRequest, CommitRequest,
     ComparePatch, ConflictFile, ConflictResolution, DiffTarget, ExternalDiffResult,
-    ExternalDiffTool, FileBlame, ForgeAccount, ForgeProvider, ForgeRepository, GitIdentity,
-    GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryMutationPreview,
-    HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest, LfsLock, LfsRequest,
-    LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress, RemoteRequest,
-    RemoteTagSummary, RepositoryCommandResult, RepositoryInitRequest, RepositoryScheduler,
-    RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus, StashRequest,
-    WorktreeCreateRequest,
+    ExternalDiffTool, FileBlame, ForgeAccount, ForgeProvider, ForgePullRequest, ForgeRepository,
+    GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
+    HistoryMutationPreview, HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest,
+    LfsLock, LfsRequest, LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress,
+    RemoteRequest, RemoteTagSummary, RepositoryCommandResult, RepositoryInitRequest,
+    RepositoryScheduler, RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus,
+    StashRequest, WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -28,7 +28,9 @@ use persistence::{
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
-use crate::forge::{ForgeConnectRequest, ForgeService};
+use crate::forge::{
+    ForgeConnectRequest, ForgePullRequestCreateRequest, ForgePullRequestMergeRequest, ForgeService,
+};
 
 struct OpenRepository {
     descriptor: RepositoryDescriptor,
@@ -1704,6 +1706,136 @@ impl ApplicationState {
             .await
     }
 
+    async fn forge_repository_context(
+        &self,
+        account_id: &str,
+        repository_id: &str,
+    ) -> Result<(ForgeAccount, String, ForgeRepository), AppError> {
+        let record = self
+            .session
+            .list_forge_accounts()
+            .await
+            .map_err(persistence_error)?
+            .into_iter()
+            .find(|account| account.id == account_id)
+            .ok_or_else(|| AppError::InvalidRequest("Forge account was not found".to_owned()))?;
+        let account = forge_account_from_record(record.clone())?;
+        let repository = self
+            .forge
+            .repositories(&account, &record.auth_username)
+            .await?
+            .into_iter()
+            .find(|repository| repository.id == repository_id)
+            .ok_or_else(|| AppError::InvalidRequest("Forge repository was not found".to_owned()))?;
+        Ok((account, record.auth_username, repository))
+    }
+
+    pub async fn forge_pull_requests(
+        &self,
+        account_id: &str,
+        repository_id: &str,
+    ) -> Result<Vec<ForgePullRequest>, AppError> {
+        let (account, auth_username, repository) = self
+            .forge_repository_context(account_id, repository_id)
+            .await?;
+        self.forge
+            .pull_requests(&account, &auth_username, &repository)
+            .await
+    }
+
+    pub async fn forge_pull_request_create(
+        &self,
+        account_id: &str,
+        repository_id: &str,
+        request: &ForgePullRequestCreateRequest,
+    ) -> Result<ForgePullRequest, AppError> {
+        let (account, auth_username, repository) = self
+            .forge_repository_context(account_id, repository_id)
+            .await?;
+        self.forge
+            .create_pull_request(&account, &auth_username, &repository, request)
+            .await
+    }
+
+    pub async fn forge_pull_request_merge(
+        &self,
+        account_id: &str,
+        repository_id: &str,
+        number: u64,
+        request: &ForgePullRequestMergeRequest,
+    ) -> Result<(), AppError> {
+        let (account, auth_username, repository) = self
+            .forge_repository_context(account_id, repository_id)
+            .await?;
+        let current = self
+            .forge
+            .pull_requests(&account, &auth_username, &repository)
+            .await?
+            .into_iter()
+            .find(|pull_request| pull_request.number == number)
+            .ok_or_else(|| AppError::InvalidRequest("Pull request was not found".to_owned()))?;
+        if current.source_oid != request.expected_source_oid {
+            return Err(AppError::InvalidRequest(
+                "Pull request changed; refresh and try again".to_owned(),
+            ));
+        }
+        self.forge
+            .merge_pull_request(&account, &auth_username, &repository, number, request)
+            .await
+    }
+
+    pub async fn forge_pull_request_checkout(
+        &self,
+        account_id: &str,
+        repository_id: &str,
+        number: u64,
+        repo_id: &str,
+        revision: u64,
+        expected_source_oid: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        let (account, auth_username, repository) = self
+            .forge_repository_context(account_id, repository_id)
+            .await?;
+        let pull_request = self
+            .forge
+            .pull_requests(&account, &auth_username, &repository)
+            .await?
+            .into_iter()
+            .find(|pull_request| pull_request.number == number)
+            .ok_or_else(|| AppError::InvalidRequest("Pull request was not found".to_owned()))?;
+        if pull_request.source_oid != expected_source_oid {
+            return Err(AppError::InvalidRequest(
+                "Pull request changed; refresh and try again".to_owned(),
+            ));
+        }
+        let source_url = pull_request
+            .source_clone_url
+            .as_deref()
+            .unwrap_or(&repository.clone_url);
+        let parsed_repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(parsed_repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let opened = repositories
+                    .get(&parsed_repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, opened.revision)?;
+                opened.descriptor.clone()
+            };
+            self.service.checkout_pull_request(
+                &descriptor,
+                source_url,
+                &pull_request.source_branch,
+                &pull_request.source_oid,
+                pull_request.number,
+            )?;
+            let next_revision = self.advance_revision(parsed_repo_id)?;
+            self.service.snapshot(&descriptor, next_revision)
+        })
+    }
     pub async fn forge_disconnect(&self, account_id: &str) -> Result<(), AppError> {
         let record = self
             .session

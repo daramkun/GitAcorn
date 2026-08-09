@@ -2327,6 +2327,81 @@ impl RepositoryService {
         self.git_unit(repository, args)
     }
 
+    pub fn checkout_pull_request(
+        &self,
+        repository: &RepositoryDescriptor,
+        source_url: &str,
+        source_branch: &str,
+        expected_source_oid: &str,
+        number: u64,
+    ) -> Result<(), AppError> {
+        if !self.is_worktree_clean(repository)? {
+            return Err(AppError::InvalidRequest(
+                "Pull request checkout requires a clean worktree".to_owned(),
+            ));
+        }
+        if !source_url.starts_with("https://")
+            || source_url.len() > 4096
+            || source_url.contains(['\r', '\n', '\0'])
+        {
+            return Err(AppError::InvalidRequest(
+                "Pull request source URL is invalid".to_owned(),
+            ));
+        }
+        validate_object_id(expected_source_oid)?;
+        if source_branch.is_empty()
+            || source_branch.len() > 1024
+            || source_branch.starts_with('-')
+            || source_branch.contains(['\r', '\n', '\0'])
+        {
+            return Err(AppError::InvalidRequest(
+                "Pull request source branch is invalid".to_owned(),
+            ));
+        }
+        self.git_unit(repository, ["check-ref-format", "--branch", source_branch])?;
+        let mut fetch = GitRequest::new([
+            OsString::from("fetch"),
+            OsString::from("--no-tags"),
+            OsString::from("--"),
+            OsString::from(source_url),
+            OsString::from(source_branch),
+        ]);
+        fetch.working_directory = Some(repository.worktree_path.clone());
+        fetch.timeout = Duration::from_secs(300);
+        ensure_success(self.run(fetch)?)?;
+        let fetched = self
+            .git_text(repository, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"])?
+            .trim()
+            .to_owned();
+        if fetched != expected_source_oid {
+            return Err(AppError::InvalidRequest(
+                "Pull request changed; refresh and try again".to_owned(),
+            ));
+        }
+        let short_oid = expected_source_oid.chars().take(10).collect::<String>();
+        let local_branch = format!("pr/{number}-{short_oid}");
+        let reference = format!("refs/heads/{local_branch}");
+        let existing = self.run({
+            let mut request = GitRequest::new(["show-ref", "--verify", "--hash", &reference]);
+            request.working_directory = Some(repository.worktree_path.clone());
+            request
+        })?;
+        if existing.exit_code == 0 {
+            let oid = String::from_utf8(existing.stdout)
+                .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
+            if oid.trim() != expected_source_oid {
+                return Err(AppError::InvalidRequest(format!(
+                    "Local branch {local_branch} points to another commit"
+                )));
+            }
+            self.git_unit(repository, ["switch", "--", &local_branch])
+        } else {
+            self.git_unit(
+                repository,
+                ["switch", "--create", &local_branch, "FETCH_HEAD"],
+            )
+        }
+    }
     pub fn checkout_branch(
         &self,
         repository: &RepositoryDescriptor,

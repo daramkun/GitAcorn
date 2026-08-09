@@ -1,19 +1,28 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
+  checkoutForgePullRequest,
   connectForgeAccount,
+  createForgePullRequest,
   disconnectForgeAccount,
   getForgeAccounts,
+  getForgePullRequests,
   getForgeRepositories,
+  mergeForgePullRequest,
   normalizeAppError,
   type ForgeAccountDto,
   type ForgeProvider,
+  type ForgePullRequestDto,
   type ForgeRepositoryDto,
+  type RepositorySnapshotDto,
 } from "./repository";
 import { localeTag, t } from "./i18n";
 
 type Props = {
   onClose: () => void;
   onClone: (url: string) => void;
+  activeRepoId?: string;
+  activeRevision?: number;
+  onSnapshot?: (snapshot: RepositorySnapshotDto) => void;
 };
 
 const providerDefaults: Record<ForgeProvider, string> = {
@@ -30,13 +39,17 @@ const providerLabels: Record<ForgeProvider, string> = {
   azureDevOps: "Azure DevOps",
 };
 
-export function ForgeBrowser({ onClose, onClone }: Props) {
+export function ForgeBrowser({ onClose, onClone, activeRepoId, activeRevision, onSnapshot }: Props) {
   const [accounts, setAccounts] = useState<ForgeAccountDto[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
   const [repositories, setRepositories] = useState<ForgeRepositoryDto[]>([]);
+  const [selectedRepository, setSelectedRepository] = useState<ForgeRepositoryDto>();
+  const [pullRequests, setPullRequests] = useState<ForgePullRequestDto[]>([]);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [loadingRepositories, setLoadingRepositories] = useState(false);
+  const [loadingPullRequests, setLoadingPullRequests] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
   const [provider, setProvider] = useState<ForgeProvider>("github");
   const [host, setHost] = useState(providerDefaults.github);
   const [scope, setScope] = useState("");
@@ -44,9 +57,18 @@ export function ForgeBrowser({ onClose, onClone }: Props) {
   const [token, setToken] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [working, setWorking] = useState(false);
   const [pendingDisconnect, setPendingDisconnect] = useState(false);
+  const [pendingMerge, setPendingMerge] = useState<ForgePullRequestDto>();
+  const [squash, setSquash] = useState(false);
+  const [deleteSourceBranch, setDeleteSourceBranch] = useState(false);
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [sourceBranch, setSourceBranch] = useState("");
+  const [targetBranch, setTargetBranch] = useState("main");
+  const [draft, setDraft] = useState(false);
 
   const selected = accounts.find((account) => account.id === selectedId);
   const filteredRepositories = useMemo(() => {
@@ -68,12 +90,13 @@ export function ForgeBrowser({ onClose, onClone }: Props) {
       })
       .catch((reason: unknown) => active && setMessage(normalizeAppError(reason).message))
       .finally(() => active && setLoadingAccounts(false));
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
+    setSelectedRepository(undefined);
+    setPullRequests([]);
+    setShowCreate(false);
     if (!selectedId || showAdd) {
       setRepositories([]);
       return;
@@ -85,9 +108,7 @@ export function ForgeBrowser({ onClose, onClone }: Props) {
       .then(({ repositories: loaded }) => active && setRepositories(loaded))
       .catch((reason: unknown) => active && setMessage(normalizeAppError(reason).message))
       .finally(() => active && setLoadingRepositories(false));
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [selectedId, showAdd]);
 
   function changeProvider(next: ForgeProvider) {
@@ -105,17 +126,8 @@ export function ForgeBrowser({ onClose, onClone }: Props) {
     try {
       setConnecting(true);
       setMessage("");
-      const account = await connectForgeAccount({
-        provider,
-        host: host.trim(),
-        authUsername: authUsername.trim(),
-        token,
-        scope: scope.trim() || undefined,
-      });
-      setAccounts((current) => [
-        ...current.filter((item) => item.id !== account.id),
-        account,
-      ]);
+      const account = await connectForgeAccount({ provider, host: host.trim(), authUsername: authUsername.trim(), token, scope: scope.trim() || undefined });
+      setAccounts((current) => [...current.filter((item) => item.id !== account.id), account]);
       setSelectedId(account.id);
       setShowAdd(false);
       setToken("");
@@ -151,8 +163,7 @@ export function ForgeBrowser({ onClose, onClone }: Props) {
     try {
       setLoadingRepositories(true);
       setMessage("");
-      const response = await getForgeRepositories(selectedId);
-      setRepositories(response.repositories);
+      setRepositories((await getForgeRepositories(selectedId)).repositories);
     } catch (reason: unknown) {
       setMessage(normalizeAppError(reason).message);
     } finally {
@@ -160,55 +171,99 @@ export function ForgeBrowser({ onClose, onClone }: Props) {
     }
   }
 
+  async function openPullRequests(repository: ForgeRepositoryDto) {
+    if (!selectedId) return;
+    setSelectedRepository(repository);
+    setShowCreate(false);
+    await refreshPullRequests(repository);
+  }
+
+  async function refreshPullRequests(repository = selectedRepository) {
+    if (!selectedId || !repository) return;
+    try {
+      setLoadingPullRequests(true);
+      setMessage("");
+      setPullRequests((await getForgePullRequests(selectedId, repository.id)).pullRequests);
+    } catch (reason: unknown) {
+      setMessage(normalizeAppError(reason).message);
+    } finally {
+      setLoadingPullRequests(false);
+    }
+  }
+
+  async function createPullRequest(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedId || !selectedRepository || !title.trim() || !sourceBranch.trim() || !targetBranch.trim()) return;
+    try {
+      setWorking(true);
+      setMessage("");
+      await createForgePullRequest(selectedId, selectedRepository.id, {
+        title: title.trim(), description, sourceBranch: sourceBranch.trim(), targetBranch: targetBranch.trim(), draft,
+      });
+      setTitle(""); setDescription(""); setSourceBranch(""); setDraft(false); setShowCreate(false);
+      await refreshPullRequests(selectedRepository);
+      setMessage(t("Pull request created."));
+    } catch (reason: unknown) {
+      setMessage(normalizeAppError(reason).message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function checkoutPullRequest(pullRequest: ForgePullRequestDto) {
+    if (!selectedId || !selectedRepository || !activeRepoId || activeRevision === undefined) return;
+    try {
+      setWorking(true);
+      setMessage("");
+      const snapshot = await checkoutForgePullRequest(selectedId, selectedRepository.id, pullRequest.number, activeRepoId, activeRevision, pullRequest.sourceOid);
+      onSnapshot?.(snapshot);
+      setMessage(t("Checked out pull request #{number}.", { number: pullRequest.number }));
+    } catch (reason: unknown) {
+      setMessage(normalizeAppError(reason).message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function mergePullRequest() {
+    if (!selectedId || !selectedRepository || !pendingMerge) return;
+    try {
+      setWorking(true);
+      setMessage("");
+      await mergeForgePullRequest(selectedId, selectedRepository.id, pendingMerge.number, {
+        expectedSourceOid: pendingMerge.sourceOid, squash, deleteSourceBranch,
+      });
+      setPendingMerge(undefined);
+      await refreshPullRequests(selectedRepository);
+      setMessage(t("Pull request merged."));
+    } catch (reason: unknown) {
+      setMessage(normalizeAppError(reason).message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <div className="modal-overlay" role="presentation" onClick={onClose}>
-      <section
-        className="settings-modal forge-browser-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="forge-browser-title"
-        onClick={(event) => event.stopPropagation()}
-      >
+      <section className="settings-modal forge-browser-modal" role="dialog" aria-modal="true" aria-labelledby="forge-browser-title" onClick={(event) => event.stopPropagation()}>
         <header className="settings-modal-header">
-          <div>
-            <h2 id="forge-browser-title">{t("Hosted repositories")}</h2>
-            <p>{t("Browse repositories from your Git hosting accounts.")}</p>
-          </div>
+          <div><h2 id="forge-browser-title">{t("Hosted repositories")}</h2><p>{t("Browse repositories and pull requests from your Git hosting accounts.")}</p></div>
           <button className="settings-close-btn" type="button" aria-label={t("Close hosted repositories")} onClick={onClose}>×</button>
         </header>
         <div className="forge-browser-layout">
           <aside className="forge-account-pane" aria-label={t("Hosting accounts")}>
-            <div className="forge-pane-heading">
-              <span>{t("Accounts")}</span>
-              <button type="button" onClick={() => { setShowAdd(true); setPendingDisconnect(false); setMessage(""); }} aria-label={t("Add hosting account")}>＋</button>
-            </div>
-            {loadingAccounts ? (
-              <p className="forge-empty" role="status">{t("Loading accounts…")}</p>
-            ) : accounts.length === 0 ? (
-              <p className="forge-empty">{t("No hosting accounts connected.")}</p>
-            ) : (
-              <div className="forge-account-list">
-                {accounts.map((account) => (
-                  <button
-                    className={account.id === selectedId && !showAdd ? "forge-account active" : "forge-account"}
-                    key={account.id}
-                    type="button"
-                    onClick={() => { setSelectedId(account.id); setShowAdd(false); setPendingDisconnect(false); setQuery(""); }}
-                  >
-                    <span className={`forge-provider-mark forge-provider-mark--${account.provider}`} aria-hidden="true">{providerLabels[account.provider].slice(0, 1)}</span>
-                    <span><strong>{account.displayName}</strong><small>{providerLabels[account.provider]} · {account.scope ?? account.login}</small></span>
-                  </button>
-                ))}
-              </div>
-            )}
+            <div className="forge-pane-heading"><span>{t("Accounts")}</span><button type="button" onClick={() => { setShowAdd(true); setPendingDisconnect(false); setMessage(""); }} aria-label={t("Add hosting account")}>＋</button></div>
+            {loadingAccounts ? <p className="forge-empty" role="status">{t("Loading accounts…")}</p> : accounts.length === 0 ? <p className="forge-empty">{t("No hosting accounts connected.")}</p> : <div className="forge-account-list">{accounts.map((account) => (
+              <button className={account.id === selectedId && !showAdd ? "forge-account active" : "forge-account"} key={account.id} type="button" onClick={() => { setSelectedId(account.id); setShowAdd(false); setPendingDisconnect(false); setQuery(""); }}>
+                <span className={`forge-provider-mark forge-provider-mark--${account.provider}`} aria-hidden="true">{providerLabels[account.provider].slice(0, 1)}</span><span><strong>{account.displayName}</strong><small>{providerLabels[account.provider]} · {account.scope ?? account.login}</small></span>
+              </button>
+            ))}</div>}
             <button className="control-button control-button--secondary forge-add-account" type="button" onClick={() => { setShowAdd(true); setPendingDisconnect(false); setMessage(""); }}>＋ {t("Add account")}</button>
           </aside>
           <div className="forge-content-pane">
             {showAdd ? (
               <form className="forge-connect-form" onSubmit={connect}>
-                <div className="forge-content-heading">
-                  <div><h3>{t("Connect hosting account")}</h3><p>{t("Verify a token over HTTPS and keep it in Git Credential Manager.")}</p></div>
-                </div>
+                <div className="forge-content-heading"><div><h3>{t("Connect hosting account")}</h3><p>{t("Verify a token over HTTPS and keep it in Git Credential Manager.")}</p></div></div>
                 <div className="forge-form-grid">
                   <label><span>{t("Provider")}</span><select className="control-input" value={provider} onChange={(event) => changeProvider(event.target.value as ForgeProvider)}><option value="github">GitHub</option><option value="gitlab">GitLab</option><option value="bitbucket">Bitbucket</option><option value="azureDevOps">Azure DevOps</option></select></label>
                   <label><span>{t("Host")}</span><input className="control-input" value={host} onChange={(event) => setHost(event.target.value)} autoCapitalize="none" spellCheck={false} /></label>
@@ -220,46 +275,49 @@ export function ForgeBrowser({ onClose, onClone }: Props) {
                 {message && <p className="forge-message" role="status">{message}</p>}
                 <div className="forge-form-actions"><button className="control-button control-button--secondary" type="button" disabled={connecting} onClick={() => accounts.length ? setShowAdd(false) : onClose()}>{t("Cancel")}</button><button className="control-button control-button--primary" type="submit" disabled={connecting || !host.trim() || !token || (needsScope(provider) && !scope.trim()) || (requiresUsername(provider) && !authUsername.trim())}>{connecting ? t("Connecting…") : t("Connect account")}</button></div>
               </form>
-            ) : selected ? (
+            ) : selected && selectedRepository ? (
               <>
                 <div className="forge-content-heading">
-                  <div><h3>{selected.displayName}</h3><p>{providerLabels[selected.provider]} · {selected.host}{selected.scope ? ` · ${selected.scope}` : ""}</p></div>
-                  <div className="forge-account-actions"><button className="control-button control-button--secondary" type="button" disabled={loadingRepositories} onClick={() => void refreshRepositories()}>{t("Refresh")}</button><button className="control-button control-button--danger" type="button" onClick={() => setPendingDisconnect(true)}>{t("Disconnect")}</button></div>
+                  <div><button className="forge-back-button" type="button" onClick={() => { setSelectedRepository(undefined); setPullRequests([]); setShowCreate(false); setMessage(""); }}>← {t("Repositories")}</button><h3>{selectedRepository.fullName}</h3><p>{t("Pull requests · review and CI status")}</p></div>
+                  <div className="forge-account-actions"><button className="control-button control-button--secondary" type="button" disabled={loadingPullRequests || working} onClick={() => void refreshPullRequests()}>{t("Refresh")}</button><button className="control-button control-button--primary" type="button" disabled={working} onClick={() => setShowCreate((value) => !value)}>＋ {t("New pull request")}</button></div>
                 </div>
-                <div className="forge-repository-toolbar"><input className="control-input" aria-label={t("Search hosted repositories")} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Search repositories")} /><span>{t("{count} repositories", { count: filteredRepositories.length })}</span></div>
+                {showCreate && <form className="forge-pr-create" onSubmit={createPullRequest}><div className="forge-form-grid"><label><span>{t("Title")}</span><input className="control-input" value={title} onChange={(event) => setTitle(event.target.value)} /></label><label><span>{t("Source branch")}</span><input className="control-input" value={sourceBranch} onChange={(event) => setSourceBranch(event.target.value)} autoCapitalize="none" spellCheck={false} /></label><label><span>{t("Target branch")}</span><input className="control-input" value={targetBranch} onChange={(event) => setTargetBranch(event.target.value)} autoCapitalize="none" spellCheck={false} /></label><label className="forge-check-label"><input type="checkbox" checked={draft} onChange={(event) => setDraft(event.target.checked)} /> {t("Create as draft")}</label><label className="forge-token-field"><span>{t("Description")}</span><textarea className="control-input" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label></div><div className="forge-form-actions"><button className="control-button control-button--secondary" type="button" onClick={() => setShowCreate(false)}>{t("Cancel")}</button><button className="control-button control-button--primary" type="submit" disabled={working || !title.trim() || !sourceBranch.trim() || !targetBranch.trim()}>{working ? t("Creating…") : t("Create pull request")}</button></div></form>}
                 {message && <p className="forge-message" role="status">{message}</p>}
-                <div className="forge-repository-list">
-                  {loadingRepositories ? <p className="forge-empty" role="status">{t("Loading repositories…")}</p> : filteredRepositories.length === 0 ? <p className="forge-empty">{query ? t("No repositories match your search.") : t("No repositories found.")}</p> : filteredRepositories.map((repository) => (
-                    <article className="forge-repository" key={repository.id}>
-                      <div><strong>{repository.fullName}</strong><span>{repository.private ? t("Private") : t("Public")}{repository.archived ? ` · ${t("Archived")}` : ""}{repository.updatedAt ? ` · ${t("Updated {date}", { date: formatDate(repository.updatedAt) })}` : ""}</span></div>
-                      <button className="control-button control-button--secondary" type="button" disabled={repository.archived} onClick={() => onClone(repository.cloneUrl)}>{t("Clone")}</button>
-                    </article>
+                <div className="forge-repository-list forge-pr-list">
+                  {loadingPullRequests ? <p className="forge-empty" role="status">{t("Loading pull requests…")}</p> : pullRequests.length === 0 ? <p className="forge-empty">{t("No pull requests found.")}</p> : pullRequests.map((pullRequest) => (
+                    <article className="forge-pr" key={pullRequest.id}><div className="forge-pr-main"><div className="forge-pr-title"><strong>#{pullRequest.number} {pullRequest.title}</strong><span className="forge-status-badge">{pullRequest.state}</span>{pullRequest.draft && <span className="forge-status-badge">{t("Draft")}</span>}</div><span>{pullRequest.sourceBranch} → {pullRequest.targetBranch} · {pullRequest.author}</span><div className="forge-pr-statuses"><StatusBadge label={t("Merge")} value={pullRequest.mergeability} /><StatusBadge label={t("Review")} value={pullRequest.reviewStatus} /><StatusBadge label="CI" value={pullRequest.ciStatus} /></div></div><div className="forge-pr-actions"><button className="control-button control-button--secondary" type="button" disabled={working || !activeRepoId} title={!activeRepoId ? t("Open a local repository to check out this pull request.") : undefined} onClick={() => void checkoutPullRequest(pullRequest)}>{t("Checkout")}</button><button className="control-button control-button--primary" type="button" disabled={working || pullRequest.draft || pullRequest.mergeability === "conflicting" || !isOpenPullRequest(pullRequest.state)} onClick={() => { setPendingMerge(pullRequest); setSquash(false); setDeleteSourceBranch(false); }}>{t("Merge")}</button></div></article>
                   ))}
                 </div>
+              </>
+            ) : selected ? (
+              <>
+                <div className="forge-content-heading"><div><h3>{selected.displayName}</h3><p>{providerLabels[selected.provider]} · {selected.host}{selected.scope ? ` · ${selected.scope}` : ""}</p></div><div className="forge-account-actions"><button className="control-button control-button--secondary" type="button" disabled={loadingRepositories} onClick={() => void refreshRepositories()}>{t("Refresh")}</button><button className="control-button control-button--danger" type="button" onClick={() => setPendingDisconnect(true)}>{t("Disconnect")}</button></div></div>
+                <div className="forge-repository-toolbar"><input className="control-input" aria-label={t("Search hosted repositories")} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Search repositories")} /><span>{t("{count} repositories", { count: filteredRepositories.length })}</span></div>
+                {message && <p className="forge-message" role="status">{message}</p>}
+                <div className="forge-repository-list">{loadingRepositories ? <p className="forge-empty" role="status">{t("Loading repositories…")}</p> : filteredRepositories.length === 0 ? <p className="forge-empty">{query ? t("No repositories match your search.") : t("No repositories found.")}</p> : filteredRepositories.map((repository) => <article className="forge-repository" key={repository.id}><div><strong>{repository.fullName}</strong><span>{repository.private ? t("Private") : t("Public")}{repository.archived ? ` · ${t("Archived")}` : ""}{repository.updatedAt ? ` · ${t("Updated {date}", { date: formatDate(repository.updatedAt) })}` : ""}</span></div><div className="forge-repository-actions"><button className="control-button control-button--secondary" type="button" disabled={repository.archived} onClick={() => void openPullRequests(repository)}>{t("Pull requests")}</button><button className="control-button control-button--secondary" type="button" disabled={repository.archived} onClick={() => onClone(repository.cloneUrl)}>{t("Clone")}</button></div></article>)}</div>
               </>
             ) : null}
           </div>
         </div>
-        {pendingDisconnect && selected && (
-          <div className="forge-disconnect-confirm" role="alertdialog" aria-modal="true" aria-labelledby="forge-disconnect-title">
-            <div><h3 id="forge-disconnect-title">{t("Disconnect {name}?", { name: selected.displayName })}</h3><p>{t("The account metadata and its token in Git Credential Manager will be removed.")}</p></div>
-            <div><button className="control-button control-button--secondary" type="button" disabled={disconnecting} onClick={() => setPendingDisconnect(false)}>{t("Cancel")}</button><button className="control-button control-button--danger" type="button" disabled={disconnecting} onClick={() => void disconnect()}>{disconnecting ? t("Disconnecting…") : t("Disconnect account")}</button></div>
-          </div>
-        )}
+        {pendingDisconnect && selected && <div className="forge-disconnect-confirm" role="alertdialog" aria-modal="true" aria-labelledby="forge-disconnect-title"><div><h3 id="forge-disconnect-title">{t("Disconnect {name}?", { name: selected.displayName })}</h3><p>{t("The account metadata and its token in Git Credential Manager will be removed.")}</p></div><div><button className="control-button control-button--secondary" type="button" disabled={disconnecting} onClick={() => setPendingDisconnect(false)}>{t("Cancel")}</button><button className="control-button control-button--danger" type="button" disabled={disconnecting} onClick={() => void disconnect()}>{disconnecting ? t("Disconnecting…") : t("Disconnect account")}</button></div></div>}
+        {pendingMerge && <div className="forge-disconnect-confirm forge-merge-confirm" role="alertdialog" aria-modal="true" aria-labelledby="forge-merge-title"><div><h3 id="forge-merge-title">{t("Merge pull request #{number}?", { number: pendingMerge.number })}</h3><p>{pendingMerge.title}</p><code>{pendingMerge.sourceOid}</code><label className="forge-check-label"><input type="checkbox" checked={squash} onChange={(event) => setSquash(event.target.checked)} /> {t("Squash commits")}</label><label className="forge-check-label"><input type="checkbox" checked={deleteSourceBranch} onChange={(event) => setDeleteSourceBranch(event.target.checked)} /> {t("Delete source branch")}</label></div><div><button className="control-button control-button--secondary" type="button" disabled={working} onClick={() => setPendingMerge(undefined)}>{t("Cancel")}</button><button className="control-button control-button--danger" type="button" disabled={working} onClick={() => void mergePullRequest()}>{working ? t("Merging…") : t("Merge pull request")}</button></div></div>}
       </section>
     </div>
   );
 }
 
-function needsScope(provider: ForgeProvider) {
-  return provider === "bitbucket" || provider === "azureDevOps";
+function StatusBadge({ label, value }: { label: string; value: string }) {
+  return <span className={`forge-status-badge forge-status-badge--${value}`}>{label}: {t(statusLabel(value))}</span>;
 }
 
-function requiresUsername(provider: ForgeProvider) {
-  return provider === "bitbucket" || provider === "azureDevOps";
+const statusLabels = { mergeable: "Ready", conflicting: "Conflicts", blocked: "Blocked", checking: "Checking", approved: "Approved", changesRequested: "Changes requested", pending: "Pending", success: "Passed", failure: "Failed", cancelled: "Cancelled", unknown: "Unknown" } as const;
+function statusLabel(value: string): (typeof statusLabels)[keyof typeof statusLabels] {
+  return statusLabels[value as keyof typeof statusLabels] ?? "Unknown";
 }
 
-function formatDate(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(localeTag(), { dateStyle: "medium" }).format(date);
+function isOpenPullRequest(state: string) {
+  return ["open", "opened", "active"].includes(state.toLocaleLowerCase());
 }
+function needsScope(provider: ForgeProvider) { return provider === "bitbucket" || provider === "azureDevOps"; }
+function requiresUsername(provider: ForgeProvider) { return provider === "bitbucket" || provider === "azureDevOps"; }
+function formatDate(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(localeTag(), { dateStyle: "medium" }).format(date); }
