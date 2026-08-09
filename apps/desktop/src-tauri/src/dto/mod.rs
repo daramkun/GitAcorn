@@ -12,12 +12,101 @@ use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
     HeadState, HistoryPage, PathHistory, PathHistoryEntry, RepositoryOperation, RepositorySnapshot,
 };
-use persistence::OperationRecord;
+use persistence::{OperationRecord, WorkspaceRecord};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::path_display::display_path;
 use crate::state::{RepositoryIdentityState, SessionTabState};
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRepositoryDto {
+    pub path: String,
+    pub clone_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDto {
+    pub id: String,
+    pub name: String,
+    pub repositories: Vec<WorkspaceRepositoryDto>,
+}
+
+impl From<WorkspaceRecord> for WorkspaceDto {
+    fn from(workspace: WorkspaceRecord) -> Self {
+        Self {
+            id: workspace.id,
+            name: workspace.name,
+            repositories: workspace
+                .repositories
+                .into_iter()
+                .map(|repository| WorkspaceRepositoryDto {
+                    path: repository.path,
+                    clone_url: repository.clone_url,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspacesDto {
+    pub schema_version: u16,
+    pub workspaces: Vec<WorkspaceDto>,
+}
+
+impl From<Vec<WorkspaceRecord>> for WorkspacesDto {
+    fn from(workspaces: Vec<WorkspaceRecord>) -> Self {
+        Self {
+            schema_version: 1,
+            workspaces: workspaces.into_iter().map(WorkspaceDto::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRepositoryRequestDto {
+    pub path: String,
+    pub clone_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSaveRequestDto {
+    pub id: Option<String>,
+    pub name: String,
+    pub repositories: Vec<WorkspaceRepositoryRequestDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBatchResultDto {
+    pub path: String,
+    pub state: String,
+    pub message: String,
+}
+
+impl From<crate::state::WorkspaceBatchResult> for WorkspaceBatchResultDto {
+    fn from(result: crate::state::WorkspaceBatchResult) -> Self {
+        Self {
+            path: result.path,
+            state: result.state,
+            message: result.message,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBatchDto {
+    pub schema_version: u16,
+    pub operation: String,
+    pub results: Vec<WorkspaceBatchResultDto>,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

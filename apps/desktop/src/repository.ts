@@ -457,6 +457,58 @@ export type RemoteOperationOptions = {
 };
 
 
+export type WorkspaceRepositoryDto = {
+  path: string;
+  cloneUrl?: string;
+};
+
+export type WorkspaceDto = {
+  id: string;
+  name: string;
+  repositories: WorkspaceRepositoryDto[];
+};
+
+export type WorkspacesDto = {
+  schemaVersion: number;
+  workspaces: WorkspaceDto[];
+};
+
+export type WorkspaceSaveRequest = {
+  id?: string;
+  name: string;
+  repositories: WorkspaceRepositoryDto[];
+};
+
+export type WorkspaceBatchOperation = "clone" | "fetch" | "pull";
+
+export type WorkspaceBatchResultDto = {
+  path: string;
+  state: "succeeded" | "skipped" | "failed";
+  message: string;
+};
+
+export type WorkspaceBatchDto = {
+  schemaVersion: number;
+  operation: WorkspaceBatchOperation;
+  results: WorkspaceBatchResultDto[];
+};
+
+export function getWorkspaces(): Promise<WorkspacesDto> {
+  return invoke<WorkspacesDto>("workspaces");
+}
+
+export function saveWorkspace(request: WorkspaceSaveRequest): Promise<WorkspaceDto> {
+  return invoke<WorkspaceDto>("workspace_save", { request });
+}
+
+export function deleteWorkspace(id: string): Promise<void> {
+  return invoke<void>("workspace_delete", { id });
+}
+
+export function runWorkspaceBatch(id: string, operation: WorkspaceBatchOperation): Promise<WorkspaceBatchDto> {
+  return invoke<WorkspaceBatchDto>("workspace_batch", { id, operation });
+}
+
 export type ForgeProvider = "github" | "gitlab" | "bitbucket" | "azureDevOps";
 
 export type ForgeAccountDto = {

@@ -57,3 +57,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
   "NSDictionary",
   "NSString",
 ] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+test-support = { path = "../../../crates/test-support" }

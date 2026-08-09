@@ -22,12 +22,91 @@ use crate::dto::{
     RepositoryCommandRequestDto, RepositoryCommandResultDto, RepositoryGitIdentityDto,
     RepositoryInitRequestDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
     SessionDto, SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto,
-    SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorktreeCreateRequestDto,
+    SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorkspaceBatchDto,
+    WorkspaceBatchResultDto, WorkspaceDto, WorkspaceSaveRequestDto, WorkspacesDto,
+    WorktreeCreateRequestDto,
 };
 use crate::forge::{ForgePullRequestCreateRequest, ForgePullRequestMergeRequest};
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
 };
+
+#[tauri::command]
+pub async fn workspaces(state: State<'_, ApplicationState>) -> CommandResult<WorkspacesDto> {
+    state
+        .workspaces()
+        .await
+        .map(WorkspacesDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn workspace_save(
+    request: WorkspaceSaveRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<WorkspaceDto> {
+    let repositories = request
+        .repositories
+        .into_iter()
+        .map(|repository| persistence::WorkspaceRepositoryRecord {
+            path: repository.path,
+            clone_url: repository.clone_url,
+        })
+        .collect();
+    state
+        .save_workspace(request.id.as_deref(), &request.name, repositories)
+        .await
+        .map(WorkspaceDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn workspace_delete(id: String, state: State<'_, ApplicationState>) -> CommandResult<()> {
+    state
+        .delete_workspace(&id)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn workspace_batch(
+    id: String,
+    operation: String,
+    app: AppHandle,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<WorkspaceBatchDto> {
+    let workspace = state
+        .workspaces()
+        .await
+        .map_err(|error| AppErrorDto::from(&error))?
+        .into_iter()
+        .find(|workspace| workspace.id == id)
+        .ok_or_else(|| {
+            AppErrorDto::from(&AppError::InvalidRequest(
+                "Workspace was not found".to_owned(),
+            ))
+        })?;
+    let operation_for_task = operation.clone();
+    let results = tauri::async_runtime::spawn_blocking(move || {
+        app.state::<ApplicationState>()
+            .run_workspace_batch(&workspace, &operation_for_task)
+    })
+    .await
+    .map_err(|error| {
+        AppErrorDto::from(&AppError::InvalidRequest(format!(
+            "Workspace operation could not start: {error}"
+        )))
+    })?
+    .map_err(|error| AppErrorDto::from(&error))?;
+    Ok(WorkspaceBatchDto {
+        schema_version: 1,
+        operation,
+        results: results
+            .into_iter()
+            .map(WorkspaceBatchResultDto::from)
+            .collect(),
+    })
+}
 
 #[tauri::command]
 pub async fn forge_accounts(state: State<'_, ApplicationState>) -> CommandResult<ForgeAccountsDto> {

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Mutex, mpsc};
 use std::thread;
@@ -24,6 +24,7 @@ use git_domain::{
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use persistence::{
     ForgeAccountRecord, OperationRecord, OperationRecovery, SessionStore, SessionTab,
+    WorkspaceRecord, WorkspaceRepositoryRecord,
 };
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
@@ -58,6 +59,13 @@ pub struct SessionTabUpdate {
 pub struct RepositoryOpenSource {
     pub repository_name: String,
     pub worktree_path: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceBatchResult {
+    pub path: String,
+    pub state: String,
+    pub message: String,
 }
 
 pub struct RepositoryCommandExecution {
@@ -2176,6 +2184,155 @@ impl ApplicationState {
             .map(|repository| repository.descriptor.clone())
     }
 
+    pub async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, AppError> {
+        self.session
+            .list_workspaces()
+            .await
+            .map_err(persistence_error)
+    }
+
+    pub async fn save_workspace(
+        &self,
+        id: Option<&str>,
+        name: &str,
+        repositories: Vec<WorkspaceRepositoryRecord>,
+    ) -> Result<WorkspaceRecord, AppError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "Enter a workspace name".to_owned(),
+            ));
+        }
+        if repositories.len() > 100 {
+            return Err(AppError::InvalidRequest(
+                "A workspace can contain up to 100 repositories".to_owned(),
+            ));
+        }
+        let mut normalized = Vec::with_capacity(repositories.len());
+        let mut paths = std::collections::HashSet::new();
+        for repository in repositories {
+            let path = repository.path.trim();
+            if path.is_empty() {
+                return Err(AppError::InvalidRequest(
+                    "Enter a repository path".to_owned(),
+                ));
+            }
+            let duplicate_key = path.to_lowercase();
+            if !paths.insert(duplicate_key) {
+                return Err(AppError::InvalidRequest(
+                    "Repository paths must be unique".to_owned(),
+                ));
+            }
+            normalized.push(WorkspaceRepositoryRecord {
+                path: path.to_owned(),
+                clone_url: repository
+                    .clone_url
+                    .map(|url| url.trim().to_owned())
+                    .filter(|url| !url.is_empty()),
+            });
+        }
+        let workspace = WorkspaceRecord {
+            id: id
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            name: name.to_owned(),
+            repositories: normalized,
+        };
+        self.session
+            .upsert_workspace(&workspace)
+            .await
+            .map_err(persistence_error)?;
+        Ok(workspace)
+    }
+
+    pub async fn delete_workspace(&self, id: &str) -> Result<(), AppError> {
+        self.session
+            .delete_workspace(id)
+            .await
+            .map_err(persistence_error)
+    }
+
+    pub fn run_workspace_batch(
+        &self,
+        workspace: &WorkspaceRecord,
+        kind: &str,
+    ) -> Result<Vec<WorkspaceBatchResult>, AppError> {
+        if !matches!(kind, "clone" | "fetch" | "pull") {
+            return Err(AppError::InvalidRequest(
+                "Workspace operation is invalid".to_owned(),
+            ));
+        }
+        let cancellation = CancellationToken::default();
+        let mut results = Vec::with_capacity(workspace.repositories.len());
+        for repository in &workspace.repositories {
+            let path = PathBuf::from(&repository.path);
+            let result = match kind {
+                "clone" => {
+                    if path.exists() {
+                        results.push(WorkspaceBatchResult {
+                            path: repository.path.clone(),
+                            state: "skipped".to_owned(),
+                            message: "Destination already exists".to_owned(),
+                        });
+                        continue;
+                    }
+                    let Some(remote_url) = repository.clone_url.as_deref() else {
+                        results.push(WorkspaceBatchResult {
+                            path: repository.path.clone(),
+                            state: "skipped".to_owned(),
+                            message: "Clone URL is not configured".to_owned(),
+                        });
+                        continue;
+                    };
+                    self.service.clone_repository(
+                        &CloneRequest {
+                            remote_url: remote_url.to_owned(),
+                            destination: path,
+                        },
+                        &cancellation,
+                        |_| {},
+                    )
+                }
+                "fetch" | "pull" => self.service.discover(&path).and_then(|descriptor| {
+                    self.scheduler.write(descriptor.id, || {
+                        self.service.remote_sync(
+                            &descriptor,
+                            &RemoteRequest {
+                                kind: if kind == "fetch" {
+                                    app_core::RemoteOperationKind::Fetch
+                                } else {
+                                    app_core::RemoteOperationKind::Pull
+                                },
+                                remote: None,
+                                fetch_tags: false,
+                                auto_stash: false,
+                                fast_forward_only: kind == "pull",
+                                force_with_lease: false,
+                            },
+                            &cancellation,
+                            |_| {},
+                        )
+                    })
+                }),
+                _ => unreachable!(),
+            };
+            results.push(match result {
+                Ok(()) => WorkspaceBatchResult {
+                    path: repository.path.clone(),
+                    state: "succeeded".to_owned(),
+                    message: format!("{kind} completed"),
+                },
+                Err(error) => WorkspaceBatchResult {
+                    path: repository.path.clone(),
+                    state: "failed".to_owned(),
+                    message: error.to_string(),
+                },
+            });
+        }
+        Ok(results)
+    }
+
     pub fn begin_remote_operation(&self, repo_id: &str) -> Result<(Uuid, RepoId), AppError> {
         let repo_id = parse_repo_id(repo_id)?;
         self.descriptor(repo_id)?;
@@ -2427,8 +2584,10 @@ fn forge_account_from_record(record: ForgeAccountRecord) -> Result<ForgeAccount,
 #[cfg(test)]
 mod tests {
     use app_core::AppError;
+    use persistence::{SessionStore, WorkspaceRecord, WorkspaceRepositoryRecord};
+    use test_support::TestRepository;
 
-    use super::ensure_revision;
+    use super::{ApplicationState, ensure_revision};
 
     #[test]
     fn rejects_a_stale_write_revision() {
@@ -2440,5 +2599,63 @@ mod tests {
                 actual: 5
             }
         ));
+    }
+    #[tokio::test]
+    async fn workspace_batch_clones_fetches_and_fast_forward_pulls_local_repositories() {
+        let source = TestRepository::init();
+        let destination_root = tempfile::tempdir().expect("destination root");
+        let destination = destination_root.path().join("clone");
+        let missing = destination_root.path().join("missing");
+        let workspace = WorkspaceRecord {
+            id: "workspace".to_owned(),
+            name: "Workspace".to_owned(),
+            repositories: vec![WorkspaceRepositoryRecord {
+                path: destination.to_string_lossy().into_owned(),
+                clone_url: Some(source.path().to_string_lossy().into_owned()),
+            }],
+        };
+        let state = ApplicationState::new(SessionStore::memory().await.expect("memory store"));
+
+        let clone_results = state
+            .run_workspace_batch(&workspace, "clone")
+            .expect("clone batch");
+        assert_eq!(clone_results[0].state, "succeeded");
+        assert!(destination.join(".git").is_dir());
+
+        let fetch_workspace = WorkspaceRecord {
+            repositories: vec![
+                workspace.repositories[0].clone(),
+                WorkspaceRepositoryRecord {
+                    path: missing.to_string_lossy().into_owned(),
+                    clone_url: None,
+                },
+            ],
+            ..workspace.clone()
+        };
+        let fetch_results = state
+            .run_workspace_batch(&fetch_workspace, "fetch")
+            .expect("fetch batch");
+        assert_eq!(
+            fetch_results
+                .iter()
+                .map(|result| result.state.as_str())
+                .collect::<Vec<_>>(),
+            ["succeeded", "failed"]
+        );
+
+        source.write("tracked.txt", "updated\n");
+        source.git(["add", "tracked.txt"]);
+        source.git(["commit", "-m", "update"]);
+
+        let pull_results = state
+            .run_workspace_batch(&workspace, "pull")
+            .expect("pull batch");
+        assert_eq!(pull_results[0].state, "succeeded");
+        assert_eq!(
+            std::fs::read_to_string(destination.join("tracked.txt"))
+                .expect("read pulled file")
+                .trim_end(),
+            "updated"
+        );
     }
 }

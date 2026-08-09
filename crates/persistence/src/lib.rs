@@ -72,6 +72,21 @@ pub struct ForgeAccountRecord {
     pub scope: Option<String>,
     pub avatar_url: Option<String>,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRepositoryRecord {
+    pub path: String,
+    pub clone_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRecord {
+    pub id: String,
+    pub name: String,
+    pub repositories: Vec<WorkspaceRepositoryRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationRecovery<'a> {
     pub action: &'a str,
@@ -120,6 +135,7 @@ impl SessionStore {
         .await?;
         create_operation_table(&pool).await?;
         create_forge_account_table(&pool).await?;
+        create_workspace_tables(&pool).await?;
         let has_worktree_id: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('session_tabs') WHERE name = 'worktree_id'",
         )
@@ -201,6 +217,7 @@ impl SessionStore {
         .await?;
         create_operation_table(&pool).await?;
         create_forge_account_table(&pool).await?;
+        create_workspace_tables(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -499,6 +516,71 @@ impl SessionStore {
             .await?;
         Ok(())
     }
+    pub async fn list_workspaces(&self) -> Result<Vec<WorkspaceRecord>, sqlx::Error> {
+        let rows = sqlx::query("SELECT id, name FROM workspaces ORDER BY name, id")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut workspaces = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            let repository_rows = sqlx::query(
+                "SELECT path, clone_url FROM workspace_repositories WHERE workspace_id = ? ORDER BY position, path",
+            )
+            .bind(&id)
+            .fetch_all(&self.pool)
+            .await?;
+            workspaces.push(WorkspaceRecord {
+                id,
+                name: row.get("name"),
+                repositories: repository_rows
+                    .into_iter()
+                    .map(|repository| WorkspaceRepositoryRecord {
+                        path: repository.get("path"),
+                        clone_url: repository.get("clone_url"),
+                    })
+                    .collect(),
+            });
+        }
+        Ok(workspaces)
+    }
+
+    pub async fn upsert_workspace(&self, workspace: &WorkspaceRecord) -> Result<(), sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO workspaces (id, name) VALUES (?, ?)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+        )
+        .bind(&workspace.id)
+        .bind(&workspace.name)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query("DELETE FROM workspace_repositories WHERE workspace_id = ?")
+            .bind(&workspace.id)
+            .execute(&mut *transaction)
+            .await?;
+        for (position, repository) in workspace.repositories.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO workspace_repositories (workspace_id, path, clone_url, position)
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(&workspace.id)
+            .bind(&repository.path)
+            .bind(&repository.clone_url)
+            .bind(position as i64)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await
+    }
+
+    pub async fn delete_workspace(&self, id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM workspaces WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn close(&self, repo_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM session_tabs WHERE repo_id = ?")
             .bind(repo_id)
@@ -537,6 +619,30 @@ async fn create_forge_account_table(pool: &SqlitePool) -> Result<(), sqlx::Error
     .await?;
     Ok(())
 }
+async fn create_workspace_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS workspaces (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS workspace_repositories (
+            workspace_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            clone_url TEXT,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (workspace_id, path),
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn create_operation_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS operation_history (
@@ -583,7 +689,7 @@ async fn create_operation_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 mod tests {
     use super::{
         ForgeAccountRecord, OperationRecovery, PersistenceSettings, SessionStore, SessionTab,
-        SqliteConnectOptions, SqlitePool,
+        SqliteConnectOptions, SqlitePool, WorkspaceRecord, WorkspaceRepositoryRecord,
     };
 
     #[test]
@@ -885,5 +991,67 @@ mod tests {
                 .iter()
                 .any(|forbidden| name.contains(forbidden))
         }));
+    }
+    #[tokio::test]
+    async fn persists_workspace_repository_order_and_cascades_delete() {
+        let store = SessionStore::memory().await.expect("memory store");
+        let workspace = WorkspaceRecord {
+            id: "workspace-one".to_owned(),
+            name: "Client application".to_owned(),
+            repositories: vec![
+                WorkspaceRepositoryRecord {
+                    path: "C:/repos/frontend".to_owned(),
+                    clone_url: Some("https://example.invalid/frontend.git".to_owned()),
+                },
+                WorkspaceRepositoryRecord {
+                    path: "C:/repos/backend".to_owned(),
+                    clone_url: None,
+                },
+            ],
+        };
+
+        store
+            .upsert_workspace(&workspace)
+            .await
+            .expect("save workspace");
+        assert_eq!(
+            store.list_workspaces().await.expect("list workspaces"),
+            vec![workspace.clone()]
+        );
+
+        let renamed = WorkspaceRecord {
+            name: "Renamed workspace".to_owned(),
+            repositories: workspace.repositories.into_iter().rev().collect(),
+            ..workspace
+        };
+        store
+            .upsert_workspace(&renamed)
+            .await
+            .expect("update workspace");
+        assert_eq!(
+            store
+                .list_workspaces()
+                .await
+                .expect("list updated workspace"),
+            vec![renamed]
+        );
+
+        store
+            .delete_workspace("workspace-one")
+            .await
+            .expect("delete workspace");
+        assert!(
+            store
+                .list_workspaces()
+                .await
+                .expect("list deleted workspace")
+                .is_empty()
+        );
+        let repository_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM workspace_repositories")
+                .fetch_one(&store.pool)
+                .await
+                .expect("count workspace repositories");
+        assert_eq!(repository_count, 0);
     }
 }

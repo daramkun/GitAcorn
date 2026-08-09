@@ -36,6 +36,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::workspaces,
+            commands::workspace_save,
+            commands::workspace_delete,
+            commands::workspace_batch,
             commands::forge_accounts,
             commands::forge_account_connect,
             commands::forge_account_disconnect,

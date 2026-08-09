@@ -113,7 +113,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 - [x] command palette, repository terminal, 사용자 정의 command
 - [x] GitHub/GitLab/Bitbucket/Azure DevOps 계정과 저장소 탐색
 - [x] PR/MR 생성·조회·checkout·merge와 review/CI 상태
-- [ ] 여러 저장소 Workspace와 일괄 clone/fetch/pull
+- [x] 여러 저장소 Workspace와 일괄 clone/fetch/pull
 - [ ] 다중 계정/profile, SSH key 및 Git identity profile
 - [ ] Git-flow와 branch naming preset
 
@@ -153,3 +153,5 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P1.3 Bisect 시각화 | 완료 | known-good·known-bad 범위 시작, History 그래프의 현재 후보·good·bad·skip 표식, good·bad·skip 판정과 원래 브랜치 복원, clean worktree·revision 보호 |
 | P1.4 명령 팔레트와 저장소 도구 | 완료 | 전역 명령 팔레트와 Ctrl+Shift+P, 저장소 터미널 열기, 배열 인자 기반 사용자 명령 저장·실행 확인·stdout/stderr 결과 팝업 |
 | P1.5 Forge 계정과 저장소 탐색 | 완료 | GitHub·GitLab·Bitbucket·Azure DevOps 토큰 검증, Git credential helper 보관, 비밀값 없는 계정 메타데이터, 저장소 검색·복제 브라우저 |
+| P1.6 Forge PR/MR workflow | 완료 | GitHub·GitLab·Bitbucket·Azure DevOps PR/MR 조회·생성·checkout·merge, review/CI 상태, source OID 검증과 merged 상태 보호 |
+| P1.7 여러 저장소 Workspace | 완료 | 이름 있는 저장소 그룹 영속화, 열린 저장소 추가, 누락 경로 clone과 저장소별 fetch·fast-forward pull 결과, 부분 실패 계속 처리 및 실행 확인 팝업 |
