@@ -1,10 +1,10 @@
 use app_core::{
     AppErrorDto, BinaryPreview, BranchRequest, CloneRequest, CommitFile, CommitRequest,
     ComparePatch, ExternalDiffResult, ExternalDiffTool, GitIdentity, GitReference, GitRemote,
-    InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
-    InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus, PatchSelection, ReferenceKind,
-    ReflogEntry, RemoteOperationKind, RemoteRequest, RemoteTagSummary, RepositorySidebar,
-    SignatureSettings, SignatureStatus, WorktreeCreateRequest,
+    HistoryMutationPreview, InteractiveRebaseAction, InteractiveRebaseItem,
+    InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus,
+    PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind, RemoteRequest,
+    RemoteTagSummary, RepositorySidebar, SignatureSettings, SignatureStatus, WorktreeCreateRequest,
 };
 use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
@@ -483,6 +483,35 @@ pub struct InteractiveRebasePreviewDto {
     pub head_oid: String,
     pub branch: String,
     pub commits: Vec<InteractiveRebaseCommitDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryMutationPreviewDto {
+    pub schema_version: u16,
+    pub operation: &'static str,
+    pub commit_count: usize,
+    pub worktree_clean: bool,
+    pub can_apply: bool,
+    pub conflicts: Vec<String>,
+    pub message: Option<String>,
+}
+
+impl From<HistoryMutationPreview> for HistoryMutationPreviewDto {
+    fn from(preview: HistoryMutationPreview) -> Self {
+        Self {
+            schema_version: 1,
+            operation: match preview.operation {
+                app_core::HistoryOperation::CherryPick => "cherry-pick",
+                app_core::HistoryOperation::Revert => "revert",
+            },
+            commit_count: preview.commit_count,
+            worktree_clean: preview.worktree_clean,
+            can_apply: preview.can_apply,
+            conflicts: preview.conflicts,
+            message: preview.message,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

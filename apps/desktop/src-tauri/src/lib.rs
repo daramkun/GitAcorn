@@ -97,6 +97,7 @@ pub fn run() {
             commands::branch_rebase,
             commands::branch_reset,
             commands::history_mutate,
+            commands::history_preview,
             commands::history_continue,
             commands::history_abort,
             commands::history_skip,

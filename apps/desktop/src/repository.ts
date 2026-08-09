@@ -755,6 +755,16 @@ export function resetBranch(
 
 export type HistoryMutation = "cherry-pick" | "revert";
 
+export type HistoryMutationPreviewDto = {
+  schemaVersion: 1;
+  operation: HistoryMutation;
+  commitCount: number;
+  worktreeClean: boolean;
+  canApply: boolean;
+  conflicts: string[];
+  message?: string | null;
+};
+
 export function mutateHistory(
   repoId: string,
   revision: number,
@@ -763,6 +773,22 @@ export function mutateHistory(
   mainline?: number,
 ): Promise<RepositorySnapshotDto> {
   return invoke<RepositorySnapshotDto>("history_mutate", {
+    repoId,
+    revision,
+    operation,
+    oids,
+    mainline,
+  });
+}
+
+export function previewHistoryMutation(
+  repoId: string,
+  revision: number,
+  operation: HistoryMutation,
+  oids: string[],
+  mainline?: number,
+): Promise<HistoryMutationPreviewDto> {
+  return invoke<HistoryMutationPreviewDto>("history_preview", {
     repoId,
     revision,
     operation,

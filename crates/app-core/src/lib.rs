@@ -14,12 +14,12 @@ pub use remote::{CloneRequest, RemoteOperationKind, RemoteProgress, RemoteReques
 pub use repository::{
     BinaryPreview, BranchRequest, CommitFile, CommitRequest, ComparePatch, DiffTarget,
     ExternalDiffResult, ExternalDiffTool, GitIdentity, GitIdentitySettings, GitReference,
-    GitRemote, GitVersion, HistoryFilter, HistoryOperation, InteractiveRebaseAction,
-    InteractiveRebaseCommit, InteractiveRebaseItem, InteractiveRebasePreview,
-    InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsOperationKind, LfsRequest, LfsStatus,
-    PatchSelection, RefSummary, ReferenceKind, ReflogEntry, RemoteTagSummary, RepositoryService,
-    RepositorySidebar, SignatureSettings, SignatureStatus, StashSummary, WorktreeCreateRequest,
-    WorktreeSummary,
+    GitRemote, GitVersion, HistoryFilter, HistoryMutationPreview, HistoryOperation,
+    InteractiveRebaseAction, InteractiveRebaseCommit, InteractiveRebaseItem,
+    InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsOperationKind,
+    LfsRequest, LfsStatus, PatchSelection, RefSummary, ReferenceKind, ReflogEntry,
+    RemoteTagSummary, RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus,
+    StashSummary, WorktreeCreateRequest, WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;
 pub use workspace::{ConflictResolution, StashRequest};

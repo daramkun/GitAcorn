@@ -336,6 +336,16 @@ pub enum HistoryOperation {
     Revert,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryMutationPreview {
+    pub operation: HistoryOperation,
+    pub commit_count: usize,
+    pub worktree_clean: bool,
+    pub can_apply: bool,
+    pub conflicts: Vec<String>,
+    pub message: Option<String>,
+}
+
 impl std::fmt::Display for GitVersion {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
@@ -1379,19 +1389,11 @@ impl RepositoryService {
         mainline: Option<usize>,
     ) -> Result<(), AppError> {
         self.validate_history_commits(repository, oids, mainline)?;
-        let mut args = vec![
-            OsString::from("cherry-pick"),
-            OsString::from("--no-edit"),
-            OsString::from("--allow-empty"),
-        ];
-        if let Some(mainline) = mainline {
-            args.extend([
-                OsString::from("--mainline"),
-                OsString::from(mainline.to_string()),
-            ]);
-        }
-        args.extend(oids.iter().map(OsString::from));
-        self.run_history_operation(repository, args, HistoryOperation::CherryPick)
+        self.run_history_operation(
+            repository,
+            history_operation_args(HistoryOperation::CherryPick, oids, mainline),
+            HistoryOperation::CherryPick,
+        )
     }
 
     pub fn revert(
@@ -1409,15 +1411,106 @@ impl RepositoryService {
         mainline: Option<usize>,
     ) -> Result<(), AppError> {
         self.validate_history_commits(repository, oids, mainline)?;
-        let mut args = vec![OsString::from("revert"), OsString::from("--no-edit")];
-        if let Some(mainline) = mainline {
-            args.extend([
-                OsString::from("--mainline"),
-                OsString::from(mainline.to_string()),
-            ]);
+        self.run_history_operation(
+            repository,
+            history_operation_args(HistoryOperation::Revert, oids, mainline),
+            HistoryOperation::Revert,
+        )
+    }
+
+    pub fn preview_history_operation(
+        &self,
+        repository: &RepositoryDescriptor,
+        operation: HistoryOperation,
+        oids: &[String],
+        mainline: Option<usize>,
+    ) -> Result<HistoryMutationPreview, AppError> {
+        self.validate_history_selection(repository, oids, mainline)?;
+        let worktree_clean = self.is_worktree_clean(repository)?;
+        if !worktree_clean {
+            return Ok(HistoryMutationPreview {
+                operation,
+                commit_count: oids.len(),
+                worktree_clean,
+                can_apply: false,
+                conflicts: Vec::new(),
+                message: Some(
+                    "Commit or stash worktree changes before applying this operation.".to_owned(),
+                ),
+            });
         }
-        args.extend(oids.iter().map(OsString::from));
-        self.run_history_operation(repository, args, HistoryOperation::Revert)
+
+        let current_head = self.current_head_oid(repository)?.ok_or_else(|| {
+            AppError::InvalidRequest("History operations require an existing HEAD".to_owned())
+        })?;
+        let parent = tempfile::tempdir().map_err(|error| {
+            AppError::InvalidRequest(format!("Could not create preview folder: {error}"))
+        })?;
+        let preview_path = parent.path().join("worktree");
+        let mut add_request = GitRequest::new([
+            OsString::from("worktree"),
+            OsString::from("add"),
+            OsString::from("--detach"),
+            preview_path.as_os_str().to_owned(),
+            OsString::from(&current_head),
+        ]);
+        add_request.working_directory = Some(repository.worktree_path.clone());
+        add_request.timeout = Duration::from_secs(60);
+        ensure_success(self.run(add_request)?)?;
+
+        let mut operation_request =
+            GitRequest::new(history_operation_args(operation, oids, mainline));
+        operation_request.working_directory = Some(preview_path.clone());
+        operation_request.timeout = Duration::from_secs(300);
+        let operation_output = self.run(operation_request)?;
+        let preview = if operation_output.exit_code == 0 {
+            HistoryMutationPreview {
+                operation,
+                commit_count: oids.len(),
+                worktree_clean,
+                can_apply: true,
+                conflicts: Vec::new(),
+                message: Some("No conflicts detected in the clean preview.".to_owned()),
+            }
+        } else {
+            let mut conflict_request = GitRequest::new([
+                OsString::from("diff"),
+                OsString::from("--name-only"),
+                OsString::from("--diff-filter=U"),
+                OsString::from("-z"),
+            ]);
+            conflict_request.working_directory = Some(preview_path.clone());
+            conflict_request.timeout = Duration::from_secs(10);
+            let conflicts = self
+                .run(conflict_request)?
+                .stdout
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .map(|path| String::from_utf8_lossy(path).into_owned())
+                .collect::<Vec<_>>();
+            let diagnostic = String::from_utf8_lossy(&operation_output.stderr)
+                .trim()
+                .to_owned();
+            HistoryMutationPreview {
+                operation,
+                commit_count: oids.len(),
+                worktree_clean,
+                can_apply: false,
+                conflicts,
+                message: (!diagnostic.is_empty()).then_some(diagnostic),
+            }
+        };
+
+        let mut remove_request = GitRequest::new([
+            OsString::from("worktree"),
+            OsString::from("remove"),
+            OsString::from("--force"),
+            preview_path.as_os_str().to_owned(),
+        ]);
+        remove_request.working_directory = Some(repository.worktree_path.clone());
+        remove_request.timeout = Duration::from_secs(60);
+        ensure_success(self.run(remove_request)?)?;
+        Ok(preview)
     }
 
     pub fn continue_history_operation(
@@ -1461,14 +1554,24 @@ impl RepositoryService {
         oids: &[String],
         mainline: Option<usize>,
     ) -> Result<(), AppError> {
-        if oids.is_empty() {
-            return Err(AppError::InvalidRequest(
-                "Select at least one commit".to_owned(),
-            ));
-        }
+        self.validate_history_selection(repository, oids, mainline)?;
         if !self.is_worktree_clean(repository)? {
             return Err(AppError::InvalidRequest(
                 "Commit history operations require a clean worktree".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_history_selection(
+        &self,
+        repository: &RepositoryDescriptor,
+        oids: &[String],
+        mainline: Option<usize>,
+    ) -> Result<(), AppError> {
+        if oids.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "Select at least one commit".to_owned(),
             ));
         }
         for oid in oids {
@@ -3979,6 +4082,29 @@ fn validate_rebase_plan(
 
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
+fn history_operation_args(
+    operation: HistoryOperation,
+    oids: &[String],
+    mainline: Option<usize>,
+) -> Vec<OsString> {
+    let mut args = match operation {
+        HistoryOperation::CherryPick => vec![
+            OsString::from("cherry-pick"),
+            OsString::from("--no-edit"),
+            OsString::from("--allow-empty"),
+        ],
+        HistoryOperation::Revert => vec![OsString::from("revert"), OsString::from("--no-edit")],
+    };
+    if let Some(mainline) = mainline {
+        args.extend([
+            OsString::from("--mainline"),
+            OsString::from(mainline.to_string()),
+        ]);
+    }
+    args.extend(oids.iter().map(OsString::from));
+    args
 }
 
 fn validate_identity_value(value: Option<&str>) -> Result<Option<String>, AppError> {

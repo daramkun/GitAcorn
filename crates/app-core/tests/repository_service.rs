@@ -209,6 +209,17 @@ fn cherry_pick_and_revert_round_trip_clean_commits() {
 
     let service = RepositoryService::default();
     let repository = service.discover(fixture.path()).expect("discover");
+    let preview = service
+        .preview_history_operation(
+            &repository,
+            HistoryOperation::CherryPick,
+            std::slice::from_ref(&source),
+            None,
+        )
+        .expect("preview cherry-pick");
+    assert!(preview.can_apply);
+    assert!(preview.worktree_clean);
+    assert!(preview.conflicts.is_empty());
     service
         .cherry_pick(&repository, std::slice::from_ref(&source))
         .expect("cherry-pick");
@@ -308,6 +319,26 @@ fn cherry_pick_conflict_exposes_operation_and_supports_continue_and_abort() {
 
     let service = RepositoryService::default();
     let repository = service.discover(fixture.path()).expect("discover");
+    let preview = service
+        .preview_history_operation(
+            &repository,
+            HistoryOperation::CherryPick,
+            std::slice::from_ref(&source),
+            None,
+        )
+        .expect("preview conflicting cherry-pick");
+    assert!(!preview.can_apply);
+    assert!(preview.worktree_clean);
+    assert_eq!(preview.conflicts, vec!["shared.txt"]);
+    assert_eq!(
+        service.current_head_oid(&repository).expect("preview head"),
+        Some(
+            String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+                .expect("main head")
+                .trim()
+                .to_owned()
+        )
+    );
     service
         .cherry_pick(&repository, std::slice::from_ref(&source))
         .expect("conflicting cherry-pick remains recoverable");

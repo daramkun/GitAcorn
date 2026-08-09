@@ -12,14 +12,15 @@ use crate::dto::{
     AppInfoDto, BinaryPreviewDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto,
     CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto, DiffDto,
     ExternalDiffResultDto, ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto,
-    GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto, HistoryPageDto,
-    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto,
-    LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
-    OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
-    RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
-    RepositoryGitIdentityDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
-    SessionDto, SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto,
-    SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorktreeCreateRequestDto,
+    GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto,
+    HistoryMutationPreviewDto, HistoryPageDto, InteractiveRebasePreviewDto,
+    InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto, LfsOperationRequestDto,
+    LfsStatusDto, OperationEventDto, OperationRecordDto, OperationStartedDto, PatchSelectionDto,
+    PathHistoryDto, ReferenceDto, ReflogEntryDto, RemoteMutationRequestDto,
+    RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto, RepositoryGitIdentityDto,
+    RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
+    SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto, SignatureStatusDto,
+    StashRequestDto, SubmoduleAddRequestDto, WorktreeCreateRequestDto,
 };
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
@@ -952,6 +953,22 @@ pub async fn history_mutate(
         )
     })
     .await
+}
+
+#[tauri::command]
+pub fn history_preview(
+    repo_id: String,
+    revision: u64,
+    operation: String,
+    oids: Vec<String>,
+    mainline: Option<usize>,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<HistoryMutationPreviewDto> {
+    let operation = parse_history_operation(&operation)?;
+    state
+        .preview_history_mutation(&repo_id, revision, operation, &oids, mainline)
+        .map(HistoryMutationPreviewDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
 }
 
 #[tauri::command]

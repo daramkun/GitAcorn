@@ -61,6 +61,7 @@ import {
   mergeBranch,
   mutateHistory,
   openRepository,
+  previewHistoryMutation,
   previewInteractiveRebase,
   renameBranch,
   reorderSessionTabs,
@@ -184,6 +185,7 @@ vi.mock("./windowControls", () => ({
   listenForRepositoryChanges: vi.fn(),
   mergeBranch: vi.fn(),
   mutateHistory: vi.fn(),
+  previewHistoryMutation: vi.fn(),
   skipHistory: vi.fn(),
   previewInteractiveRebase: vi.fn(),
   rebaseBranch: vi.fn(),
@@ -211,6 +213,7 @@ const mockedChooseRepository = vi.mocked(chooseRepositoryDirectory);
 const mockedOpenRepository = vi.mocked(openRepository);
 const mockedAddSubmodule = vi.mocked(addSubmodule);
 const mockedPreviewInteractiveRebase = vi.mocked(previewInteractiveRebase);
+const mockedPreviewHistoryMutation = vi.mocked(previewHistoryMutation);
 const mockedRestoreSession = vi.mocked(restoreSession);
 const mockedActivateTab = vi.mocked(activateSessionTab);
 const mockedActivateWorktree = vi.mocked(activateWorktree);
@@ -500,6 +503,15 @@ describe("App", () => {
     mockedAbortHistory.mockResolvedValue(snapshot);
     mockedContinueHistory.mockResolvedValue(snapshot);
     mockedMutateHistory.mockResolvedValue({ ...snapshot, revision: 2, changes: [] });
+    mockedPreviewHistoryMutation.mockResolvedValue({
+      schemaVersion: 1,
+      operation: "cherry-pick",
+      commitCount: 1,
+      worktreeClean: true,
+      canApply: true,
+      conflicts: [],
+      message: "No conflicts detected in the clean preview.",
+    });
     mockedAbortRebase.mockResolvedValue(snapshot);
     mockedContinueRebase.mockResolvedValue(snapshot);
     mockedSkipRebase.mockResolvedValue(snapshot);
@@ -1011,6 +1023,15 @@ describe("App", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Cherry-pick commit" });
     expect(within(dialog).getByText(/2 selected commit/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockedPreviewHistoryMutation).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "cherry-pick",
+        [secondOid, firstOid],
+        undefined,
+      ),
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: "Cherry-pick commit" }));
     await waitFor(() =>
       expect(mockedMutateHistory).toHaveBeenCalledWith(
@@ -1064,6 +1085,15 @@ describe("App", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Cherry-pick commit" });
     expect(within(dialog).getByRole("combobox", { name: "Mainline parent" })).toHaveValue("1");
+    await waitFor(() =>
+      expect(mockedPreviewHistoryMutation).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        "cherry-pick",
+        [mergeOid],
+        1,
+      ),
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: "Cherry-pick commit" }));
     await waitFor(() =>
       expect(mockedMutateHistory).toHaveBeenCalledWith(

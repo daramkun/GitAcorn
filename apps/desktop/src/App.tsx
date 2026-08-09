@@ -81,6 +81,7 @@ import {
   mutateHistory,
   normalizeAppError,
   openRepository,
+  previewHistoryMutation,
   previewInteractiveRebase,
   rebaseBranch,
   resetBranch,
@@ -138,6 +139,7 @@ import {
   type InteractiveRebaseAction,
   type InteractiveRebasePreviewDto,
   type HistoryMutation,
+  type HistoryMutationPreviewDto,
   type OperationEventDto,
   type OperationRecordDto,
   type RemoteOperationOptions,
@@ -165,6 +167,7 @@ type HistoryMutationPreview = {
   operation: HistoryMutation;
   commits: HistoryCommit[];
   mainline?: number;
+  preflight?: HistoryMutationPreviewDto;
 };
 type AppInfoState =
   | { status: "loading" }
@@ -8747,6 +8750,37 @@ function HistoryView({
     }
   }
 
+  async function refreshHistoryMutationPreview(
+    operation: HistoryMutation,
+    commits: HistoryCommit[],
+    mainline?: number,
+  ) {
+    const oids = commits.map((commit) => commit.oid);
+    try {
+      const preflight = await previewHistoryMutation(
+        snapshot.repository.id,
+        snapshot.revision,
+        operation,
+        oids,
+        mainline,
+      );
+      setHistoryMutationPreview((current) => {
+        if (
+          !current ||
+          current.operation !== operation ||
+          current.mainline !== mainline ||
+          current.commits.length !== commits.length ||
+          current.commits.some((commit, index) => commit.oid !== oids[index])
+        ) {
+          return current;
+        }
+        return { ...current, preflight };
+      });
+    } catch (reason: unknown) {
+      onError(reason);
+    }
+  }
+
   function openHistoryMutationPreview(
     commit: HistoryCommit,
     operation: HistoryMutation,
@@ -8759,15 +8793,17 @@ function HistoryView({
       ? selectedCommits
       : [commit];
     const mergeCommit = commits.find((entry) => entry.parents.length > 1);
-    setHistoryMutationPreview({
+    const preview = {
       operation,
       commits,
       mainline: mergeCommit ? 1 : undefined,
-    });
+    } satisfies HistoryMutationPreview;
+    setHistoryMutationPreview(preview);
+    void refreshHistoryMutationPreview(preview.operation, preview.commits, preview.mainline);
   }
 
   async function runHistoryMutation() {
-    if (!historyMutationPreview) return;
+    if (!historyMutationPreview || !historyMutationPreview.preflight?.canApply) return;
     onClearError();
     setHistoryMutationBusy(true);
     try {
@@ -9660,6 +9696,36 @@ function HistoryView({
               ) : (
                 <p>{t("The worktree is clean. Git may still stop for conflicts; resolve and stage files before continuing.")}</p>
               )}
+              {historyMutationPreview.preflight ? (
+                <div
+                  className={
+                    historyMutationPreview.preflight.canApply
+                      ? "history-mutation-preflight"
+                      : "history-mutation-preflight rebase-warning"
+                  }
+                >
+                  <strong>
+                    {historyMutationPreview.preflight.canApply
+                      ? "Preview passed"
+                      : "Preview found conflicts"}
+                  </strong>
+                  <p>
+                    {historyMutationPreview.preflight.message ??
+                      (historyMutationPreview.preflight.canApply
+                        ? "No conflicts detected in the clean preview."
+                        : "Resolve the conflicts before applying this operation.")}
+                  </p>
+                  {historyMutationPreview.preflight.conflicts.length > 0 && (
+                    <ul className="history-mutation-conflicts">
+                      {historyMutationPreview.preflight.conflicts.map((path) => (
+                        <li key={path}><code>{path}</code></li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : (
+                <p className="history-mutation-preflight">Checking for conflicts…</p>
+              )}
               {historyMutationPreview.commits.some((commit) => commit.parents.length > 1) && (
                 <label className="history-mutation-mainline">
                   {t("Mainline parent")}
@@ -9668,9 +9734,17 @@ function HistoryView({
                     aria-label={t("Mainline parent")}
                     value={historyMutationPreview.mainline ?? 1}
                     onChange={(event) =>
-                      setHistoryMutationPreview((current) =>
-                        current ? { ...current, mainline: Number(event.currentTarget.value) } : current,
-                      )
+                      (() => {
+                        const mainline = Number(event.currentTarget.value);
+                        setHistoryMutationPreview((current) =>
+                          current ? { ...current, mainline, preflight: undefined } : current,
+                        );
+                        void refreshHistoryMutationPreview(
+                          historyMutationPreview.operation,
+                          historyMutationPreview.commits,
+                          mainline,
+                        );
+                      })()
                     }
                   >
                     {Array.from(
@@ -9707,6 +9781,7 @@ function HistoryView({
                   disabled={
                     historyMutationBusy ||
                     snapshot.changes.length > 0 ||
+                    !historyMutationPreview.preflight?.canApply ||
                     historyMutationPreview.commits.some((commit) => commit.parents.length > 1) &&
                     !historyMutationPreview.mainline
                   }

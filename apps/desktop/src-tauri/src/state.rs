@@ -8,11 +8,11 @@ use std::time::{Duration, Instant};
 use app_core::{
     AppError, BinaryPreview, BranchRequest, CloneRequest, CommitRequest, ComparePatch,
     ConflictResolution, DiffTarget, ExternalDiffResult, ExternalDiffTool, FileBlame, GitIdentity,
-    GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryOperation,
-    InteractiveRebasePreview, InteractiveRebaseRequest, LfsLock, LfsRequest, LfsStatus,
-    PatchSelection, PathHistory, ReflogEntry, RemoteProgress, RemoteRequest, RemoteTagSummary,
-    RepositoryScheduler, RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus,
-    StashRequest, WorktreeCreateRequest,
+    GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryMutationPreview,
+    HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest, LfsLock, LfsRequest,
+    LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress, RemoteRequest,
+    RemoteTagSummary, RepositoryScheduler, RepositoryService, RepositorySidebar, SignatureSettings,
+    SignatureStatus, StashRequest, WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -1249,6 +1249,33 @@ impl ApplicationState {
                 recovery_oid: None,
             });
             Ok((snapshot, recovery))
+        })
+    }
+
+    pub fn preview_history_mutation(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        operation: HistoryOperation,
+        oids: &[String],
+        mainline: Option<usize>,
+    ) -> Result<HistoryMutationPreview, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let repositories = self
+                .repositories
+                .lock()
+                .expect("repository registry lock poisoned");
+            let repository = repositories
+                .get(&repo_id)
+                .ok_or(AppError::RepositoryNotOpen)?;
+            ensure_revision(revision, repository.revision)?;
+            self.service.preview_history_operation(
+                &repository.descriptor,
+                operation,
+                oids,
+                mainline,
+            )
         })
     }
 
