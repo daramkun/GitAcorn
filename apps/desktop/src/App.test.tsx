@@ -1649,6 +1649,9 @@ describe("App", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "New repository" }));
+    expect(
+      screen.getByRole("dialog", { name: "Create a new repository" }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Choose folder" }));
     await waitFor(() => expect(screen.getByLabelText("Folder")).toHaveValue("C:\\Code\\new-acorn"));
     fireEvent.change(screen.getByLabelText(".gitignore"), { target: { value: "rust" } });

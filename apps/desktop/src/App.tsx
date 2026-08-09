@@ -2856,26 +2856,6 @@ export function App() {
                 )}
             </div>}
           </div>
-          {showInit && (
-            <form className="init-bar" onSubmit={(event) => { event.preventDefault(); void handleInitializeRepository(); }}>
-              <label htmlFor="init-path">{t("Folder")}</label>
-              <input className="control-input" id="init-path" value={initPath} readOnly placeholder={t("Choose an existing folder")} />
-              <button className="control-button control-button--secondary" type="button" onClick={() => void handleChooseInitFolder()}>{t("Choose folder")}</button>
-              <label htmlFor="init-branch">{t("Initial branch")}</label>
-              <input className="control-input init-branch" id="init-branch" value={initBranch} onChange={(event) => setInitBranch(event.target.value)} />
-              <label htmlFor="init-gitignore">.gitignore</label>
-              <select className="control-input" id="init-gitignore" value={initGitignore} onChange={(event) => setInitGitignore(event.target.value)}>
-                <option value="">{t("No template")}</option>
-                <option value="node">Node</option><option value="rust">Rust</option><option value="python">Python</option><option value="go">Go</option>
-              </select>
-              <label htmlFor="init-license">{t("License")}</label>
-              <select className="control-input" id="init-license" value={initLicense} onChange={(event) => setInitLicense(event.target.value)}>
-                <option value="">{t("No license")}</option><option value="mit">MIT</option><option value="bsd-3-clause">BSD 3-Clause</option>
-              </select>
-              {initLicense && <input aria-label={t("Copyright holder")} className="control-input init-holder" value={initLicenseHolder} onChange={(event) => setInitLicenseHolder(event.target.value)} placeholder={t("Copyright holder")} />}
-              <button className="control-button control-button--primary" type="submit" disabled={initializing || !initPath || !initBranch.trim() || Boolean(initLicense && !initLicenseHolder.trim())}>{initializing ? t("Creating repository…") : t("Create repository")}</button>
-            </form>
-          )}
           {showClone && (
             <form className="clone-bar" onSubmit={(event) => { event.preventDefault(); void handleClone(); }}>
               <label htmlFor="clone-url">{t("Repository URL")}</label>
@@ -2991,7 +2971,81 @@ export function App() {
           )}
         </section>
       </main>
-      {showSettings && (
+      {showInit && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowInit(false)}
+          role="presentation"
+        >
+          <form
+            className="settings-modal init-repository-modal"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => { event.preventDefault(); void handleInitializeRepository(); }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="init-repository-title"
+          >
+            <div className="settings-modal-header">
+              <div>
+                <h2 id="init-repository-title">{t("Create a new repository")}</h2>
+                <p>{t("Initialize an existing folder and optionally add starter files.")}</p>
+              </div>
+              <button
+                className="settings-close-btn"
+                type="button"
+                aria-label={t("Close repository creation")}
+                onClick={() => setShowInit(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body init-repository-modal-body">
+              <label htmlFor="init-path">
+                <span>{t("Folder")}</span>
+                <div className="init-repository-path">
+                  <input className="control-input" id="init-path" value={initPath} readOnly placeholder={t("Choose an existing folder")} />
+                  <button className="control-button control-button--secondary" type="button" onClick={() => void handleChooseInitFolder()}>{t("Choose folder")}</button>
+                </div>
+              </label>
+              <label htmlFor="init-branch">
+                <span>{t("Initial branch")}</span>
+                <input className="control-input" id="init-branch" value={initBranch} onChange={(event) => setInitBranch(event.target.value)} />
+              </label>
+              <div className="init-repository-template-grid">
+                <label htmlFor="init-gitignore">
+                  <span>.gitignore</span>
+                  <select className="control-input" id="init-gitignore" value={initGitignore} onChange={(event) => setInitGitignore(event.target.value)}>
+                    <option value="">{t("No template")}</option>
+                    <option value="node">Node</option>
+                    <option value="rust">Rust</option>
+                    <option value="python">Python</option>
+                    <option value="go">Go</option>
+                  </select>
+                </label>
+                <label htmlFor="init-license">
+                  <span>{t("License")}</span>
+                  <select className="control-input" id="init-license" value={initLicense} onChange={(event) => setInitLicense(event.target.value)}>
+                    <option value="">{t("No license")}</option>
+                    <option value="mit">MIT</option>
+                    <option value="bsd-3-clause">BSD 3-Clause</option>
+                  </select>
+                </label>
+              </div>
+              {initLicense && (
+                <label>
+                  <span>{t("Copyright holder")}</span>
+                  <input aria-label={t("Copyright holder")} className="control-input" value={initLicenseHolder} onChange={(event) => setInitLicenseHolder(event.target.value)} placeholder={t("Copyright holder")} />
+                </label>
+              )}
+              <p className="init-repository-note">{t("Existing files are kept. GitAcorn never overwrites an existing .gitignore or LICENSE file.")}</p>
+            </div>
+            <div className="init-repository-actions">
+              <button className="control-button control-button--secondary" type="button" onClick={() => setShowInit(false)}>{t("Cancel")}</button>
+              <button className="control-button control-button--primary" type="submit" disabled={initializing || !initPath || !initBranch.trim() || Boolean(initLicense && !initLicenseHolder.trim())}>{initializing ? t("Creating repository…") : t("Create repository")}</button>
+            </div>
+          </form>
+        </div>
+      )}      {showSettings && (
         <div
           className="modal-overlay"
           onClick={() => setShowSettings(false)}
