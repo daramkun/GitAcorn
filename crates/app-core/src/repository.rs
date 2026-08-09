@@ -16,6 +16,8 @@ use uuid::Uuid;
 
 use crate::AppError;
 
+const MAX_DIFF_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySidebar {
     pub worktrees: Vec<WorktreeSummary>,
@@ -2765,7 +2767,7 @@ impl RepositoryService {
             args.push(right);
         }
         args.push(OsString::from("--"));
-        let output = self.git_bytes(repository, args)?;
+        let output = limit_diff_output(self.git_bytes(repository, args)?)?;
         parse_unified_diff(&output).map_err(|error| AppError::InvalidGitOutput(error.to_string()))
     }
 
@@ -2776,7 +2778,7 @@ impl RepositoryService {
         right: &str,
     ) -> Result<ComparePatch, AppError> {
         let args = self.compare_args(repository, left, right, true)?;
-        let bytes = self.git_bytes(repository, args)?;
+        let bytes = limit_diff_output(self.git_bytes(repository, args)?)?;
         let document = parse_unified_diff(&bytes)
             .map_err(|error| AppError::InvalidGitOutput(error.to_string()))?;
         let is_binary = bytes
@@ -3110,7 +3112,7 @@ impl RepositoryService {
         };
         args.push(OsString::from("--"));
         args.push(path_argument(path)?);
-        let output = self.git_bytes(repository, args)?;
+        let output = limit_diff_output(self.git_bytes(repository, args)?)?;
         parse_unified_diff(&output).map_err(|error| AppError::InvalidGitOutput(error.to_string()))
     }
 
@@ -3402,7 +3404,7 @@ impl RepositoryService {
         }
         args.push(OsString::from("--"));
         args.push(path_argument(path)?);
-        let output = self.git_bytes(repository, args)?;
+        let output = limit_diff_output(self.git_bytes(repository, args)?)?;
         if !output.is_empty()
             || target == DiffTarget::Staged
             || !self.is_untracked(repository, path)?
@@ -3424,9 +3426,9 @@ impl RepositoryService {
         request.timeout = Duration::from_secs(10);
         let output = self.run(request)?;
         if matches!(output.exit_code, 0 | 1) {
-            Ok(output.stdout)
+            limit_diff_output(output.stdout)
         } else {
-            ensure_success(output).map(|output| output.stdout)
+            ensure_success(output).and_then(|output| limit_diff_output(output.stdout))
         }
     }
 
@@ -3648,6 +3650,16 @@ fn path_argument(path: &[u8]) -> Result<OsString, AppError> {
     String::from_utf8(path.to_vec())
         .map(OsString::from)
         .map_err(|_| AppError::InvalidRequest("File path is not valid UTF-8 on Windows".to_owned()))
+}
+
+fn limit_diff_output(output: Vec<u8>) -> Result<Vec<u8>, AppError> {
+    if output.len() > MAX_DIFF_OUTPUT_BYTES {
+        return Err(AppError::InvalidRequest(format!(
+            "Diff output exceeds the {} MiB memory limit",
+            MAX_DIFF_OUTPUT_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(output)
 }
 
 fn parse_worktrees(output: &str, current_path: &Path) -> Vec<WorktreeSummary> {
@@ -4193,9 +4205,9 @@ mod tests {
 
     use super::{
         GitVersion, InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
-        ReferenceKind, ensure_success, parse_git_version, parse_interactive_rebase_commits,
-        parse_references, parse_stashes, parse_submodules, parse_worktrees, summarize_refs,
-        validate_rebase_plan,
+        MAX_DIFF_OUTPUT_BYTES, ReferenceKind, ensure_success, limit_diff_output, parse_git_version,
+        parse_interactive_rebase_commits, parse_references, parse_stashes, parse_submodules,
+        parse_worktrees, summarize_refs, validate_rebase_plan,
     };
 
     use crate::AppError;
@@ -4228,6 +4240,16 @@ mod tests {
             }
             other => panic!("expected recoverable Git failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_diff_output_over_the_memory_budget() {
+        let error = limit_diff_output(vec![0; MAX_DIFF_OUTPUT_BYTES + 1])
+            .expect_err("oversized diff output");
+        assert!(matches!(
+            error,
+            AppError::InvalidRequest(message) if message.contains("8 MiB memory limit")
+        ));
     }
 
     #[test]
