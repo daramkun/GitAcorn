@@ -2166,6 +2166,46 @@ describe("App", () => {
     });
   });
 
+  it("surfaces locked, missing, and prunable worktree states", async () => {
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [
+        {
+          id: "worktree-one",
+          path: "C:\\Code\\acorn-demo",
+          branch: "main",
+          isCurrent: true,
+          isLocked: false,
+        },
+        {
+          id: "worktree-locked",
+          path: "C:\\Code\\locked",
+          branch: "locked",
+          isCurrent: false,
+          isLocked: true,
+        },
+        {
+          id: "worktree-stale",
+          path: "C:\\Code\\stale",
+          branch: "stale",
+          isCurrent: false,
+          isLocked: false,
+          isMissing: true,
+          isPrunable: true,
+        },
+      ],
+      branches: { total: 3, items: ["main", "locked", "stale"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: /locked · locked/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /stale · prunable · missing/ })).toBeInTheDocument();
+  });
+
   it("shows a recoverable placeholder for a missing restored repository", async () => {
     mockedRestoreSession.mockResolvedValue({
       schemaVersion: 1,
@@ -3552,7 +3592,7 @@ describe("App", () => {
     fireEvent.click(within(actions).getByRole("menuitem", { name: "Blame file" }));
 
     const blameDialog = await screen.findByRole("dialog", { name: "Blame file" });
-    expect(within(blameDialog).getByText("modified")).toBeInTheDocument();
+    expect(await within(blameDialog).findByText("modified")).toBeInTheDocument();
     fireEvent.click(within(blameDialog).getByRole("button", { name: "Close path inspector" }));
 
     fireEvent.contextMenu(trackedRow, { clientX: 40, clientY: 50 });

@@ -1786,6 +1786,55 @@ fn manages_worktree_create_lock_unlock_and_force_remove_lifecycle() {
 }
 
 #[test]
+fn reports_locked_missing_and_prunable_worktrees_from_git_fixture() {
+    let fixture = TestRepository::init();
+    let linked_root = tempfile::tempdir().expect("create linked worktree parent");
+    let locked_path = linked_root.path().join("locked-worktree");
+    let stale_path = linked_root.path().join("stale-worktree");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    for (path, branch) in [
+        (&locked_path, "feature/locked"),
+        (&stale_path, "feature/stale"),
+    ] {
+        service
+            .create_worktree(
+                &repository,
+                &WorktreeCreateRequest {
+                    path: path.clone(),
+                    branch: Some(branch.to_owned()),
+                    start_point: Some("HEAD".to_owned()),
+                },
+            )
+            .expect("create fixture worktree");
+    }
+
+    service
+        .lock_worktree(&repository, &locked_path, Some("qa hold"))
+        .expect("lock fixture worktree");
+    fs::remove_dir_all(&stale_path).expect("remove stale worktree directory");
+
+    let sidebar = service.sidebar(&repository).expect("read worktree states");
+    let locked = sidebar
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.branch.as_deref() == Some("feature/locked"))
+        .expect("locked worktree entry");
+    assert!(locked.is_locked);
+    assert!(!locked.is_missing);
+    assert!(!locked.is_prunable);
+
+    let stale = sidebar
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.branch.as_deref() == Some("feature/stale"))
+        .expect("stale worktree entry");
+    assert!(stale.is_missing);
+    assert!(stale.is_prunable);
+}
+
+#[test]
 fn stages_selected_lines_and_unstages_them_without_touching_other_changes() {
     let fixture = TestRepository::init();
     fixture.write("tracked.txt", "first\nsecond\nthird\n");
