@@ -109,7 +109,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 - [x] built-in 3-way merge editor와 hunk 단위 conflict resolution
 - [x] 저장소 init, `.gitignore`/license template 선택
-- [ ] bisect 시각화와 good/bad/skip 흐름
+- [x] bisect 시각화와 good/bad/skip 흐름
 - [ ] command palette, repository terminal, 사용자 정의 command
 - [ ] GitHub/GitLab/Bitbucket/Azure DevOps 계정과 저장소 탐색
 - [ ] PR/MR 생성·조회·checkout·merge와 review/CI 상태
@@ -150,3 +150,4 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P0.6 Git LFS와 서명 상태 | 완료 | LFS 감지·pointer/lock 상태·fetch/pull/prune 진행/취소와 commit/tag 서명 상태·시스템 설정 옵션 |
 | P1.1 Built-in 3-way merge editor | 완료 | base/current/incoming 원본 표시, hunk별 현재·incoming·양쪽 선택과 수동 편집, stale worktree 검증 및 해결 파일 stage 적용 |
 | P1.2 저장소 초기화와 템플릿 | 완료 | 기존 폴더 보존형 init, 초기 브랜치 지정, Node·Rust·Python·Go `.gitignore`와 MIT·BSD 3-Clause 라이선스 선택, 기존 파일 덮어쓰기 방지 |
+| P1.3 Bisect 시각화 | 완료 | known-good·known-bad 범위 시작, History 그래프의 현재 후보·good·bad·skip 표식, good·bad·skip 판정과 원래 브랜치 복원, clean worktree·revision 보호 |

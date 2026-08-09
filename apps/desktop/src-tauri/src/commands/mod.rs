@@ -1,21 +1,21 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use app_core::{
-    AppError, AppErrorDto, ConflictResolution, DiffTarget, HistoryFilter, HistoryOperation,
-    PatchSelection,
+    AppError, AppErrorDto, BisectMark, ConflictResolution, DiffTarget, HistoryFilter,
+    HistoryOperation, PatchSelection,
 };
 use git_domain::RepositorySnapshot;
 use tauri::{AppHandle, Manager, State, ipc::Channel};
 use uuid::Uuid;
 
 use crate::dto::{
-    AppInfoDto, BinaryPreviewDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto,
-    CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto, ConflictContentRequestDto,
-    ConflictFileDto, DiffDto, ExternalDiffResultDto, ExternalDiffToolDto,
-    ExternalDiffToolRequestDto, FileBlameDto, GitIdentityDto, GitIdentitySettingsDto,
-    GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto, HistoryPageDto,
-    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto,
-    LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
+    AppInfoDto, BinaryPreviewDto, BisectStateDto, BranchRequestDto, CloneRequestDto, CommandResult,
+    CommitFileDto, CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto,
+    ConflictContentRequestDto, ConflictFileDto, DiffDto, ExternalDiffResultDto,
+    ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto, GitIdentityDto,
+    GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto,
+    HistoryPageDto, InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto,
+    LfsLockRequestDto, LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
     OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
     RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
     RepositoryGitIdentityDto, RepositoryInitRequestDto, RepositoryOpenSourceDto,
@@ -674,6 +674,65 @@ pub fn history_page(
         .map_err(|error| AppErrorDto::from(&error))
 }
 
+#[tauri::command]
+pub fn bisect_status(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<BisectStateDto> {
+    state
+        .repository_bisect_state(&repo_id)
+        .map(BisectStateDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn bisect_start(
+    repo_id: String,
+    revision: u64,
+    good_oid: String,
+    bad_oid: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .start_bisect(&repo_id, revision, &good_oid, &bad_oid)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn bisect_mark(
+    repo_id: String,
+    revision: u64,
+    mark: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    let mark = match mark.as_str() {
+        "good" => BisectMark::Good,
+        "bad" => BisectMark::Bad,
+        "skip" => BisectMark::Skip,
+        _ => {
+            return Err(AppErrorDto::from(&AppError::InvalidRequest(
+                "Bisect mark must be good, bad, or skip".to_owned(),
+            )));
+        }
+    };
+    state
+        .mark_bisect(&repo_id, revision, mark)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn bisect_reset(
+    repo_id: String,
+    revision: u64,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    state
+        .reset_bisect(&repo_id, revision)
+        .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
 #[tauri::command]
 pub fn references_list(
     repo_id: String,

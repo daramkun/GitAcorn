@@ -26,6 +26,7 @@ import {
   closeSessionTab,
   compareDiff,
   getBinaryPreview,
+  getBisectStatus,
   getComparePatch,
   getExternalDiffTool,
   getLfsLocks,
@@ -64,6 +65,7 @@ import {
   initializeRepository,
   initializeSubmodule,
   listenForRepositoryChanges,
+  markBisect,
   mergeBranch,
   mutateHistory,
   openRepository,
@@ -71,6 +73,7 @@ import {
   previewInteractiveRebase,
   renameBranch,
   reorderSessionTabs,
+  resetBisect,
   resetBranch,
   removeRemote,
   removeSubmodule,
@@ -81,6 +84,7 @@ import {
   restoreReflogReference,
   skipRebase,
   stagePaths,
+  startBisect,
   startInteractiveRebase,
   startRemoteOperation,
   startLfsSync,
@@ -139,6 +143,7 @@ vi.mock("./windowControls", () => ({
   closeSessionTab: vi.fn(),
   compareDiff: vi.fn(),
   getBinaryPreview: vi.fn(),
+  getBisectStatus: vi.fn(),
   getComparePatch: vi.fn(),
   getExternalDiffTool: vi.fn(),
   getLfsLocks: vi.fn(),
@@ -202,6 +207,7 @@ vi.mock("./windowControls", () => ({
   lockWorktree: vi.fn(),
   unlockWorktree: vi.fn(),
   listenForRepositoryChanges: vi.fn(),
+  markBisect: vi.fn(),
   mergeBranch: vi.fn(),
   mutateHistory: vi.fn(),
   previewHistoryMutation: vi.fn(),
@@ -210,7 +216,9 @@ vi.mock("./windowControls", () => ({
   rebaseBranch: vi.fn(),
   renameBranch: vi.fn(),
   skipRebase: vi.fn(),
+  resetBisect: vi.fn(),
   resetBranch: vi.fn(),
+  startBisect: vi.fn(),
   startInteractiveRebase: vi.fn(),
   normalizeAppError: (error: unknown) => {
     const value = error as { code?: string; message?: string; details?: string };
@@ -244,6 +252,10 @@ const mockedCompareDiff = vi.mocked(compareDiff);
 const mockedApplyComparePatch = vi.mocked(applyComparePatch);
 const mockedGetExternalDiffTool = vi.mocked(getExternalDiffTool);
 const mockedGetBinaryPreview = vi.mocked(getBinaryPreview);
+const mockedGetBisectStatus = vi.mocked(getBisectStatus);
+const mockedStartBisect = vi.mocked(startBisect);
+const mockedMarkBisect = vi.mocked(markBisect);
+const mockedResetBisect = vi.mocked(resetBisect);
 const mockedGetComparePatch = vi.mocked(getComparePatch);
 const mockedRunExternalDiff = vi.mocked(runExternalDiff);
 const mockedRunExternalMerge = vi.mocked(runExternalMerge);
@@ -406,6 +418,10 @@ describe("App", () => {
     mockedApplyComparePatch.mockResolvedValue(snapshot);
     mockedGetExternalDiffTool.mockResolvedValue({ schemaVersion: 1, configured: null, mergeConfigured: null });
     mockedGetBinaryPreview.mockResolvedValue({ schemaVersion: 1, oldPath: "", newPath: "" });
+    mockedGetBisectStatus.mockResolvedValue({ schemaVersion: 1, active: false, goodOids: [], skippedOids: [], remaining: 0 });
+    mockedStartBisect.mockResolvedValue({ ...snapshot, revision: 2, changes: [] });
+    mockedMarkBisect.mockResolvedValue({ ...snapshot, revision: 2, changes: [] });
+    mockedResetBisect.mockResolvedValue({ ...snapshot, revision: 2, changes: [] });
     mockedGetComparePatch.mockResolvedValue({ schemaVersion: 1, patch: "", fileCount: 0, binary: false });
     mockedRunExternalDiff.mockResolvedValue({ schemaVersion: 1, tool: "code", exitCode: 0 });
     mockedRunExternalMerge.mockResolvedValue({ schemaVersion: 1, tool: "code", exitCode: 0 });
@@ -1139,6 +1155,66 @@ describe("App", () => {
           ],
           autoStash: true,
         },
+      ),
+    );
+  });
+
+  it("starts bisect from a selected known-good history commit", async () => {
+    const goodOid = "1".repeat(40);
+    const headOid = "3".repeat(40);
+    const cleanSnapshot = {
+      ...snapshot,
+      changes: [],
+      head: { ...snapshot.head, oid: headOid },
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], page: "history", snapshot: cleanSnapshot }],
+    });
+    mockedGetSnapshot.mockResolvedValue(cleanSnapshot);
+    mockedGetHistory.mockResolvedValue({
+      schemaVersion: 1,
+      commits: [
+        {
+          oid: headOid,
+          parents: [goodOid],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_001,
+          subject: "Known bad head",
+          body: "",
+          references: ["HEAD -> refs/heads/main"],
+          lane: 0,
+          laneCount: 1,
+        },
+        {
+          oid: goodOid,
+          parents: [],
+          authorName: "Ada",
+          authorEmail: "ada@example.com",
+          authoredAt: 1_700_000_000,
+          subject: "Known good commit",
+          body: "",
+          references: [],
+          lane: 0,
+          laneCount: 1,
+        },
+      ],
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+
+    await screen.findByText("acorn-demo");
+    expect(screen.queryByText("Testing")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /Known good commit/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Start bisect" }));
+
+    await waitFor(() =>
+      expect(mockedStartBisect).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        goodOid,
+        headOid,
       ),
     );
   });

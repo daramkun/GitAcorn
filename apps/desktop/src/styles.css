@@ -2497,6 +2497,7 @@ button:disabled {
   z-index: 2;
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
@@ -2540,6 +2541,23 @@ button:disabled {
 
 .commit-row.selected {
   box-shadow: inset 3px 0 var(--accent);
+}
+
+.commit-row.bisect-current {
+  background: color-mix(in srgb, var(--accent-soft) 76%, transparent);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.commit-row.bisect-good {
+  box-shadow: inset 3px 0 var(--success);
+}
+
+.commit-row.bisect-bad {
+  box-shadow: inset 3px 0 var(--danger);
+}
+
+.commit-row.bisect-skipped {
+  opacity: 0.64;
 }
 
 .commit-list.compact .commit-row {
@@ -2721,6 +2739,27 @@ button:disabled {
   padding: 0;
 }
 
+.commit-refs .bisect-label--current {
+  color: var(--accent-strong);
+}
+
+.commit-refs .bisect-label--good {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border-color: color-mix(in srgb, var(--success) 32%, transparent);
+}
+
+.commit-refs .bisect-label--bad {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+}
+
+.commit-refs .bisect-label--skipped {
+  color: var(--muted);
+  background: var(--surface-soft);
+  border-color: var(--border-strong);
+}
 .commit-refs .reflog-reference,
 .detail-refs .reflog-reference {
   color: var(--warning-strong, #d99a2b);

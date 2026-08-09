@@ -19,6 +19,23 @@ use crate::AppError;
 const MAX_DIFF_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BisectState {
+    pub active: bool,
+    pub original_head: Option<String>,
+    pub current_oid: Option<String>,
+    pub bad_oid: Option<String>,
+    pub good_oids: Vec<String>,
+    pub skipped_oids: Vec<String>,
+    pub remaining: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BisectMark {
+    Good,
+    Bad,
+    Skip,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryInitRequest {
     pub path: PathBuf,
     pub initial_branch: String,
@@ -1382,6 +1399,150 @@ impl RepositoryService {
         Ok(Some(reference.trim().to_owned()))
     }
 
+    pub fn bisect_state(&self, repository: &RepositoryDescriptor) -> Result<BisectState, AppError> {
+        let active = repository.git_dir.join("BISECT_START").is_file();
+        if !active {
+            return Ok(BisectState {
+                active: false,
+                original_head: None,
+                current_oid: self.current_head_oid(repository)?,
+                bad_oid: None,
+                good_oids: Vec::new(),
+                skipped_oids: Vec::new(),
+                remaining: 0,
+            });
+        }
+
+        let original_head = fs::read_to_string(repository.git_dir.join("BISECT_START"))
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let references = self.git_text(
+            repository,
+            [
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)",
+                "refs/bisect",
+            ],
+        )?;
+        let mut bad_oid = None;
+        let mut good_oids = Vec::new();
+        let mut skipped_oids = Vec::new();
+        for line in references.lines() {
+            let Some((reference, oid)) = line.split_once('\0') else {
+                continue;
+            };
+            if reference == "refs/bisect/bad" {
+                bad_oid = Some(oid.to_owned());
+            } else if reference.starts_with("refs/bisect/good-") {
+                good_oids.push(oid.to_owned());
+            } else if reference.starts_with("refs/bisect/skip-") {
+                skipped_oids.push(oid.to_owned());
+            }
+        }
+        good_oids.sort();
+        good_oids.dedup();
+        skipped_oids.sort();
+        skipped_oids.dedup();
+
+        let remaining = if let Some(bad) = bad_oid.as_deref() {
+            let mut args = vec![OsString::from("rev-list"), OsString::from(bad)];
+            args.extend(
+                good_oids
+                    .iter()
+                    .map(|oid| OsString::from(format!("^{oid}"))),
+            );
+            self.git_text(repository, args)?
+                .lines()
+                .filter(|oid| !skipped_oids.iter().any(|skipped| skipped == oid))
+                .count()
+        } else {
+            0
+        };
+
+        Ok(BisectState {
+            active,
+            original_head,
+            current_oid: self.current_head_oid(repository)?,
+            bad_oid,
+            good_oids,
+            skipped_oids,
+            remaining,
+        })
+    }
+
+    pub fn start_bisect(
+        &self,
+        repository: &RepositoryDescriptor,
+        good_oid: &str,
+        bad_oid: &str,
+    ) -> Result<(), AppError> {
+        if self.bisect_state(repository)?.active {
+            return Err(AppError::InvalidRequest(
+                "A bisect session is already active".to_owned(),
+            ));
+        }
+        if !self.is_worktree_clean(repository)? {
+            return Err(AppError::InvalidRequest(
+                "Bisect requires a clean worktree; commit or stash changes first".to_owned(),
+            ));
+        }
+        let good_oid = self.resolve_bisect_commit(repository, good_oid)?;
+        let bad_oid = self.resolve_bisect_commit(repository, bad_oid)?;
+        if good_oid == bad_oid {
+            return Err(AppError::InvalidRequest(
+                "Known good and known bad commits must be different".to_owned(),
+            ));
+        }
+        self.git_unit(repository, ["bisect", "start", &bad_oid, &good_oid])
+    }
+
+    pub fn mark_bisect(
+        &self,
+        repository: &RepositoryDescriptor,
+        mark: BisectMark,
+    ) -> Result<(), AppError> {
+        if !self.bisect_state(repository)?.active {
+            return Err(AppError::InvalidRequest(
+                "No bisect session is active".to_owned(),
+            ));
+        }
+        if !self.is_worktree_clean(repository)? {
+            return Err(AppError::InvalidRequest(
+                "Bisect requires a clean worktree; commit or stash changes first".to_owned(),
+            ));
+        }
+        let action = match mark {
+            BisectMark::Good => "good",
+            BisectMark::Bad => "bad",
+            BisectMark::Skip => "skip",
+        };
+        self.git_unit(repository, ["bisect", action])
+    }
+
+    pub fn reset_bisect(&self, repository: &RepositoryDescriptor) -> Result<(), AppError> {
+        if !self.bisect_state(repository)?.active {
+            return Err(AppError::InvalidRequest(
+                "No bisect session is active".to_owned(),
+            ));
+        }
+        self.git_unit(repository, ["bisect", "reset"])
+    }
+
+    fn resolve_bisect_commit(
+        &self,
+        repository: &RepositoryDescriptor,
+        oid: &str,
+    ) -> Result<String, AppError> {
+        validate_object_id(oid)?;
+        Ok(self
+            .git_text(
+                repository,
+                ["rev-parse", "--verify", &format!("{oid}^{{commit}}")],
+            )?
+            .trim()
+            .to_owned())
+    }
     pub fn is_worktree_clean(&self, repository: &RepositoryDescriptor) -> Result<bool, AppError> {
         Ok(self
             .git_bytes(

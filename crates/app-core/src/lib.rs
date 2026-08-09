@@ -12,9 +12,9 @@ use uuid::Uuid;
 pub use git_domain::{FileBlame, PathHistory};
 pub use remote::{CloneRequest, RemoteOperationKind, RemoteProgress, RemoteRequest};
 pub use repository::{
-    BinaryPreview, BranchRequest, CommitFile, CommitRequest, ComparePatch, DiffTarget,
-    ExternalDiffResult, ExternalDiffTool, GitIdentity, GitIdentitySettings, GitReference,
-    GitRemote, GitVersion, HistoryFilter, HistoryMutationPreview, HistoryOperation,
+    BinaryPreview, BisectMark, BisectState, BranchRequest, CommitFile, CommitRequest, ComparePatch,
+    DiffTarget, ExternalDiffResult, ExternalDiffTool, GitIdentity, GitIdentitySettings,
+    GitReference, GitRemote, GitVersion, HistoryFilter, HistoryMutationPreview, HistoryOperation,
     InteractiveRebaseAction, InteractiveRebaseCommit, InteractiveRebaseItem,
     InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsOperationKind,
     LfsRequest, LfsStatus, PatchSelection, RefSummary, ReferenceKind, ReflogEntry,

@@ -1,11 +1,11 @@
 use app_core::{
-    AppErrorDto, BinaryPreview, BranchRequest, CloneRequest, CommitFile, CommitRequest,
-    ComparePatch, ConflictFile, ConflictSegment, ExternalDiffResult, ExternalDiffTool, GitIdentity,
-    GitReference, GitRemote, HistoryMutationPreview, InteractiveRebaseAction,
-    InteractiveRebaseItem, InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus,
-    LfsLock, LfsStatus, PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind,
-    RemoteRequest, RemoteTagSummary, RepositoryInitRequest, RepositorySidebar, SignatureSettings,
-    SignatureStatus, WorktreeCreateRequest,
+    AppErrorDto, BinaryPreview, BisectState, BranchRequest, CloneRequest, CommitFile,
+    CommitRequest, ComparePatch, ConflictFile, ConflictSegment, ExternalDiffResult,
+    ExternalDiffTool, GitIdentity, GitReference, GitRemote, HistoryMutationPreview,
+    InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebasePreview,
+    InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus, PatchSelection, ReferenceKind,
+    ReflogEntry, RemoteOperationKind, RemoteRequest, RemoteTagSummary, RepositoryInitRequest,
+    RepositorySidebar, SignatureSettings, SignatureStatus, WorktreeCreateRequest,
 };
 use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
@@ -981,6 +981,33 @@ pub struct SessionTabUpdateDto {
     pub history_filter: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BisectStateDto {
+    pub schema_version: u16,
+    pub active: bool,
+    pub original_head: Option<String>,
+    pub current_oid: Option<String>,
+    pub bad_oid: Option<String>,
+    pub good_oids: Vec<String>,
+    pub skipped_oids: Vec<String>,
+    pub remaining: usize,
+}
+
+impl From<BisectState> for BisectStateDto {
+    fn from(state: BisectState) -> Self {
+        Self {
+            schema_version: 1,
+            active: state.active,
+            original_head: state.original_head,
+            current_oid: state.current_oid,
+            bad_oid: state.bad_oid,
+            good_oids: state.good_oids,
+            skipped_oids: state.skipped_oids,
+            remaining: state.remaining,
+        }
+    }
+}
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryPageDto {

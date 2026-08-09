@@ -28,6 +28,7 @@ import {
   applyComparePatch,
   applyConflictContent,
   applyPatchSelection,
+  getBisectStatus,
   addSubmodule,
   addRemote,
   abortMerge,
@@ -82,12 +83,14 @@ import {
   initializeRepository,
   initializeSubmodule,
   listenForRepositoryChanges,
+  markBisect,
   mutateHistory,
   normalizeAppError,
   openRepository,
   previewHistoryMutation,
   previewInteractiveRebase,
   rebaseBranch,
+  resetBisect,
   resetBranch,
   renameBranch,
   reorderSessionTabs,
@@ -98,6 +101,7 @@ import {
   resolveConflict,
   restoreSession,
   restoreReflogReference,
+  startBisect,
   startClone,
   startInteractiveRebase,
   startLfsSync,
@@ -124,6 +128,7 @@ import {
   type AppErrorDto,
   type CommitDto,
   type BinaryPreviewDto,
+  type BisectStateDto,
   type CompareDto,
   type ConflictFileDto,
   type ComparePatchDto,
@@ -8545,6 +8550,8 @@ function HistoryView({
   const [historyMutationPreview, setHistoryMutationPreview] =
     useState<HistoryMutationPreview>();
   const [historyMutationBusy, setHistoryMutationBusy] = useState(false);
+  const [bisectState, setBisectState] = useState<BisectStateDto>();
+  const [bisectBusy, setBisectBusy] = useState(false);
   const [compareDialog, setCompareDialog] = useState<CompareDialogState>();
   const [compareFileIndex, setCompareFileIndex] = useState(0);
   const [compareViewMode, setCompareViewMode] = useState<"unified" | "split">("split");
@@ -8599,6 +8606,15 @@ function HistoryView({
     visibleCommits.find((commit) => commit.oid === selectedOid) ??
     visibleCommits[0];
 
+  useEffect(() => {
+    let active = true;
+    getBisectStatus(snapshot.repository.id)
+      .then((state) => active && setBisectState(state))
+      .catch(onError);
+    return () => {
+      active = false;
+    };
+  }, [snapshot.repository.id, snapshot.revision]);
   useEffect(() => {
     if (!selected?.oid) {
       setSignatureStatus(undefined);
@@ -9090,6 +9106,74 @@ function HistoryView({
     }
   }
 
+  async function refreshBisectState() {
+    setBisectState(await getBisectStatus(snapshot.repository.id));
+  }
+
+  async function beginBisect() {
+    const badOid = snapshot.head.oid;
+    if (!selected?.oid || !badOid || selected.oid === badOid) return;
+    if (
+      !confirmRepositoryMutation(
+        t("Start bisect with {good} as known good and current HEAD as known bad?", {
+          good: selected.oid.slice(0, 8),
+        }),
+      )
+    ) {
+      return;
+    }
+    onClearError();
+    setBisectBusy(true);
+    try {
+      const next = await startBisect(
+        snapshot.repository.id,
+        snapshot.revision,
+        selected.oid,
+        badOid,
+      );
+      onSnapshot(next);
+      await refreshBisectState();
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setBisectBusy(false);
+    }
+  }
+
+  async function classifyBisect(mark: "good" | "bad" | "skip") {
+    onClearError();
+    setBisectBusy(true);
+    try {
+      const next = await markBisect(
+        snapshot.repository.id,
+        snapshot.revision,
+        mark,
+      );
+      onSnapshot(next);
+      await refreshBisectState();
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setBisectBusy(false);
+    }
+  }
+
+  async function stopBisect() {
+    if (!confirmRepositoryMutation(t("Stop bisect and restore the original branch state?"))) {
+      return;
+    }
+    onClearError();
+    setBisectBusy(true);
+    try {
+      const next = await resetBisect(snapshot.repository.id, snapshot.revision);
+      onSnapshot(next);
+      await refreshBisectState();
+    } catch (reason: unknown) {
+      onError(reason);
+    } finally {
+      setBisectBusy(false);
+    }
+  }
   function openCompareDialog() {
     setCompareFileIndex(0);
     setCompareDialog({
@@ -9376,6 +9460,33 @@ function HistoryView({
             </div>
           </div>
         )}
+        {bisectState?.active && (
+          <div className="rebase-status bisect-status" role="status">
+            <div>
+              <strong>{t("Bisect in progress")}</strong>
+              <span>
+                {t("Testing {oid} · {count} candidates remain", {
+                  oid: bisectState.currentOid?.slice(0, 8) ?? "—",
+                  count: bisectState.remaining,
+                })}
+              </span>
+            </div>
+            <div>
+              <button className="control-button control-button--secondary" type="button" disabled={bisectBusy} onClick={() => void classifyBisect("good")}>
+                {t("Good")}
+              </button>
+              <button className="control-button control-button--danger" type="button" disabled={bisectBusy} onClick={() => void classifyBisect("bad")}>
+                {t("Bad")}
+              </button>
+              <button className="control-button control-button--secondary" type="button" disabled={bisectBusy} onClick={() => void classifyBisect("skip")}>
+                {t("Skip")}
+              </button>
+              <button className="control-button control-button--secondary" type="button" disabled={bisectBusy} onClick={() => void stopBisect()}>
+                {t("Reset bisect")}
+              </button>
+            </div>
+          </div>
+        )}
         {(snapshot.operation === "cherryPick" || snapshot.operation === "revert") && (
           <div className="rebase-status" role="status">
             <div>
@@ -9429,6 +9540,22 @@ function HistoryView({
           </div>
         )}
         <div className="history-toolbar" role="toolbar" aria-label={t("History tools")}>
+          <button
+            className="control-button control-button--secondary"
+            type="button"
+            disabled={
+              bisectBusy ||
+              bisectState?.active ||
+              !selected ||
+              !snapshot.head.oid ||
+              selected.oid === snapshot.head.oid ||
+              snapshot.changes.length > 0
+            }
+            title={t("Select a known good commit; current HEAD is treated as known bad.")}
+            onClick={() => void beginBisect()}
+          >
+            {t("Start bisect")}
+          </button>
           <button
             className="control-button control-button--secondary"
             type="button"
@@ -9492,6 +9619,10 @@ function HistoryView({
                   commit.remoteOnly ? "remote-only" : "",
                   commit.reflogOnly ? "reflog-only" : "",
                   selected?.oid === commit.oid ? "selected" : "",
+                  bisectState?.active && commit.oid === bisectState.currentOid ? "bisect-current" : "",
+                  bisectState?.active && bisectState.goodOids.includes(commit.oid) ? "bisect-good" : "",
+                  bisectState?.active && commit.oid === bisectState.badOid ? "bisect-bad" : "",
+                  bisectState?.active && bisectState.skippedOids.includes(commit.oid) ? "bisect-skipped" : "",
                 ].filter(Boolean).join(" ")}
                  aria-current={selected?.oid === commit.oid ? "true" : undefined}
                  aria-selected={historySelection.selected.has(commit.oid)}
@@ -9554,6 +9685,18 @@ function HistoryView({
                   </span>
                 </span>
                 <span className="commit-refs">
+                  {bisectState?.active && commit.oid === bisectState.currentOid && (
+                    <small className="bisect-label bisect-label--current">{t("Testing")}</small>
+                  )}
+                  {bisectState?.active && bisectState.goodOids.includes(commit.oid) && (
+                    <small className="bisect-label bisect-label--good">{t("Good")}</small>
+                  )}
+                  {bisectState?.active && commit.oid === bisectState.badOid && (
+                    <small className="bisect-label bisect-label--bad">{t("Bad")}</small>
+                  )}
+                  {bisectState?.active && bisectState.skippedOids.includes(commit.oid) && (
+                    <small className="bisect-label bisect-label--skipped">{t("Skipped")}</small>
+                  )}
                   {commit.references.slice(0, 2).map((item) => <small key={item}>{shortRef(item)}</small>)}
                   {commit.reflogSelectors?.slice(0, Math.max(1, 2 - commit.references.length)).map((selector) => (
                     <small className="reflog-reference" key={selector}>Reflog · {selector}</small>

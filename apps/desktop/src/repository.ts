@@ -261,6 +261,16 @@ export type CommitFileDto = {
   pathBytes: number[];
 };
 
+export type BisectStateDto = {
+  schemaVersion: 1;
+  active: boolean;
+  originalHead?: string;
+  currentOid?: string;
+  badOid?: string;
+  goodOids: string[];
+  skippedOids: string[];
+  remaining: number;
+};
 export type HistoryPageDto = {
   schemaVersion: 1;
   commits: CommitDto[];
@@ -562,6 +572,38 @@ export function getHistoryPage(
   });
 }
 
+export function getBisectStatus(repoId: string): Promise<BisectStateDto> {
+  return invoke<BisectStateDto>("bisect_status", { repoId });
+}
+
+export function startBisect(
+  repoId: string,
+  revision: number,
+  goodOid: string,
+  badOid: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("bisect_start", {
+    repoId,
+    revision,
+    goodOid,
+    badOid,
+  });
+}
+
+export function markBisect(
+  repoId: string,
+  revision: number,
+  mark: "good" | "bad" | "skip",
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("bisect_mark", { repoId, revision, mark });
+}
+
+export function resetBisect(
+  repoId: string,
+  revision: number,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("bisect_reset", { repoId, revision });
+}
 export function getReferences(repoId: string): Promise<ReferenceDto[]> {
   return invoke<ReferenceDto[]>("references_list", { repoId });
 }

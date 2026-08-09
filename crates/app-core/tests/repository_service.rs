@@ -1,5 +1,5 @@
 use app_core::{
-    BranchRequest, CommitRequest, DiffTarget, HistoryFilter, HistoryOperation,
+    BisectMark, BranchRequest, CommitRequest, DiffTarget, HistoryFilter, HistoryOperation,
     InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebaseRequest, PatchSelection,
     ReferenceKind, RepositoryInitRequest, RepositoryService, SignatureSettings,
     WorktreeCreateRequest,
@@ -111,6 +111,119 @@ fn commit_independent_file(fixture: &TestRepository, path: &str, subject: &str) 
         .to_owned()
 }
 
+#[test]
+fn runs_bisect_good_bad_skip_and_restores_the_original_head() {
+    let fixture = TestRepository::init();
+    let good_oid = String::from_utf8(fixture.git_output(["rev-list", "--max-parents=0", "HEAD"]))
+        .expect("good oid")
+        .trim()
+        .to_owned();
+    for index in 1..=7 {
+        commit_independent_file(
+            &fixture,
+            &format!("step-{index}.txt"),
+            &format!("step {index}"),
+        );
+    }
+    let original_head = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("original head")
+        .trim()
+        .to_owned();
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    service
+        .start_bisect(&repository, &good_oid, &original_head)
+        .expect("start bisect");
+    let started = service.bisect_state(&repository).expect("bisect state");
+    assert!(started.active);
+    assert_eq!(started.bad_oid.as_deref(), Some(original_head.as_str()));
+    assert!(started.good_oids.contains(&good_oid));
+    assert!(started.remaining >= 2);
+    let skipped_oid = started.current_oid.expect("current candidate");
+
+    service
+        .mark_bisect(&repository, BisectMark::Skip)
+        .expect("skip candidate");
+    let skipped = service.bisect_state(&repository).expect("skipped state");
+    assert!(skipped.skipped_oids.contains(&skipped_oid));
+    service.reset_bisect(&repository).expect("reset after skip");
+    assert!(
+        !service
+            .bisect_state(&repository)
+            .expect("reset state")
+            .active
+    );
+    assert_eq!(
+        service.current_head_oid(&repository).expect("head"),
+        Some(original_head.clone())
+    );
+
+    service
+        .start_bisect(&repository, &good_oid, &original_head)
+        .expect("restart for good");
+    let good_candidate = service
+        .bisect_state(&repository)
+        .expect("good state")
+        .current_oid
+        .expect("good candidate");
+    service
+        .mark_bisect(&repository, BisectMark::Good)
+        .expect("mark good");
+    assert!(
+        service
+            .bisect_state(&repository)
+            .expect("marked good state")
+            .good_oids
+            .contains(&good_candidate)
+    );
+    service.reset_bisect(&repository).expect("reset after good");
+
+    service
+        .start_bisect(&repository, &good_oid, &original_head)
+        .expect("restart for bad");
+    let bad_candidate = service
+        .bisect_state(&repository)
+        .expect("bad state")
+        .current_oid
+        .expect("bad candidate");
+    service
+        .mark_bisect(&repository, BisectMark::Bad)
+        .expect("mark bad");
+    assert_eq!(
+        service
+            .bisect_state(&repository)
+            .expect("marked bad state")
+            .bad_oid,
+        Some(bad_candidate)
+    );
+    service.reset_bisect(&repository).expect("reset after bad");
+}
+
+#[test]
+fn bisect_start_rejects_a_dirty_worktree() {
+    let fixture = TestRepository::init();
+    let good_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("good oid")
+        .trim()
+        .to_owned();
+    commit_independent_file(&fixture, "bad.txt", "bad");
+    let bad_oid = String::from_utf8(fixture.git_output(["rev-parse", "HEAD"]))
+        .expect("bad oid")
+        .trim()
+        .to_owned();
+    fixture.write("dirty.txt", "dirty\n");
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    let error = service
+        .start_bisect(&repository, &good_oid, &bad_oid)
+        .expect_err("dirty worktree must be rejected");
+    assert!(
+        matches!(error, app_core::AppError::InvalidRequest(message) if message.contains("clean worktree"))
+    );
+    assert!(!service.bisect_state(&repository).expect("state").active);
+}
 #[test]
 fn reads_blame_and_tracks_renames_in_file_and_directory_history() {
     let fixture = TestRepository::init();

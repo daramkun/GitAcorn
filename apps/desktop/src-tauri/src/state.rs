@@ -6,13 +6,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use app_core::{
-    AppError, BinaryPreview, BranchRequest, CloneRequest, CommitRequest, ComparePatch,
-    ConflictFile, ConflictResolution, DiffTarget, ExternalDiffResult, ExternalDiffTool, FileBlame,
-    GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
-    HistoryMutationPreview, HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest,
-    LfsLock, LfsRequest, LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress,
-    RemoteRequest, RemoteTagSummary, RepositoryInitRequest, RepositoryScheduler, RepositoryService,
-    RepositorySidebar, SignatureSettings, SignatureStatus, StashRequest, WorktreeCreateRequest,
+    AppError, BinaryPreview, BisectMark, BisectState, BranchRequest, CloneRequest, CommitRequest,
+    ComparePatch, ConflictFile, ConflictResolution, DiffTarget, ExternalDiffResult,
+    ExternalDiffTool, FileBlame, GitIdentity, GitIdentitySettings, GitReference, GitRemote,
+    HistoryFilter, HistoryMutationPreview, HistoryOperation, InteractiveRebasePreview,
+    InteractiveRebaseRequest, LfsLock, LfsRequest, LfsStatus, PatchSelection, PathHistory,
+    ReflogEntry, RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryInitRequest,
+    RepositoryScheduler, RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus,
+    StashRequest, WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -334,6 +335,45 @@ impl ApplicationState {
             .read(repo_id, || self.service.history(&descriptor, filter))
     }
 
+    pub fn repository_bisect_state(&self, repo_id: &str) -> Result<BisectState, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.bisect_state(&descriptor))
+    }
+
+    pub fn start_bisect(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        good_oid: &str,
+        bad_oid: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.start_bisect(repository, good_oid, bad_oid)
+        })
+    }
+
+    pub fn mark_bisect(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        mark: BisectMark,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.mark_bisect(repository, mark)
+        })
+    }
+
+    pub fn reset_bisect(
+        &self,
+        repo_id: &str,
+        revision: u64,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.reset_bisect(repository)
+        })
+    }
     pub fn repository_references(&self, repo_id: &str) -> Result<Vec<GitReference>, AppError> {
         let repo_id = parse_repo_id(repo_id)?;
         let descriptor = self.descriptor(repo_id)?;
