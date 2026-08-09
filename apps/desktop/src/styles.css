@@ -2980,6 +2980,187 @@ button:disabled {
   line-height: 1.55;
 }
 
+.conflict-editor {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: auto;
+  background: var(--bg);
+}
+
+.conflict-editor-heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.conflict-editor-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.conflict-editor-heading strong {
+  color: var(--text);
+  font-size: var(--font-size-md);
+}
+
+.conflict-editor button,
+.conflict-hunk-actions button {
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.conflict-editor button:hover:not(:disabled),
+.conflict-hunk-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.conflict-editor button:disabled,
+.conflict-hunk-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.conflict-source-grid,
+.conflict-hunk-sides {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.conflict-source-grid {
+  margin: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.conflict-source {
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+
+.conflict-source:last-child {
+  border-right: 0;
+}
+
+.conflict-source > span {
+  display: block;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.conflict-source pre {
+  min-height: 54px;
+  max-height: 150px;
+  margin: 0;
+  padding: 9px;
+  overflow: auto;
+  color: var(--text);
+  font: 11px/1.5 "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.conflict-hunk-list {
+  display: grid;
+  gap: 12px;
+  padding: 0 12px 18px;
+}
+
+.conflict-hunk {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.conflict-hunk.resolved {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.conflict-hunk-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface-soft));
+}
+
+.conflict-hunk.resolved .conflict-hunk-heading {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-soft));
+}
+
+.conflict-hunk-heading > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.conflict-hunk-heading span {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.conflict-hunk-heading small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.conflict-hunk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.conflict-result {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.conflict-result textarea {
+  width: 100%;
+  min-height: 86px;
+  resize: vertical;
+  padding: 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font: 11px/1.5 "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+.conflict-result textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+}
 .operations-view {
   height: 100%;
   overflow: auto;

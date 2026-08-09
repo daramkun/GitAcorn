@@ -47,6 +47,26 @@ export type FileChangeDto = {
   submodule: boolean;
 };
 
+export type ConflictFileDto = {
+  schemaVersion: 1;
+  base?: string;
+  ours?: string;
+  theirs?: string;
+  segments: Array<
+    | { kind: "common"; content: string }
+    | {
+        kind: "conflict";
+        index: number;
+        ours: string;
+        base?: string;
+        theirs: string;
+      }
+  >;
+  worktreeOid: string;
+  editable: boolean;
+  unavailableReason?: string;
+};
+
 export type DiffTarget = "unstaged" | "staged";
 
 export type DiffDto = {
@@ -951,6 +971,28 @@ export function dropStash(
   reference: string,
 ): Promise<RepositorySnapshotDto> {
   return invoke("stash_drop", { repoId, revision, reference });
+}
+
+export function getConflictFile(
+  repoId: string,
+  pathBytes: number[],
+): Promise<ConflictFileDto> {
+  return invoke("conflict_file_get", { repoId, pathBytes });
+}
+
+export function applyConflictContent(
+  repoId: string,
+  revision: number,
+  pathBytes: number[],
+  expectedWorktreeOid: string,
+  content: string,
+): Promise<RepositorySnapshotDto> {
+  return invoke("conflict_content_apply", {
+    repoId,
+    revision,
+    pathBytes,
+    request: { expectedWorktreeOid, content },
+  });
 }
 
 export function resolveConflict(

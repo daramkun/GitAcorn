@@ -113,6 +113,8 @@ pub fn run() {
             commands::stash_create,
             commands::stash_apply,
             commands::stash_drop,
+            commands::conflict_file_get,
+            commands::conflict_content_apply,
             commands::conflict_resolve,
             commands::merge_abort,
             commands::operation_history,

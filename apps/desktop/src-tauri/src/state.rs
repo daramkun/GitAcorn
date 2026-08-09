@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 
 use app_core::{
     AppError, BinaryPreview, BranchRequest, CloneRequest, CommitRequest, ComparePatch,
-    ConflictResolution, DiffTarget, ExternalDiffResult, ExternalDiffTool, FileBlame, GitIdentity,
-    GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryMutationPreview,
-    HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest, LfsLock, LfsRequest,
-    LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress, RemoteRequest,
-    RemoteTagSummary, RepositoryScheduler, RepositoryService, RepositorySidebar, SignatureSettings,
-    SignatureStatus, StashRequest, WorktreeCreateRequest,
+    ConflictFile, ConflictResolution, DiffTarget, ExternalDiffResult, ExternalDiffTool, FileBlame,
+    GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
+    HistoryMutationPreview, HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest,
+    LfsLock, LfsRequest, LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress,
+    RemoteRequest, RemoteTagSummary, RepositoryScheduler, RepositoryService, RepositorySidebar,
+    SignatureSettings, SignatureStatus, StashRequest, WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -1491,6 +1491,30 @@ impl ApplicationState {
     ) -> Result<RepositorySnapshot, AppError> {
         self.mutate(repo_id, revision, |service, repository| {
             service.drop_stash(repository, reference)
+        })
+    }
+
+    pub fn repository_conflict_file(
+        &self,
+        repo_id: &str,
+        path: &[u8],
+    ) -> Result<ConflictFile, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.conflict_file(&descriptor, path))
+    }
+
+    pub fn apply_conflict_content(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        path: &[u8],
+        expected_worktree_oid: &str,
+        content: &str,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service.apply_conflict_content(repository, path, expected_worktree_oid, content)
         })
     }
 

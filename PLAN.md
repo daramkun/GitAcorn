@@ -107,7 +107,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 ## P1 — 생산성 및 forge 연동
 
-- [ ] built-in 3-way merge editor와 hunk 단위 conflict resolution
+- [x] built-in 3-way merge editor와 hunk 단위 conflict resolution
 - [ ] 저장소 init, `.gitignore`/license template 선택
 - [ ] bisect 시각화와 good/bad/skip 흐름
 - [ ] command palette, repository terminal, 사용자 정의 command
@@ -148,3 +148,4 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P0.4 Worktree 전체 lifecycle | 완료 | 생성·새 탭 열기·lock/unlock·안전/강제 제거·branch 결합 제거, missing/prunable 상태와 path 기반 식별자 |
 | P0.5 고급 Diff와 비교 | 완료 | 임의 ref/WORKTREE 비교, split·word·syntax·wrap renderer, 이미지/바이너리 미리보기, 외부 diff 실행과 patch lifecycle |
 | P0.6 Git LFS와 서명 상태 | 완료 | LFS 감지·pointer/lock 상태·fetch/pull/prune 진행/취소와 commit/tag 서명 상태·시스템 설정 옵션 |
+| P1.1 Built-in 3-way merge editor | 완료 | base/current/incoming 원본 표시, hunk별 현재·incoming·양쪽 선택과 수동 편집, stale worktree 검증 및 해결 파일 stage 적용 |

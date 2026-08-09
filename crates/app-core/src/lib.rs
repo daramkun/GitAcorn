@@ -22,7 +22,7 @@ pub use repository::{
     StashSummary, WorktreeCreateRequest, WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;
-pub use workspace::{ConflictResolution, StashRequest};
+pub use workspace::{ConflictFile, ConflictResolution, ConflictSegment, StashRequest};
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("Git is not installed or is not available on PATH")]

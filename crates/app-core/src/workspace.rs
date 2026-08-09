@@ -1,4 +1,6 @@
+use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fs;
 use std::time::Duration;
 
 use git_cli::{CancellationToken, GitExecutionError, GitOutput, GitRequest};
@@ -21,7 +23,136 @@ pub enum ConflictResolution {
     MarkResolved,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictFile {
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+    pub segments: Vec<ConflictSegment>,
+    pub worktree_oid: String,
+    pub editable: bool,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConflictSegment {
+    Common {
+        content: String,
+    },
+    Conflict {
+        index: usize,
+        ours: String,
+        base: Option<String>,
+        theirs: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConflictStageEntry {
+    mode: String,
+    oid: String,
+}
+
 impl RepositoryService {
+    pub fn conflict_file(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+    ) -> Result<ConflictFile, AppError> {
+        let stages = self.conflict_stage_entries(repository, path)?;
+        let worktree_path = repository.worktree_path.join(path_argument(path)?);
+        let worktree = fs::read(&worktree_path).map_err(|error| AppError::GitFailed {
+            diagnostic_id: Uuid::new_v4(),
+            detail: error.to_string(),
+        })?;
+        let worktree_oid = self.hash_bytes(repository, &worktree)?;
+
+        let regular_file = stages
+            .values()
+            .all(|entry| entry.mode == "100644" || entry.mode == "100755");
+        let text = String::from_utf8(worktree).ok();
+        let segments = text
+            .as_deref()
+            .and_then(parse_conflict_segments)
+            .unwrap_or_default();
+        let editable = regular_file
+            && !segments.is_empty()
+            && segments
+                .iter()
+                .any(|segment| matches!(segment, ConflictSegment::Conflict { .. }));
+        let unavailable_reason = (!editable).then(|| {
+            if !regular_file {
+                "This conflict is binary, a symlink, or another non-regular file.".to_owned()
+            } else if text.is_none() {
+                "This file is not valid UTF-8 and cannot be edited safely in the built-in editor."
+                    .to_owned()
+            } else {
+                "Git did not leave conflict markers in the worktree for hunk editing.".to_owned()
+            }
+        });
+
+        Ok(ConflictFile {
+            base: self.conflict_stage_text(repository, stages.get(&1))?,
+            ours: self.conflict_stage_text(repository, stages.get(&2))?,
+            theirs: self.conflict_stage_text(repository, stages.get(&3))?,
+            segments,
+            worktree_oid,
+            editable,
+            unavailable_reason,
+        })
+    }
+
+    pub fn apply_conflict_content(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+        expected_worktree_oid: &str,
+        content: &str,
+    ) -> Result<(), AppError> {
+        if content.len() > 4 * 1024 * 1024 {
+            return Err(AppError::InvalidRequest(
+                "Conflict result exceeds the 4 MiB editor limit".to_owned(),
+            ));
+        }
+        if content.lines().any(|line| {
+            line.starts_with("<<<<<<< ")
+                || line.starts_with("||||||| ")
+                || line == "======="
+                || line.starts_with(">>>>>>> ")
+        }) {
+            return Err(AppError::InvalidRequest(
+                "Resolve every conflict marker before applying the result".to_owned(),
+            ));
+        }
+
+        self.conflict_stage_entries(repository, path)?;
+        let path_argument = path_argument(path)?;
+        let worktree_path = repository.worktree_path.join(&path_argument);
+        let original = fs::read(&worktree_path).map_err(|error| AppError::GitFailed {
+            diagnostic_id: Uuid::new_v4(),
+            detail: error.to_string(),
+        })?;
+        let actual_oid = self.hash_bytes(repository, &original)?;
+        if actual_oid != expected_worktree_oid {
+            return Err(AppError::InvalidRequest(
+                "The conflicted file changed after the editor was opened; reload before applying"
+                    .to_owned(),
+            ));
+        }
+
+        fs::write(&worktree_path, content.as_bytes()).map_err(|error| AppError::GitFailed {
+            diagnostic_id: Uuid::new_v4(),
+            detail: error.to_string(),
+        })?;
+        if let Err(error) = self.workspace_git_unit(
+            repository,
+            [OsString::from("add"), OsString::from("--"), path_argument],
+        ) {
+            let _ = fs::write(&worktree_path, original);
+            return Err(error);
+        }
+        Ok(())
+    }
     pub fn create_stash(
         &self,
         repository: &RepositoryDescriptor,
@@ -134,6 +265,93 @@ impl RepositoryService {
         Ok(!output.stdout.is_empty())
     }
 
+    fn conflict_stage_entries(
+        &self,
+        repository: &RepositoryDescriptor,
+        path: &[u8],
+    ) -> Result<BTreeMap<u8, ConflictStageEntry>, AppError> {
+        let path_argument = path_argument(path)?;
+        let output = ensure_success(self.workspace_git(
+            repository,
+            [
+                OsString::from("ls-files"),
+                OsString::from("-u"),
+                OsString::from("-z"),
+                OsString::from("--"),
+                path_argument,
+            ],
+        )?)?;
+        let mut stages = BTreeMap::new();
+        for record in output.stdout.split(|byte| *byte == 0) {
+            if record.is_empty() {
+                continue;
+            }
+            let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
+                continue;
+            };
+            if &record[tab + 1..] != path {
+                continue;
+            }
+            let header = String::from_utf8_lossy(&record[..tab]);
+            let mut fields = header.split_ascii_whitespace();
+            let (Some(mode), Some(oid), Some(stage)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            let Ok(stage) = stage.parse::<u8>() else {
+                continue;
+            };
+            stages.insert(
+                stage,
+                ConflictStageEntry {
+                    mode: mode.to_owned(),
+                    oid: oid.to_owned(),
+                },
+            );
+        }
+        if stages.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "The selected file is no longer conflicted".to_owned(),
+            ));
+        }
+        Ok(stages)
+    }
+
+    fn conflict_stage_text(
+        &self,
+        repository: &RepositoryDescriptor,
+        entry: Option<&ConflictStageEntry>,
+    ) -> Result<Option<String>, AppError> {
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        if entry.mode != "100644" && entry.mode != "100755" {
+            return Ok(None);
+        }
+        let output = ensure_success(
+            self.workspace_git(repository, ["cat-file", "blob", entry.oid.as_str()])?,
+        )?;
+        Ok(String::from_utf8(output.stdout).ok())
+    }
+
+    fn hash_bytes(
+        &self,
+        repository: &RepositoryDescriptor,
+        bytes: &[u8],
+    ) -> Result<String, AppError> {
+        let mut request = GitRequest::new(["hash-object", "--stdin"]);
+        request.working_directory = Some(repository.worktree_path.clone());
+        request.timeout = Duration::from_secs(10);
+        request.stdin = Some(bytes.to_vec());
+        let output = self
+            .executor
+            .execute(request, &CancellationToken::default())
+            .map_err(map_execution_error)?;
+        let output = ensure_success(output)?;
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
+
     fn workspace_git_unit(
         &self,
         repository: &RepositoryDescriptor,
@@ -154,6 +372,74 @@ impl RepositoryService {
             .execute(request, &CancellationToken::default())
             .map_err(map_execution_error)
     }
+}
+
+fn parse_conflict_segments(content: &str) -> Option<Vec<ConflictSegment>> {
+    let lines = content.split_inclusive('\n').collect::<Vec<_>>();
+    let mut segments = Vec::new();
+    let mut common = String::new();
+    let mut index = 0;
+    let mut cursor = 0;
+
+    while cursor < lines.len() {
+        if !marker_line(lines[cursor]).starts_with("<<<<<<< ") {
+            common.push_str(lines[cursor]);
+            cursor += 1;
+            continue;
+        }
+        if !common.is_empty() {
+            segments.push(ConflictSegment::Common {
+                content: std::mem::take(&mut common),
+            });
+        }
+        cursor += 1;
+        let mut ours = String::new();
+        while cursor < lines.len()
+            && !marker_line(lines[cursor]).starts_with("||||||| ")
+            && marker_line(lines[cursor]) != "======="
+        {
+            ours.push_str(lines[cursor]);
+            cursor += 1;
+        }
+        let mut base = None;
+        if cursor < lines.len() && marker_line(lines[cursor]).starts_with("||||||| ") {
+            cursor += 1;
+            let mut base_content = String::new();
+            while cursor < lines.len() && marker_line(lines[cursor]) != "=======" {
+                base_content.push_str(lines[cursor]);
+                cursor += 1;
+            }
+            base = Some(base_content);
+        }
+        if cursor >= lines.len() || marker_line(lines[cursor]) != "=======" {
+            return None;
+        }
+        cursor += 1;
+        let mut theirs = String::new();
+        while cursor < lines.len() && !marker_line(lines[cursor]).starts_with(">>>>>>> ") {
+            theirs.push_str(lines[cursor]);
+            cursor += 1;
+        }
+        if cursor >= lines.len() {
+            return None;
+        }
+        cursor += 1;
+        segments.push(ConflictSegment::Conflict {
+            index,
+            ours,
+            base,
+            theirs,
+        });
+        index += 1;
+    }
+    if !common.is_empty() {
+        segments.push(ConflictSegment::Common { content: common });
+    }
+    (index > 0).then_some(segments)
+}
+
+fn marker_line(line: &str) -> &str {
+    line.trim_end_matches(['\r', '\n'])
 }
 
 fn validate_stash_reference(reference: &str) -> Result<&str, AppError> {

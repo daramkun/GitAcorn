@@ -1,10 +1,11 @@
 use app_core::{
     AppErrorDto, BinaryPreview, BranchRequest, CloneRequest, CommitFile, CommitRequest,
-    ComparePatch, ExternalDiffResult, ExternalDiffTool, GitIdentity, GitReference, GitRemote,
-    HistoryMutationPreview, InteractiveRebaseAction, InteractiveRebaseItem,
-    InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus,
-    PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind, RemoteRequest,
-    RemoteTagSummary, RepositorySidebar, SignatureSettings, SignatureStatus, WorktreeCreateRequest,
+    ComparePatch, ConflictFile, ConflictSegment, ExternalDiffResult, ExternalDiffTool, GitIdentity,
+    GitReference, GitRemote, HistoryMutationPreview, InteractiveRebaseAction,
+    InteractiveRebaseItem, InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus,
+    LfsLock, LfsStatus, PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind,
+    RemoteRequest, RemoteTagSummary, RepositorySidebar, SignatureSettings, SignatureStatus,
+    WorktreeCreateRequest,
 };
 use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
@@ -16,6 +17,72 @@ use std::path::Path;
 
 use crate::path_display::display_path;
 use crate::state::{RepositoryIdentityState, SessionTabState};
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFileDto {
+    pub schema_version: u16,
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+    pub segments: Vec<ConflictSegmentDto>,
+    pub worktree_oid: String,
+    pub editable: bool,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConflictSegmentDto {
+    Common {
+        content: String,
+    },
+    Conflict {
+        index: usize,
+        ours: String,
+        base: Option<String>,
+        theirs: String,
+    },
+}
+
+impl From<ConflictFile> for ConflictFileDto {
+    fn from(file: ConflictFile) -> Self {
+        Self {
+            schema_version: 1,
+            base: file.base,
+            ours: file.ours,
+            theirs: file.theirs,
+            segments: file
+                .segments
+                .into_iter()
+                .map(|segment| match segment {
+                    ConflictSegment::Common { content } => ConflictSegmentDto::Common { content },
+                    ConflictSegment::Conflict {
+                        index,
+                        ours,
+                        base,
+                        theirs,
+                    } => ConflictSegmentDto::Conflict {
+                        index,
+                        ours,
+                        base,
+                        theirs,
+                    },
+                })
+                .collect(),
+            worktree_oid: file.worktree_oid,
+            editable: file.editable,
+            unavailable_reason: file.unavailable_reason,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictContentRequestDto {
+    pub expected_worktree_oid: String,
+    pub content: String,
+}
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]

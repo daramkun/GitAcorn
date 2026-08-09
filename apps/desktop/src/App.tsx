@@ -26,6 +26,7 @@ import {
 } from "./windowControls";
 import {
   applyComparePatch,
+  applyConflictContent,
   applyPatchSelection,
   addSubmodule,
   addRemote,
@@ -66,6 +67,7 @@ import {
   getPathHistory,
   getCommitDiff,
   getCommitFiles,
+  getConflictFile,
   getHistoryPage,
   getGitIdentity,
   getDiagnostics,
@@ -121,6 +123,7 @@ import {
   type CommitDto,
   type BinaryPreviewDto,
   type CompareDto,
+  type ConflictFileDto,
   type ComparePatchDto,
   type ExternalDiffToolDto,
   type LfsLockDto,
@@ -152,6 +155,7 @@ import {
   type SessionTabDto,
 } from "./repository";
 import { updateRepositoryOperation } from "./remote-operations";
+import { ConflictEditor } from "./conflict-editor";
 import { localeTag, t } from "./i18n";
 import { getSystemFileIcons } from "./fileIcons";
 import {
@@ -5742,6 +5746,8 @@ function ChangesView({
   const stagedSelection = useMultiSelection(stagedPathsList, "changes-staged");
   const selected = snapshot.changes.find((change) => change.path === selectedPath);
   const [diff, setDiff] = useState<DiffDto>();
+  const [conflictFile, setConflictFile] = useState<ConflictFileDto>();
+  const [conflictLoading, setConflictLoading] = useState(false);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffViewMode, setDiffViewMode] = useState<"unified" | "split">("unified");
   const [wordDiff, setWordDiff] = useState(false);
@@ -5980,8 +5986,20 @@ function ChangesView({
   useEffect(() => {
     let active = true;
     setSelectedLines(new Set());
-    if (!selected || selected.conflict) {
+    setConflictFile(undefined);
+    if (!selected) {
       setDiff(undefined);
+      return () => {
+        active = false;
+      };
+    }
+    if (selected.conflict) {
+      setDiff(undefined);
+      setConflictLoading(true);
+      getConflictFile(snapshot.repository.id, selected.pathBytes)
+        .then((value) => active && setConflictFile(value))
+        .catch((reason: unknown) => active && onError(reason))
+        .finally(() => active && setConflictLoading(false));
       return () => {
         active = false;
       };
@@ -6814,12 +6832,30 @@ function ChangesView({
             )}
             {operation && <div className="operation-status" role="status">{operation}</div>}
             {selected.conflict ? (
-              <div className="conflict-panel" role="region" aria-label={t("Conflict resolution guidance")}>
-                <h2>{t("Resolve merge conflict")}</h2>
-                <p>
-                  {t("Choose one side, or edit the file in your editor and mark the current content resolved. Aborting restores the state from before the merge.")}
-                </p>
-              </div>
+              conflictLoading ? (
+                <div className="diff-state" role="status">{t("Loading merge editor…")}</div>
+              ) : conflictFile ? (
+                <ConflictEditor
+                  file={conflictFile}
+                  disabled={mutationBlocked}
+                  onApply={(content) =>
+                    mutate(t("Applying resolved file…"), () =>
+                      applyConflictContent(
+                        snapshot.repository.id,
+                        snapshot.revision,
+                        selected.pathBytes,
+                        conflictFile.worktreeOid,
+                        content,
+                      ),
+                    )
+                  }
+                />
+              ) : (
+                <div className="conflict-panel" role="region" aria-label={t("Conflict resolution guidance")}>
+                  <h2>{t("Resolve merge conflict")}</h2>
+                  <p>{t("Use a whole-file resolution action, then continue or abort the operation.")}</p>
+                </div>
+              )
             ) : diffLoading ? (
               <div className="diff-state" role="status">{t("Loading diff…")}</div>
             ) : diff?.binary ? (

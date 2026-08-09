@@ -10,17 +10,17 @@ use uuid::Uuid;
 
 use crate::dto::{
     AppInfoDto, BinaryPreviewDto, BranchRequestDto, CloneRequestDto, CommandResult, CommitFileDto,
-    CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto, DiffDto,
-    ExternalDiffResultDto, ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto,
-    GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto,
-    HistoryMutationPreviewDto, HistoryPageDto, InteractiveRebasePreviewDto,
-    InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto, LfsOperationRequestDto,
-    LfsStatusDto, OperationEventDto, OperationRecordDto, OperationStartedDto, PatchSelectionDto,
-    PathHistoryDto, ReferenceDto, ReflogEntryDto, RemoteMutationRequestDto,
-    RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto, RepositoryGitIdentityDto,
-    RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
-    SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto, SignatureStatusDto,
-    StashRequestDto, SubmoduleAddRequestDto, WorktreeCreateRequestDto,
+    CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto, ConflictContentRequestDto,
+    ConflictFileDto, DiffDto, ExternalDiffResultDto, ExternalDiffToolDto,
+    ExternalDiffToolRequestDto, FileBlameDto, GitIdentityDto, GitIdentitySettingsDto,
+    GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto, HistoryPageDto,
+    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto,
+    LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
+    OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
+    RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
+    RepositoryGitIdentityDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
+    SessionDto, SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto,
+    SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorktreeCreateRequestDto,
 };
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
@@ -1472,6 +1472,44 @@ pub async fn stash_drop(
     recorded_mutation(&state, &repo_id, "stash-drop", "Dropped stash", || {
         state.drop_stash(&repo_id, revision, &reference)
     })
+    .await
+}
+
+#[tauri::command]
+pub fn conflict_file_get(
+    repo_id: String,
+    path_bytes: Vec<u8>,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ConflictFileDto> {
+    state
+        .repository_conflict_file(&repo_id, &path_bytes)
+        .map(ConflictFileDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn conflict_content_apply(
+    repo_id: String,
+    revision: u64,
+    path_bytes: Vec<u8>,
+    request: ConflictContentRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositorySnapshotDto> {
+    recorded_mutation(
+        &state,
+        &repo_id,
+        "conflict-resolve-hunks",
+        "Resolved conflict hunks",
+        || {
+            state.apply_conflict_content(
+                &repo_id,
+                revision,
+                &path_bytes,
+                &request.expected_worktree_oid,
+                &request.content,
+            )
+        },
+    )
     .await
 }
 

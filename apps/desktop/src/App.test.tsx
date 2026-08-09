@@ -14,6 +14,7 @@ import {
   abortRebase,
   addSubmodule,
   applyPatchSelection,
+  applyConflictContent,
   applyComparePatch,
   applyStash,
   addRemote,
@@ -45,6 +46,7 @@ import {
   dropStash,
   fastForwardBranch,
   getDiff,
+  getConflictFile,
   getFileBlame,
   getPathHistory,
   getCommitDiff,
@@ -119,6 +121,7 @@ vi.mock("./windowControls", () => ({
   abortRebase: vi.fn(),
   addSubmodule: vi.fn(),
   applyPatchSelection: vi.fn(),
+  applyConflictContent: vi.fn(),
   applyComparePatch: vi.fn(),
   addRemote: vi.fn(),
   abortMerge: vi.fn(),
@@ -157,6 +160,7 @@ vi.mock("./windowControls", () => ({
   dropStash: vi.fn(),
   fastForwardBranch: vi.fn(),
   getDiff: vi.fn(),
+  getConflictFile: vi.fn(),
   getFileBlame: vi.fn(),
   getPathHistory: vi.fn(),
   getCommitDiff: vi.fn(),
@@ -262,6 +266,7 @@ const mockedRemoveWorktree = vi.mocked(removeWorktree);
 const mockedLockWorktree = vi.mocked(lockWorktree);
 const mockedUnlockWorktree = vi.mocked(unlockWorktree);
 const mockedGetDiff = vi.mocked(getDiff);
+const mockedGetConflictFile = vi.mocked(getConflictFile);
 const mockedGetFileBlame = vi.mocked(getFileBlame);
 const mockedGetPathHistory = vi.mocked(getPathHistory);
 const mockedGetCommitDiff = vi.mocked(getCommitDiff);
@@ -296,6 +301,7 @@ const mockedRenameBranch = vi.mocked(renameBranch);
 const mockedDeleteTag = vi.mocked(deleteTag);
 const mockedMergeBranch = vi.mocked(mergeBranch);
 const mockedResolveConflict = vi.mocked(resolveConflict);
+const mockedApplyConflictContent = vi.mocked(applyConflictContent);
 const mockedUpdateGlobalGitIdentity = vi.mocked(updateGlobalGitIdentity);
 const mockedUpdateRepositoryGitIdentity = vi.mocked(
   updateRepositoryGitIdentity,
@@ -633,6 +639,25 @@ describe("App", () => {
     mockedApplyStash.mockResolvedValue(snapshot);
     mockedDropStash.mockResolvedValue(snapshot);
     mockedResolveConflict.mockResolvedValue(snapshot);
+    mockedGetConflictFile.mockResolvedValue({
+      schemaVersion: 1,
+      base: "header\nbefore\nfooter\n",
+      ours: "header\ncurrent\nfooter\n",
+      theirs: "header\nincoming\nfooter\n",
+      worktreeOid: "conflict-worktree",
+      editable: true,
+      segments: [
+        { kind: "common", content: "header\n" },
+        {
+          kind: "conflict",
+          index: 0,
+          ours: "current\n",
+          base: "before\n",
+          theirs: "incoming\n",
+        },
+        { kind: "common", content: "footer\n" },
+      ],
+    });
     mockedGetOperationHistory.mockResolvedValue([]);
     mockedGetReflog.mockResolvedValue([]);
     mockedRestoreReflogReference.mockResolvedValue({ ...snapshot, revision: 2 });
@@ -4095,6 +4120,36 @@ describe("App", () => {
     );
   });
 
+  it("resolves an individual conflict hunk in the built-in editor", async () => {
+    const conflicted = {
+      ...snapshot,
+      changes: [{ ...snapshot.changes[0], conflict: true, indexStatus: "U" }],
+    };
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [{ ...sessionWithSnapshot.tabs[0], snapshot: conflicted }],
+    });
+    mockedApplyConflictContent.mockResolvedValue({
+      ...conflicted,
+      revision: 2,
+      changes: [],
+    });
+    render(<App />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: /tracked\.txt/ }))[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "Use incoming" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply resolved file" }));
+
+    await waitFor(() =>
+      expect(mockedApplyConflictContent).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        snapshot.changes[0].pathBytes,
+        "conflict-worktree",
+        "header\nincoming\nfooter\n",
+      ),
+    );
+  });
   it("shows interrupted work in the operation center", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedGetOperationHistory.mockResolvedValue([
