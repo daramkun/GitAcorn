@@ -18,10 +18,10 @@ use crate::dto::{
     LfsLockRequestDto, LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
     OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
     RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
-    RepositoryGitIdentityDto, RepositoryInitRequestDto, RepositoryOpenSourceDto,
-    RepositorySidebarDto, RepositorySnapshotDto, SessionDto, SessionTabUpdateDto,
-    SignatureSettingsDto, SignatureSettingsRequestDto, SignatureStatusDto, StashRequestDto,
-    SubmoduleAddRequestDto, WorktreeCreateRequestDto,
+    RepositoryCommandRequestDto, RepositoryCommandResultDto, RepositoryGitIdentityDto,
+    RepositoryInitRequestDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
+    SessionDto, SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto,
+    SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorktreeCreateRequestDto,
 };
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
@@ -731,6 +731,36 @@ pub fn bisect_reset(
     state
         .reset_bisect(&repo_id, revision)
         .map(RepositorySnapshotDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+#[tauri::command]
+pub fn repository_terminal_open(
+    repo_id: String,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<()> {
+    state
+        .launch_repository_terminal(&repo_id)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn repository_command_run(
+    repo_id: String,
+    revision: u64,
+    request: RepositoryCommandRequestDto,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<RepositoryCommandResultDto> {
+    state
+        .run_repository_command(&repo_id, revision, &request.program, &request.args)
+        .map(|execution| RepositoryCommandResultDto {
+            schema_version: 1,
+            program: execution.result.program,
+            args: execution.result.args,
+            exit_code: execution.result.exit_code,
+            stdout: execution.result.stdout,
+            stderr: execution.result.stderr,
+            snapshot: RepositorySnapshotDto::from(execution.snapshot),
+        })
         .map_err(|error| AppErrorDto::from(&error))
 }
 #[tauri::command]

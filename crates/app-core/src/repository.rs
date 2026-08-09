@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use git_cli::{CancellationToken, GitExecutionError, GitExecutor, GitOutput, GitRequest};
@@ -191,6 +192,14 @@ pub struct ExternalDiffResult {
     pub exit_code: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryCommandResult {
+    pub program: String,
+    pub args: Vec<String>,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinaryPreview {
     pub old_path: String,
@@ -856,6 +865,86 @@ impl RepositoryService {
         })
     }
 
+    pub fn launch_terminal(&self, repository: &RepositoryDescriptor) -> Result<(), AppError> {
+        #[cfg(windows)]
+        let candidates: &[(&str, &[&str], bool)] = &[
+            ("wt.exe", &["-d"], true),
+            ("powershell.exe", &["-NoExit"], false),
+        ];
+        #[cfg(target_os = "macos")]
+        let candidates: &[(&str, &[&str], bool)] =
+            &[("open", &["-a", "Terminal"], true), ("open", &[], true)];
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        let candidates: &[(&str, &[&str], bool)] = &[
+            ("x-terminal-emulator", &["--working-directory"], true),
+            ("gnome-terminal", &["--working-directory"], true),
+        ];
+
+        let mut last_error = None;
+        for (program, args, append_path) in candidates {
+            let mut command = Command::new(program);
+            command.args(*args);
+            if *append_path {
+                command.arg(&repository.worktree_path);
+            }
+            command.current_dir(&repository.worktree_path);
+            match command.spawn() {
+                Ok(_) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(AppError::InvalidRequest(format!(
+            "Could not open a repository terminal: {}",
+            last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "no terminal is available".to_owned())
+        )))
+    }
+
+    pub fn run_repository_command(
+        &self,
+        repository: &RepositoryDescriptor,
+        program: &str,
+        args: &[String],
+    ) -> Result<RepositoryCommandResult, AppError> {
+        let program = program.trim();
+        if program.is_empty() || program.len() > 260 {
+            return Err(AppError::InvalidRequest(
+                "Command program must be between 1 and 260 characters".to_owned(),
+            ));
+        }
+        if args.len() > 64 || args.iter().any(|arg| arg.len() > 4096) {
+            return Err(AppError::InvalidRequest(
+                "A command supports at most 64 arguments of 4096 characters each".to_owned(),
+            ));
+        }
+        let output = Command::new(program)
+            .args(args)
+            .current_dir(&repository.worktree_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| {
+                AppError::InvalidRequest(format!("Could not run {program}: {error}"))
+            })?;
+        const MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
+        let stdout = String::from_utf8_lossy(
+            &output.stdout[..output.stdout.len().min(MAX_COMMAND_OUTPUT_BYTES)],
+        )
+        .into_owned();
+        let stderr = String::from_utf8_lossy(
+            &output.stderr[..output.stderr.len().min(MAX_COMMAND_OUTPUT_BYTES)],
+        )
+        .into_owned();
+        Ok(RepositoryCommandResult {
+            program: program.to_owned(),
+            args: args.to_vec(),
+            exit_code: output.status.code().unwrap_or(-1),
+            stdout,
+            stderr,
+        })
+    }
     pub fn snapshot(
         &self,
         repository: &RepositoryDescriptor,

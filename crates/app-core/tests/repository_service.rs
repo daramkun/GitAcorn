@@ -53,6 +53,41 @@ fn initializes_repository_with_selected_templates_without_touching_existing_file
 }
 
 #[test]
+fn runs_repository_commands_with_an_argument_array_in_the_worktree() {
+    let fixture = TestRepository::init();
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    let result = service
+        .run_repository_command(
+            &repository,
+            "git",
+            &["rev-parse".to_owned(), "--show-toplevel".to_owned()],
+        )
+        .expect("run repository command");
+
+    assert_eq!(result.exit_code, 0);
+    let reported = fs::canonicalize(result.stdout.trim()).expect("canonical command output");
+    assert_eq!(
+        reported,
+        fs::canonicalize(fixture.path()).expect("canonical fixture")
+    );
+    assert!(result.stderr.is_empty());
+}
+
+#[test]
+fn rejects_an_empty_repository_command_program() {
+    let fixture = TestRepository::init();
+    let service = RepositoryService::default();
+    let repository = service.discover(fixture.path()).expect("discover");
+
+    let error = service
+        .run_repository_command(&repository, "  ", &[])
+        .expect_err("empty program must fail");
+
+    assert!(error.to_string().contains("Command program"));
+}
+#[test]
 fn initialization_refuses_to_overwrite_a_selected_template_file() {
     let directory = tempfile::tempdir().expect("repository directory");
     fs::write(directory.path().join(".gitignore"), "custom\n").expect("seed gitignore");

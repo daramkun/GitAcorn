@@ -566,6 +566,25 @@ impl TryFrom<InteractiveRebaseRequestDto> for InteractiveRebaseRequest {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryCommandRequestDto {
+    pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryCommandResultDto {
+    pub schema_version: u16,
+    pub program: String,
+    pub args: Vec<String>,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub snapshot: RepositorySnapshotDto,
+}
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InteractiveRebasePreviewDto {

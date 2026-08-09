@@ -55,6 +55,8 @@ pub fn run() {
             commands::bisect_start,
             commands::bisect_mark,
             commands::bisect_reset,
+            commands::repository_terminal_open,
+            commands::repository_command_run,
             commands::references_list,
             commands::reflog_list,
             commands::reflog_restore,

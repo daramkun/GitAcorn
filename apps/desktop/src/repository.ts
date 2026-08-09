@@ -37,6 +37,15 @@ export type RepositorySnapshotDto = {
     | "revert";
 };
 
+export type RepositoryCommandResultDto = {
+  schemaVersion: 1;
+  program: string;
+  args: string[];
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  snapshot: RepositorySnapshotDto;
+};
 export type FileChangeDto = {
   path: string;
   pathBytes: number[];
@@ -603,6 +612,22 @@ export function resetBisect(
   revision: number,
 ): Promise<RepositorySnapshotDto> {
   return invoke<RepositorySnapshotDto>("bisect_reset", { repoId, revision });
+}
+export function openRepositoryTerminal(repoId: string): Promise<void> {
+  return invoke<void>("repository_terminal_open", { repoId });
+}
+
+export function runRepositoryCommand(
+  repoId: string,
+  revision: number,
+  program: string,
+  args: string[],
+): Promise<RepositoryCommandResultDto> {
+  return invoke<RepositoryCommandResultDto>("repository_command_run", {
+    repoId,
+    revision,
+    request: { program, args },
+  });
 }
 export function getReferences(repoId: string): Promise<ReferenceDto[]> {
   return invoke<ReferenceDto[]>("references_list", { repoId });

@@ -87,6 +87,7 @@ import {
   mutateHistory,
   normalizeAppError,
   openRepository,
+  openRepositoryTerminal,
   previewHistoryMutation,
   previewInteractiveRebase,
   rebaseBranch,
@@ -124,6 +125,7 @@ import {
   updateSignatureSettings,
   runExternalDiff,
   runExternalMerge,
+  runRepositoryCommand,
   validateComparePatch,
   type AppErrorDto,
   type CommitDto,
@@ -155,6 +157,7 @@ import {
   type RemoteOperationOptions,
   type RemoteReferenceDeleteTarget,
   type RemoteTagDto,
+  type RepositoryCommandResultDto,
   type RepositorySnapshotDto,
   type RepositorySidebarDto,
   type ReferenceDto,
@@ -172,6 +175,12 @@ import {
 } from "./gravatar";
 
 type Page = "changes" | "history";
+type CustomCommand = {
+  id: string;
+  name: string;
+  program: string;
+  args: string[];
+};
 
 type ResetMode = "soft" | "mixed" | "hard";
 type HistoryMutationPreview = {
@@ -558,6 +567,19 @@ export function App() {
   const [initializing, setInitializing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showRepositorySettings, setShowRepositorySettings] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  const [pendingCommand, setPendingCommand] = useState<CustomCommand>();
+  const [commandResult, setCommandResult] = useState<RepositoryCommandResultDto>();
+  const [commandRunning, setCommandRunning] = useState(false);
+  const [customCommands, setCustomCommands] = useState<CustomCommand[]>(() => {
+    try {
+      const saved = localStorage.getItem("gitacorn_custom_commands");
+      return saved ? (JSON.parse(saved) as CustomCommand[]) : [];
+    } catch {
+      return [];
+    }
+  });
   const [globalIdentityName, setGlobalIdentityName] = useState("");
   const [globalIdentityEmail, setGlobalIdentityEmail] = useState("");
   const [repositoryIdentity, setRepositoryIdentity] =
@@ -632,6 +654,14 @@ export function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem("gitacorn_custom_commands", JSON.stringify(customCommands));
+    } catch {
+      // ignore
+    }
+  }, [customCommands]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem("gitacorn_show_gravatars", String(showGravatars));
     } catch {
       // ignore
@@ -702,8 +732,17 @@ export function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setCommandQuery("");
+        setShowCommandPalette(true);
+        return;
+      }
       if (e.key === "Escape") {
-        if (showSubmoduleAdd) setShowSubmoduleAdd(false);
+        if (pendingCommand) setPendingCommand(undefined);
+        else if (commandResult) setCommandResult(undefined);
+        else if (showCommandPalette) setShowCommandPalette(false);
+        else if (showSubmoduleAdd) setShowSubmoduleAdd(false);
         else if (remoteEditor) setRemoteEditor(undefined);
         else if (remoteDialog) setRemoteDialog(undefined);
         else if (remoteDetails) setRemoteDetails(undefined);
@@ -725,6 +764,9 @@ export function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
+    pendingCommand,
+    commandResult,
+    showCommandPalette,
     referenceContextMenu,
     referenceDeleteDialog,
     referenceEditor,
@@ -1895,6 +1937,52 @@ export function App() {
     });
   }
 
+  function addCustomCommand() {
+    setCustomCommands((current) => [
+      ...current,
+      { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, name: t("New command"), program: "git", args: ["status", "--short"] },
+    ]);
+  }
+
+  function updateCustomCommand(id: string, patch: Partial<CustomCommand>) {
+    setCustomCommands((current) => current.map((command) => command.id === id ? { ...command, ...patch } : command));
+  }
+
+  function openPalettePage(nextPage: Page) {
+    updateActiveTab({ page: nextPage });
+    setShowCommandPalette(false);
+  }
+
+  async function handleOpenTerminal() {
+    if (!activeRepoId) return;
+    try {
+      await openRepositoryTerminal(activeRepoId);
+      setShowCommandPalette(false);
+    } catch (reason: unknown) {
+      reportError(reason);
+    }
+  }
+
+  async function handleRunPendingCommand() {
+    if (!pendingCommand || !activeSnapshot) return;
+    setCommandRunning(true);
+    try {
+      const result = await runRepositoryCommand(
+        activeSnapshot.repository.id,
+        activeSnapshot.revision,
+        pendingCommand.program,
+        pendingCommand.args,
+      );
+      acceptWorkspaceSnapshot(result.snapshot);
+      setPendingCommand(undefined);
+      setCommandResult(result);
+    } catch (reason: unknown) {
+      reportError(reason);
+    } finally {
+      setCommandRunning(false);
+    }
+  }
+
   function handleSubmoduleInitialize(path: string) {
     if (
       !activeSnapshot ||
@@ -2302,6 +2390,16 @@ export function App() {
           )}
         </div>
         <div className="window-drag-region" data-tauri-drag-region />
+        <button
+          className="titlebar-settings-button"
+          type="button"
+          aria-label={t("Command palette")}
+          title={`${t("Command palette")} (Ctrl+Shift+P)`}
+          onClick={() => { setCommandQuery(""); setShowCommandPalette(true); }}
+        >
+          <span aria-hidden="true">⌘</span>
+          <span>{t("Commands")}</span>
+        </button>
         <button
           className="titlebar-settings-button"
           type="button"
@@ -3050,7 +3148,50 @@ export function App() {
             </div>
           </form>
         </div>
-      )}      {showSettings && (
+      )}
+      {showCommandPalette && (
+        <div className="modal-overlay" role="presentation" onClick={() => setShowCommandPalette(false)}>
+          <div className="command-palette-modal" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" onClick={(event) => event.stopPropagation()}>
+            <div className="command-palette-search">
+              <span aria-hidden="true">⌕</span>
+              <input id="command-palette-title" autoFocus value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} placeholder={t("Search commands")} />
+              <kbd>Esc</kbd>
+            </div>
+            <div className="command-palette-list">
+              {[
+                { id: "changes", label: t("Go to Changes"), hint: t("Navigation"), disabled: !activeSnapshot, run: () => openPalettePage("changes") },
+                { id: "history", label: t("Go to History"), hint: t("Navigation"), disabled: !activeSnapshot, run: () => openPalettePage("history") },
+                { id: "terminal", label: t("Open repository terminal"), hint: activeSnapshot?.repository.name ?? t("No repository open"), disabled: !activeSnapshot, run: () => void handleOpenTerminal() },
+                { id: "repository-settings", label: t("Open repository settings"), hint: t("Settings"), disabled: !activeSnapshot, run: () => { setShowCommandPalette(false); setShowRepositorySettings(true); } },
+                { id: "settings", label: t("Open settings"), hint: t("Settings"), disabled: false, run: () => { setShowCommandPalette(false); setShowSettings(true); } },
+              ].filter((item) => `${item.label} ${item.hint}`.toLowerCase().includes(commandQuery.toLowerCase())).map((item) => (
+                <button key={item.id} type="button" disabled={item.disabled} onClick={item.run}><span>{item.label}</span><small>{item.hint}</small></button>
+              ))}
+              {customCommands.filter((command) => `${command.name} ${command.program} ${command.args.join(" ")}`.toLowerCase().includes(commandQuery.toLowerCase())).map((command) => (
+                <button key={command.id} type="button" disabled={!activeSnapshot || !command.name.trim() || !command.program.trim()} onClick={() => { setShowCommandPalette(false); setPendingCommand(command); }}><span>{command.name || t("Unnamed command")}</span><small>{[command.program, ...command.args].join(" ")}</small></button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingCommand && (
+        <div className="modal-overlay" role="presentation" onClick={() => !commandRunning && setPendingCommand(undefined)}>
+          <div className="settings-modal command-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="command-confirm-title" onClick={(event) => event.stopPropagation()}>
+            <div className="settings-modal-header"><h2 id="command-confirm-title">{t("Run repository command?")}</h2></div>
+            <div className="settings-modal-body"><p className="settings-section-desc">{t("This command runs in the current repository.")}</p><pre>{JSON.stringify([pendingCommand.program, ...pendingCommand.args])}</pre></div>
+            <div className="init-repository-actions"><button className="control-button control-button--secondary" type="button" disabled={commandRunning} onClick={() => setPendingCommand(undefined)}>{t("Cancel")}</button><button className="control-button control-button--primary" type="button" disabled={commandRunning} onClick={() => void handleRunPendingCommand()}>{commandRunning ? t("Running…") : t("Run command")}</button></div>
+          </div>
+        </div>
+      )}
+      {commandResult && (
+        <div className="modal-overlay" role="presentation" onClick={() => setCommandResult(undefined)}>
+          <div className="settings-modal command-result-modal" role="dialog" aria-modal="true" aria-labelledby="command-result-title" onClick={(event) => event.stopPropagation()}>
+            <div className="settings-modal-header"><div><h2 id="command-result-title">{t("Command result")}</h2><small>{commandResult.program} · {t("Exit code {code}", { code: commandResult.exitCode })}</small></div><button className="settings-close-btn" type="button" aria-label={t("Close command result")} onClick={() => setCommandResult(undefined)}>×</button></div>
+            <div className="settings-modal-body command-result-body">{commandResult.stdout && <section><h3>stdout</h3><pre>{commandResult.stdout}</pre></section>}{commandResult.stderr && <section><h3>stderr</h3><pre>{commandResult.stderr}</pre></section>}{!commandResult.stdout && !commandResult.stderr && <p>{t("The command produced no output.")}</p>}</div>
+          </div>
+        </div>
+      )}
+      {showSettings && (
         <div
           className="modal-overlay"
           onClick={() => setShowSettings(false)}
@@ -3174,6 +3315,18 @@ export function App() {
                     <span className="theme-label">{t("Dark")}</span>
                   </button>
                 </div>
+              </div>
+              <div className="settings-section custom-command-settings">
+                <div className="settings-section-heading"><div><h3>{t("Custom commands")}</h3><p className="settings-section-desc">{t("Run trusted tools in the current repository. Enter one argument per line; no shell is used.")}</p></div><button type="button" onClick={addCustomCommand}>{t("Add command")}</button></div>
+                {customCommands.length === 0 && <p className="custom-command-empty">{t("No custom commands configured.")}</p>}
+                {customCommands.map((command) => (
+                  <div className="custom-command-card" key={command.id}>
+                    <div className="custom-command-card-heading"><strong>{command.name || t("Unnamed command")}</strong><button type="button" aria-label={t("Delete command")} onClick={() => setCustomCommands((current) => current.filter((item) => item.id !== command.id))}>×</button></div>
+                    <label><span>{t("Name")}</span><input value={command.name} onChange={(event) => updateCustomCommand(command.id, { name: event.target.value })} placeholder={t("Command name")} /></label>
+                    <label><span>{t("Program")}</span><input value={command.program} onChange={(event) => updateCustomCommand(command.id, { program: event.target.value })} placeholder="git" /></label>
+                    <label><span>{t("Arguments (one per line)")}</span><textarea rows={3} value={command.args.join("\n")} onChange={(event) => updateCustomCommand(command.id, { args: event.target.value === "" ? [] : event.target.value.split("\n") })} placeholder={'status\n--short'} /></label>
+                  </div>
+                ))}
               </div>
               <div className="settings-section">
                 <h3>{t("Commit history")}</h3>

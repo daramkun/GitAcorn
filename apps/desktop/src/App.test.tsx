@@ -4656,6 +4656,26 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("opens the command palette from the global shortcut and manages custom commands in settings", async () => {
+    mockedRestoreSession.mockResolvedValueOnce({ schemaVersion: 1, tabs: [] });
+
+    render(<App />);
+    fireEvent.keyDown(window, { key: "P", ctrlKey: true, shiftKey: true });
+
+    expect(await screen.findByPlaceholderText(/Search commands|명령 검색/i)).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByPlaceholderText(/Search commands|명령 검색/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Settings$|^설정$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Add command|명령 추가/i }));
+
+    expect(screen.getByDisplayValue(/New command|새 명령/i)).toBeInTheDocument();
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem("gitacorn_custom_commands") ?? "[]") as Array<{ program: string; args: string[] }>;
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({ program: "git", args: ["status", "--short"] });
+    });
+  });
   it("shows a recoverable LFS authentication error without exposing credentials", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedGetLfsStatus.mockRejectedValueOnce({

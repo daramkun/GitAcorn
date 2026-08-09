@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @git-acorn/desktop tauri dev",
+    "format": "cargo fmt --all",
     "dev:web": "pnpm --filter @git-acorn/desktop dev",
     "tauri": "pnpm --filter @git-acorn/desktop tauri",
     "format:check": "cargo fmt --all -- --check",

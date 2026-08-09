@@ -11,9 +11,9 @@ use app_core::{
     ExternalDiffTool, FileBlame, GitIdentity, GitIdentitySettings, GitReference, GitRemote,
     HistoryFilter, HistoryMutationPreview, HistoryOperation, InteractiveRebasePreview,
     InteractiveRebaseRequest, LfsLock, LfsRequest, LfsStatus, PatchSelection, PathHistory,
-    ReflogEntry, RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryInitRequest,
-    RepositoryScheduler, RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus,
-    StashRequest, WorktreeCreateRequest,
+    ReflogEntry, RemoteProgress, RemoteRequest, RemoteTagSummary, RepositoryCommandResult,
+    RepositoryInitRequest, RepositoryScheduler, RepositoryService, RepositorySidebar,
+    SignatureSettings, SignatureStatus, StashRequest, WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -53,6 +53,10 @@ pub struct RepositoryOpenSource {
     pub worktree_path: String,
 }
 
+pub struct RepositoryCommandExecution {
+    pub result: RepositoryCommandResult,
+    pub snapshot: RepositorySnapshot,
+}
 pub struct RepositoryIdentityState {
     pub repo_id: String,
     pub repository_name: String,
@@ -729,6 +733,41 @@ impl ApplicationState {
             .read(repo_id, || self.service.save_patch(path, patch))
     }
 
+    pub fn launch_repository_terminal(&self, repo_id: &str) -> Result<(), AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.launch_terminal(&descriptor))
+    }
+
+    pub fn run_repository_command(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        program: &str,
+        args: &[String],
+    ) -> Result<RepositoryCommandExecution, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        self.scheduler.write(repo_id, || {
+            let descriptor = {
+                let repositories = self
+                    .repositories
+                    .lock()
+                    .expect("repository registry lock poisoned");
+                let repository = repositories
+                    .get(&repo_id)
+                    .ok_or(AppError::RepositoryNotOpen)?;
+                ensure_revision(revision, repository.revision)?;
+                repository.descriptor.clone()
+            };
+            let result = self
+                .service
+                .run_repository_command(&descriptor, program, args)?;
+            let next_revision = self.advance_revision(repo_id)?;
+            let snapshot = self.service.snapshot(&descriptor, next_revision)?;
+            Ok(RepositoryCommandExecution { result, snapshot })
+        })
+    }
     pub fn repository_external_diff_tool(
         &self,
         repo_id: &str,
