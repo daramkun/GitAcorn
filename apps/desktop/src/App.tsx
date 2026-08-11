@@ -10129,7 +10129,12 @@ function HistoryView({
           </div>
         )}
         {nextCursor && (
-          <button className="load-more" type="button" disabled={loading} onClick={loadMore}>
+          <button
+            className="control-button control-button--secondary load-more"
+            type="button"
+            disabled={loading}
+            onClick={loadMore}
+          >
             {loading ? t("Loading…") : t("Load older commits")}
           </button>
         )}
