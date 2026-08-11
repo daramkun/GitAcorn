@@ -121,7 +121,6 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 - [x] PR·issue·CI를 모은 개인/팀 dashboard와 알림
 - [x] cloud/shared patch 또는 호환 가능한 자체 호스팅 patch 공유
-- [ ] worktree 기반 coding-agent session 관리
 - [ ] 선택 가능한 provider를 사용하는 AI commit/PR 문안 생성
 - [ ] commit/branch 설명과 opt-in AI code review
 - [ ] AI conflict resolution은 항상 patch preview와 사용자 승인을 거쳐 적용
