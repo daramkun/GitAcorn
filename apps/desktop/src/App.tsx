@@ -171,6 +171,7 @@ import { updateRepositoryOperation } from "./remote-operations";
 import { ConflictEditor } from "./conflict-editor";
 import { ForgeBrowser } from "./forge-browser";
 import { ForgeDashboard } from "./forge-dashboard";
+import { PatchShareDialog } from "./patch-share-dialog";
 import { WorkspaceManager } from "./workspace-manager";
 import { IdentityProfiles } from "./identity-profiles";
 import { GitFlowSettings } from "./git-flow-settings";
@@ -574,6 +575,7 @@ export function App() {
   const [showForge, setShowForge] = useState(false);
   const [showForgeDashboard, setShowForgeDashboard] = useState(false);
   const [forgeDashboardUnread, setForgeDashboardUnread] = useState(0);
+  const [showPatchShare, setShowPatchShare] = useState(false);
   const [showWorkspaceManager, setShowWorkspaceManager] = useState(false);
   const [cloneOperation, setCloneOperation] = useState<OperationEventDto>();
   const [showInit, setShowInit] = useState(false);
@@ -760,6 +762,7 @@ export function App() {
         if (pendingCommand) setPendingCommand(undefined);
         else if (commandResult) setCommandResult(undefined);
         else if (showCommandPalette) setShowCommandPalette(false);
+        else if (showPatchShare) setShowPatchShare(false);
         else if (showForgeDashboard) setShowForgeDashboard(false);
         else if (showForge) setShowForge(false);
         else if (showWorkspaceManager) setShowWorkspaceManager(false);
@@ -788,6 +791,7 @@ export function App() {
     pendingCommand,
     commandResult,
     showCommandPalette,
+    showPatchShare,
     showForgeDashboard,
     showForge,
     showWorkspaceManager,
@@ -2571,15 +2575,16 @@ export function App() {
         <button className="control-button control-button--primary open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
           <span aria-hidden="true">＋</span>{" "}{opening ? t("Opening…") : t("Open a repository")}
         </button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowInit((value) => !value); setShowClone(false); setShowForge(false); setShowForgeDashboard(false); setShowWorkspaceManager(false); }}>{t("New repository")}</button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowClone((value) => !value); setShowInit(false); setShowForge(false); setShowForgeDashboard(false); setShowWorkspaceManager(false); }}>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowInit((value) => !value); setShowClone(false); setShowForge(false); setShowForgeDashboard(false); setShowPatchShare(false); setShowWorkspaceManager(false); }}>{t("New repository")}</button>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowClone((value) => !value); setShowInit(false); setShowForge(false); setShowForgeDashboard(false); setShowPatchShare(false); setShowWorkspaceManager(false); }}>
           {t("Clone")}
         </button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowWorkspaceManager(true); setShowForge(false); setShowForgeDashboard(false); setShowClone(false); setShowInit(false); }}>{t("Workspaces")}</button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowForge(true); setShowForgeDashboard(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>{t("Hosted repositories")}</button>
-        <button className="control-button control-button--secondary open-button forge-dashboard-open" type="button" onClick={() => { setShowForgeDashboard(true); setShowForge(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowWorkspaceManager(true); setShowForge(false); setShowForgeDashboard(false); setShowPatchShare(false); setShowClone(false); setShowInit(false); }}>{t("Workspaces")}</button>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowForge(true); setShowForgeDashboard(false); setShowPatchShare(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>{t("Hosted repositories")}</button>
+        <button className="control-button control-button--secondary open-button forge-dashboard-open" type="button" onClick={() => { setShowForgeDashboard(true); setShowForge(false); setShowPatchShare(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>
           {t("Team dashboard")}{forgeDashboardUnread > 0 && <span className="forge-dashboard-notification" aria-label={t("{count} unread notifications", { count: forgeDashboardUnread })}>{forgeDashboardUnread > 99 ? "99+" : forgeDashboardUnread}</span>}
         </button>
+        <button className="control-button control-button--secondary open-button" type="button" disabled={!activeSnapshot} onClick={() => { setShowPatchShare(true); setShowForgeDashboard(false); setShowForge(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>{t("Shared patches")}</button>
       </div>
 
       <main
@@ -3115,6 +3120,18 @@ export function App() {
           onUnreadChange={setForgeDashboardUnread}
         />
       )}
+      {showPatchShare && activeSnapshot && (
+        <PatchShareDialog
+          repoId={activeSnapshot.repository.id}
+          repositoryName={activeSnapshot.repository.name}
+          revision={activeSnapshot.revision}
+          defaultBaseRevision={activeSnapshot.head.name ?? activeSnapshot.head.oid ?? "HEAD"}
+          onClose={() => setShowPatchShare(false)}
+          onSnapshot={(snapshot) => {
+            setTabs((current) => current.map((tab) => tab.repoId === snapshot.repository.id ? { ...tab, snapshot, unavailable: false } : tab));
+          }}
+        />
+      )}
       {showForge && (
         <ForgeBrowser
           activeRepoId={activeSnapshot?.repository.id}
@@ -3229,6 +3246,7 @@ export function App() {
                 { id: "workspaces", label: t("Workspaces"), hint: t("Repository groups and batch operations"), disabled: false, run: () => { setShowCommandPalette(false); setShowWorkspaceManager(true); } },
                 { id: "forge-browser", label: t("Hosted repositories"), hint: t("Accounts and repositories"), disabled: false, run: () => { setShowCommandPalette(false); setShowForge(true); } },
                 { id: "forge-dashboard", label: t("Team dashboard"), hint: t("Pull requests, issues, CI, and notifications"), disabled: false, run: () => { setShowCommandPalette(false); setShowForgeDashboard(true); } },
+                { id: "shared-patches", label: t("Shared patches"), hint: t("Publish or import a patch"), disabled: !activeSnapshot, run: () => { setShowCommandPalette(false); setShowPatchShare(true); } },
                 { id: "repository-settings", label: t("Open repository settings"), hint: t("Settings"), disabled: !activeSnapshot, run: () => { setShowCommandPalette(false); setShowRepositorySettings(true); } },
                 { id: "settings", label: t("Open settings"), hint: t("Settings"), disabled: false, run: () => { setShowCommandPalette(false); setShowSettings(true); } },
               ].filter((item) => `${item.label} ${item.hint}`.toLowerCase().includes(commandQuery.toLowerCase())).map((item) => (

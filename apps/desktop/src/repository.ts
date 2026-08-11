@@ -120,6 +120,41 @@ export type ComparePatchDto = {
   binary: boolean;
 };
 
+export type PatchShareReceiptDto = {
+  schemaVersion: 1;
+  patchId: string;
+  webUrl?: string | null;
+  sha256: string;
+  expiresAt?: string | null;
+};
+
+export type SharedPatchDto = {
+  schemaVersion: 1;
+  patchId: string;
+  title: string;
+  description: string;
+  repository: string;
+  baseRevision: string;
+  patch: string;
+  sha256: string;
+  createdAt?: string | null;
+  expiresAt?: string | null;
+  webUrl?: string | null;
+};
+
+export type PatchShareConnection = {
+  endpoint: string;
+  token?: string;
+};
+
+export type PatchSharePublishRequest = PatchShareConnection & {
+  title: string;
+  description: string;
+  repository: string;
+  baseRevision: string;
+  patch: string;
+};
+
 export type PatchValidationDto = {
   schemaVersion: number;
   valid: boolean;
@@ -1487,6 +1522,18 @@ export function applyComparePatch(
 
 export function saveComparePatch(repoId: string, path: string, patch: string): Promise<void> {
   return invoke<void>("compare_patch_save", { repoId, path, patch });
+}
+
+export function publishSharedPatch(request: PatchSharePublishRequest): Promise<PatchShareReceiptDto> {
+  return invoke<PatchShareReceiptDto>("patch_share_publish", { request });
+}
+
+export function fetchSharedPatch(connection: PatchShareConnection, patchId: string): Promise<SharedPatchDto> {
+  return invoke<SharedPatchDto>("patch_share_fetch", { request: { ...connection, patchId } });
+}
+
+export function deleteSharedPatch(connection: PatchShareConnection, patchId: string): Promise<void> {
+  return invoke<void>("patch_share_delete", { request: { ...connection, patchId } });
 }
 
 export function getExternalDiffTool(repoId: string): Promise<ExternalDiffToolDto> {

@@ -29,6 +29,10 @@ use crate::dto::{
     WorktreeCreateRequestDto,
 };
 use crate::forge::{ForgePullRequestCreateRequest, ForgePullRequestMergeRequest};
+use crate::patch_share::{
+    PatchShareDeleteRequest, PatchShareFetchRequest, PatchSharePublishRequest, PatchShareReceipt,
+    SharedPatch,
+};
 use crate::state::{
     ApplicationState, OperationRecoveryData, RepositoryOpenSource, SessionTabUpdate,
 };
@@ -174,6 +178,39 @@ pub async fn forge_dashboard(
         .forge_dashboard()
         .await
         .map(ForgeDashboardDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn patch_share_publish(
+    request: PatchSharePublishRequest,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<PatchShareReceipt> {
+    state
+        .patch_share_publish(&request)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn patch_share_fetch(
+    request: PatchShareFetchRequest,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<SharedPatch> {
+    state
+        .patch_share_fetch(&request)
+        .await
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn patch_share_delete(
+    request: PatchShareDeleteRequest,
+    state: State<'_, ApplicationState>,
+) -> CommandResult<()> {
+    state
+        .patch_share_delete(&request)
+        .await
         .map_err(|error| AppErrorDto::from(&error))
 }
 

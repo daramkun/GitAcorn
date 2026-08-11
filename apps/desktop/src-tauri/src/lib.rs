@@ -1,6 +1,7 @@
 mod commands;
 mod dto;
 mod forge;
+mod patch_share;
 mod path_display;
 mod state;
 mod system_icons;
@@ -49,6 +50,9 @@ pub fn run() {
             commands::forge_pull_request_create,
             commands::forge_pull_request_merge,
             commands::forge_pull_request_checkout,
+            commands::patch_share_publish,
+            commands::patch_share_fetch,
+            commands::patch_share_delete,
             commands::system_file_icons,
             commands::identity_profiles,
             commands::identity_profile_save,

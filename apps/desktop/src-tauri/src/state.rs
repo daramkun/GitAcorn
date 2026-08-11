@@ -34,6 +34,10 @@ use uuid::Uuid;
 use crate::forge::{
     ForgeConnectRequest, ForgePullRequestCreateRequest, ForgePullRequestMergeRequest, ForgeService,
 };
+use crate::patch_share::{
+    PatchShareDeleteRequest, PatchShareFetchRequest, PatchSharePublishRequest, PatchShareReceipt,
+    PatchShareService, SharedPatch,
+};
 
 struct OpenRepository {
     descriptor: RepositoryDescriptor,
@@ -94,6 +98,7 @@ pub struct OperationRecoveryData {
 pub struct ApplicationState {
     service: RepositoryService,
     forge: ForgeService,
+    patch_share: PatchShareService,
     scheduler: RepositoryScheduler,
     repositories: Mutex<HashMap<RepoId, OpenRepository>>,
     watchers: Mutex<HashMap<WorktreeId, RecommendedWatcher>>,
@@ -107,6 +112,7 @@ impl ApplicationState {
         Self {
             service: RepositoryService::default(),
             forge: ForgeService::default(),
+            patch_share: PatchShareService::default(),
             scheduler: RepositoryScheduler::default(),
             repositories: Mutex::default(),
             watchers: Mutex::default(),
@@ -1882,6 +1888,27 @@ impl ApplicationState {
                 .then_with(|| left.id.cmp(&right.id))
         });
         Ok(dashboard)
+    }
+
+    pub async fn patch_share_publish(
+        &self,
+        request: &PatchSharePublishRequest,
+    ) -> Result<PatchShareReceipt, AppError> {
+        self.patch_share.publish(request).await
+    }
+
+    pub async fn patch_share_fetch(
+        &self,
+        request: &PatchShareFetchRequest,
+    ) -> Result<SharedPatch, AppError> {
+        self.patch_share.fetch(request).await
+    }
+
+    pub async fn patch_share_delete(
+        &self,
+        request: &PatchShareDeleteRequest,
+    ) -> Result<(), AppError> {
+        self.patch_share.delete(request).await
     }
 
     pub async fn forge_pull_request_create(

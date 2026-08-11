@@ -120,7 +120,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 ## P2 — 협업 및 지능형 기능
 
 - [x] PR·issue·CI를 모은 개인/팀 dashboard와 알림
-- [ ] cloud/shared patch 또는 호환 가능한 자체 호스팅 patch 공유
+- [x] cloud/shared patch 또는 호환 가능한 자체 호스팅 patch 공유
 - [ ] worktree 기반 coding-agent session 관리
 - [ ] 선택 가능한 provider를 사용하는 AI commit/PR 문안 생성
 - [ ] commit/branch 설명과 opt-in AI code review
@@ -158,3 +158,4 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P1.8 다중 Identity profile과 SSH key | 완료 | 이름·이메일·SSH 개인 키 경로 프로필 영속화, 저장소별 local config 적용과 고정 `core.sshCommand`, 실패 시 원래 설정 복구, 적용·삭제 확인 팝업 |
 | P1.9 Git-flow와 branch naming preset | 완료 | 저장소별 `gitflow.*` 설정과 develop 초기화, feature·release·hotfix·support 접두사 및 시작점 preset, 실행 명령·복구 확인 팝업 |
 | P2.1 개인/팀 dashboard와 알림 | 완료 | 연결된 Forge 계정의 최근 저장소 PR·issue·CI 읽기 전용 집계, 개인·팀·주의 필요 필터, 읽음 알림, provider별 부분 실패와 조회 범위 표시 |
+| P2.2 자체 호스팅 shared patch | 완료 | 호환 가능한 `/v1/patches` publish·fetch·delete API, HTTPS·크기·SHA-256 무결성 검증, 메모리 전용 bearer token, 패치 미리보기·적용 가능성 검사와 게시·삭제·적용 확인 팝업 |

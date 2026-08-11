@@ -5379,6 +5379,220 @@ button:disabled {
     grid-column: 1 / -1;
   }
 }
+
+.patch-share-modal {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 94vw);
+  height: min(760px, 88vh);
+}
+
+.patch-share-modal .settings-modal-header p {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.patch-share-body {
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  gap: var(--space-3);
+  min-height: 0;
+  flex: 1;
+  padding: var(--space-4);
+}
+
+.patch-share-connection {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.patch-share-connection label,
+.patch-share-grid label {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.patch-share-connection p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--font-size-xs);
+}
+
+.patch-share-tabs {
+  display: flex;
+  width: fit-content;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.patch-share-tabs button {
+  min-width: 90px;
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  color: var(--muted);
+  background: transparent;
+}
+
+.patch-share-tabs button.active {
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 2px var(--shadow-color);
+}
+
+.patch-share-form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.patch-share-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.patch-share-grid--import {
+  grid-template-columns: minmax(240px, 1fr) auto;
+  align-items: end;
+}
+
+.patch-share-wide {
+  grid-column: 1 / -1;
+}
+
+.patch-share-wide textarea {
+  resize: vertical;
+}
+
+.patch-share-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.patch-share-receipt,
+.patch-share-import-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--success) 42%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--success) 7%, var(--surface-raised));
+}
+
+.patch-share-receipt > div,
+.patch-share-import-meta > div {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.patch-share-receipt code,
+.patch-share-receipt span,
+.patch-share-import-meta span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patch-share-message {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.patch-share-preview {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.patch-share-preview pre {
+  height: 100%;
+  max-height: none;
+  overflow: auto;
+}
+
+.patch-share-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--modal-backdrop) 72%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.patch-share-confirm-card {
+  display: grid;
+  width: min(620px, 100%);
+  gap: var(--space-5);
+  padding: var(--space-6);
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-lg);
+  background: var(--modal-bg);
+  box-shadow: 0 16px 32px var(--shadow-color);
+}
+
+.patch-share-confirm-card > div:first-child {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.patch-share-confirm h3,
+.patch-share-confirm p {
+  margin: 0;
+}
+
+.patch-share-confirm p {
+  color: var(--muted);
+}
+
+.patch-share-confirm code {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.patch-share-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+@media (max-width: 760px) {
+  .patch-share-connection,
+  .patch-share-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .patch-share-wide,
+  .patch-share-connection p {
+    grid-column: 1;
+  }
+}
 .workspace-manager-modal {
   display: flex;
   width: min(980px, 95vw);
