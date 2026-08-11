@@ -3,9 +3,10 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use app_core::{
-    AppError, ForgeAccount, ForgeCiStatus, ForgeEndpointPlan, ForgeProfile, ForgeProvider,
-    ForgePullRequest, ForgeRepository, ForgeReviewStatus, parse_forge_profile,
-    parse_forge_pull_request, parse_forge_pull_requests, parse_forge_repositories,
+    AppError, ForgeAccount, ForgeCiStatus, ForgeEndpointPlan, ForgeIssue, ForgeProfile,
+    ForgeProvider, ForgePullRequest, ForgeRepository, ForgeReviewStatus, parse_forge_issues,
+    parse_forge_profile, parse_forge_pull_request, parse_forge_pull_requests,
+    parse_forge_repositories,
 };
 use reqwest::{Client, Method, RequestBuilder, StatusCode, Url, header::HeaderMap};
 use serde::{Deserialize, Serialize};
@@ -132,19 +133,9 @@ impl ForgeService {
         let plan =
             ForgeEndpointPlan::new(account.provider, &account.host, account.scope.as_deref())?;
         let token = credential_fill(&plan.account_host, auth_username)?;
-        let response = self
-            .authenticated_request(
-                Method::GET,
-                plan.provider,
-                &plan.pull_requests_url(repository)?,
-                auth_username,
-                &token,
-            )
-            .send()
-            .await
-            .map_err(map_network_error)?;
-        let mut pull_requests =
-            parse_forge_pull_requests(plan.provider, &checked_body(response).await?)?;
+        let mut pull_requests = self
+            .pull_request_summaries_with_auth(&plan, auth_username, &token, repository)
+            .await?;
         for pull_request in &mut pull_requests {
             if !matches!(
                 pull_request.state.to_ascii_lowercase().as_str(),
@@ -180,6 +171,101 @@ impl ForgeService {
             }
         }
         Ok(pull_requests)
+    }
+
+    pub async fn dashboard_repository(
+        &self,
+        account: &ForgeAccount,
+        auth_username: &str,
+        repository: &ForgeRepository,
+    ) -> Result<
+        (
+            Result<Vec<ForgePullRequest>, AppError>,
+            Result<Vec<ForgeIssue>, AppError>,
+        ),
+        AppError,
+    > {
+        let plan =
+            ForgeEndpointPlan::new(account.provider, &account.host, account.scope.as_deref())?;
+        let token = credential_fill(&plan.account_host, auth_username)?;
+        Ok(tokio::join!(
+            self.pull_request_summaries_with_auth(&plan, auth_username, &token, repository),
+            self.issues_with_auth(&plan, auth_username, &token, repository),
+        ))
+    }
+
+    async fn pull_request_summaries_with_auth(
+        &self,
+        plan: &ForgeEndpointPlan,
+        auth_username: &str,
+        token: &str,
+        repository: &ForgeRepository,
+    ) -> Result<Vec<ForgePullRequest>, AppError> {
+        let response = self
+            .authenticated_request(
+                Method::GET,
+                plan.provider,
+                &plan.pull_requests_url(repository)?,
+                auth_username,
+                token,
+            )
+            .send()
+            .await
+            .map_err(map_network_error)?;
+        parse_forge_pull_requests(plan.provider, &checked_body(response).await?)
+    }
+
+    async fn issues_with_auth(
+        &self,
+        plan: &ForgeEndpointPlan,
+        auth_username: &str,
+        token: &str,
+        repository: &ForgeRepository,
+    ) -> Result<Vec<ForgeIssue>, AppError> {
+        if plan.provider == ForgeProvider::AzureDevOps {
+            let query = serde_json::json!({
+                "query": "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project ORDER BY [System.ChangedDate] DESC"
+            });
+            let response = self
+                .authenticated_request(
+                    Method::POST,
+                    plan.provider,
+                    &plan.azure_work_item_query_url(repository)?,
+                    auth_username,
+                    token,
+                )
+                .json(&query)
+                .send()
+                .await
+                .map_err(map_network_error)?;
+            let query_body = checked_body(response).await?;
+            let ids = azure_work_item_ids(&query_body)?;
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            let response = self
+                .authenticated_get(
+                    plan.provider,
+                    &plan.azure_work_items_url(repository, &ids)?,
+                    auth_username,
+                    token,
+                )
+                .send()
+                .await
+                .map_err(map_network_error)?;
+            return parse_forge_issues(plan.provider, &checked_body(response).await?);
+        }
+        let response = self
+            .authenticated_get(
+                plan.provider,
+                &plan.issues_url(repository)?,
+                auth_username,
+                token,
+            )
+            .send()
+            .await
+            .map_err(map_network_error)?;
+        parse_forge_issues(plan.provider, &checked_body(response).await?)
     }
 
     pub async fn create_pull_request(
@@ -376,6 +462,22 @@ fn next_repository_url(
             .map(|token| with_query_value(current_url, "continuationToken", token))
             .transpose()?,
     })
+}
+
+fn azure_work_item_ids(bytes: &[u8]) -> Result<Vec<u64>, AppError> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| AppError::InvalidGitOutput("Azure WIQL returned invalid JSON".to_owned()))?;
+    let items = value
+        .get("workItems")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            AppError::InvalidGitOutput("Azure WIQL response has no work items".to_owned())
+        })?;
+    Ok(items
+        .iter()
+        .filter_map(|item| item.get("id").and_then(Value::as_u64))
+        .take(100)
+        .collect())
 }
 
 fn with_query_value(url: &str, key: &str, value: &str) -> Result<String, AppError> {
@@ -705,7 +807,8 @@ fn credential_command(
 mod tests {
     use super::{
         ForgeConnectRequest, account_id, apply_ci_status, apply_review_status,
-        authentication_username, next_repository_url, validate_credential_field, validate_secret,
+        authentication_username, azure_work_item_ids, next_repository_url,
+        validate_credential_field, validate_secret,
     };
     use reqwest::header::{HeaderMap, HeaderValue};
 
@@ -814,5 +917,17 @@ mod tests {
             ForgeReviewStatus::ChangesRequested
         );
         assert_eq!(pull_request.ci_status, ForgeCiStatus::Failure);
+    }
+
+    #[test]
+    fn limits_azure_work_item_batches() {
+        let values = (1..=120)
+            .map(|id| serde_json::json!({ "id": id }))
+            .collect::<Vec<_>>();
+        let bytes = serde_json::to_vec(&serde_json::json!({ "workItems": values })).unwrap();
+        let ids = azure_work_item_ids(&bytes).unwrap();
+        assert_eq!(ids.len(), 100);
+        assert_eq!(ids[0], 1);
+        assert_eq!(ids[99], 100);
     }
 }

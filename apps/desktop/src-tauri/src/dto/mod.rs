@@ -1,12 +1,13 @@
 use app_core::{
     AppErrorDto, BinaryPreview, BisectState, BranchRequest, CloneRequest, CommitFile,
     CommitRequest, ComparePatch, ConflictFile, ConflictSegment, ExternalDiffResult,
-    ExternalDiffTool, ForgeAccount, ForgePullRequest, ForgeRepository, GitFlowSettings,
-    GitIdentity, GitReference, GitRemote, HistoryMutationPreview, InteractiveRebaseAction,
-    InteractiveRebaseItem, InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus,
-    LfsLock, LfsStatus, PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind,
-    RemoteRequest, RemoteTagSummary, RepositoryInitRequest, RepositorySidebar, SignatureSettings,
-    SignatureStatus, WorktreeCreateRequest,
+    ExternalDiffTool, ForgeAccount, ForgeDashboard, ForgeDashboardFailure, ForgeDashboardItem,
+    ForgePullRequest, ForgeRepository, GitFlowSettings, GitIdentity, GitReference, GitRemote,
+    HistoryMutationPreview, InteractiveRebaseAction, InteractiveRebaseItem,
+    InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus,
+    PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind, RemoteRequest,
+    RemoteTagSummary, RepositoryInitRequest, RepositorySidebar, SignatureSettings, SignatureStatus,
+    WorktreeCreateRequest,
 };
 use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
@@ -208,6 +209,28 @@ impl From<Vec<ForgePullRequest>> for ForgePullRequestsDto {
         Self {
             schema_version: 1,
             pull_requests,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeDashboardDto {
+    pub schema_version: u16,
+    pub items: Vec<ForgeDashboardItem>,
+    pub failures: Vec<ForgeDashboardFailure>,
+    pub covered_repositories: usize,
+    pub skipped_repositories: usize,
+}
+
+impl From<ForgeDashboard> for ForgeDashboardDto {
+    fn from(dashboard: ForgeDashboard) -> Self {
+        Self {
+            schema_version: 1,
+            items: dashboard.items,
+            failures: dashboard.failures,
+            covered_repositories: dashboard.covered_repositories,
+            skipped_repositories: dashboard.skipped_repositories,
         }
     }
 }

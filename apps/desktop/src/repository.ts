@@ -581,6 +581,36 @@ export type ForgeRepositoriesDto = {
 export type ForgeMergeability = "mergeable" | "conflicting" | "blocked" | "checking" | "unknown";
 export type ForgeReviewStatus = "approved" | "changesRequested" | "pending" | "unknown";
 export type ForgeCiStatus = "success" | "failure" | "pending" | "cancelled" | "unknown";
+export type ForgeDashboardKind = "pullRequest" | "issue";
+export type ForgeAttentionReason = "changesRequested" | "ciFailed" | "assignedIssue";
+
+export type ForgeDashboardItemDto = {
+  id: string;
+  kind: ForgeDashboardKind;
+  provider: ForgeProvider;
+  accountId: string;
+  accountLogin: string;
+  repositoryId: string;
+  repositoryName: string;
+  number: number;
+  title: string;
+  author: string;
+  webUrl: string;
+  state: string;
+  personal: boolean;
+  attention?: ForgeAttentionReason | null;
+  reviewStatus?: ForgeReviewStatus | null;
+  ciStatus?: ForgeCiStatus | null;
+  updatedAt?: string | null;
+};
+
+export type ForgeDashboardDto = {
+  schemaVersion: 1;
+  items: ForgeDashboardItemDto[];
+  failures: Array<{ accountId: string; repositoryName?: string | null; message: string }>;
+  coveredRepositories: number;
+  skippedRepositories: number;
+};
 
 export type ForgePullRequestDto = {
   id: string;
@@ -643,6 +673,10 @@ export function getForgeRepositories(accountId: string): Promise<ForgeRepositori
 }
 export function getForgePullRequests(accountId: string, repositoryId: string): Promise<ForgePullRequestsDto> {
   return invoke<ForgePullRequestsDto>("forge_pull_requests", { accountId, repositoryId });
+}
+
+export function getForgeDashboard(): Promise<ForgeDashboardDto> {
+  return invoke<ForgeDashboardDto>("forge_dashboard");
 }
 
 export function createForgePullRequest(accountId: string, repositoryId: string, request: ForgePullRequestCreateRequest): Promise<ForgePullRequestDto> {

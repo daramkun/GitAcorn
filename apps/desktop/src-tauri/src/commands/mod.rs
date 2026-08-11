@@ -13,19 +13,20 @@ use crate::dto::{
     CommitFileDto, CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto,
     ConflictContentRequestDto, ConflictFileDto, DiffDto, ExternalDiffResultDto,
     ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto, ForgeAccountDto,
-    ForgeAccountsDto, ForgePullRequestsDto, ForgeRepositoriesDto, GitFlowSettingsDto,
-    GitFlowSettingsRequestDto, GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto,
-    GitRemoteDto, HistoryMutationPreviewDto, HistoryPageDto, IdentityProfileDto,
-    IdentityProfileSaveRequestDto, IdentityProfilesDto, InteractiveRebasePreviewDto,
-    InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto, LfsOperationRequestDto,
-    LfsStatusDto, OperationEventDto, OperationRecordDto, OperationStartedDto, PatchSelectionDto,
-    PathHistoryDto, ReferenceDto, ReflogEntryDto, RemoteMutationRequestDto,
-    RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto, RepositoryCommandRequestDto,
-    RepositoryCommandResultDto, RepositoryGitIdentityDto, RepositoryInitRequestDto,
-    RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
-    SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto, SignatureStatusDto,
-    StashRequestDto, SubmoduleAddRequestDto, WorkspaceBatchDto, WorkspaceBatchResultDto,
-    WorkspaceDto, WorkspaceSaveRequestDto, WorkspacesDto, WorktreeCreateRequestDto,
+    ForgeAccountsDto, ForgeDashboardDto, ForgePullRequestsDto, ForgeRepositoriesDto,
+    GitFlowSettingsDto, GitFlowSettingsRequestDto, GitIdentityDto, GitIdentitySettingsDto,
+    GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto, HistoryPageDto,
+    IdentityProfileDto, IdentityProfileSaveRequestDto, IdentityProfilesDto,
+    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto,
+    LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
+    OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
+    RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
+    RepositoryCommandRequestDto, RepositoryCommandResultDto, RepositoryGitIdentityDto,
+    RepositoryInitRequestDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
+    SessionDto, SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto,
+    SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorkspaceBatchDto,
+    WorkspaceBatchResultDto, WorkspaceDto, WorkspaceSaveRequestDto, WorkspacesDto,
+    WorktreeCreateRequestDto,
 };
 use crate::forge::{ForgePullRequestCreateRequest, ForgePullRequestMergeRequest};
 use crate::state::{
@@ -162,6 +163,17 @@ pub async fn forge_pull_requests(
         .forge_pull_requests(&account_id, &repository_id)
         .await
         .map(ForgePullRequestsDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub async fn forge_dashboard(
+    state: State<'_, ApplicationState>,
+) -> CommandResult<ForgeDashboardDto> {
+    state
+        .forge_dashboard()
+        .await
+        .map(ForgeDashboardDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
 

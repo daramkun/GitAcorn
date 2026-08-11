@@ -45,6 +45,7 @@ pub fn run() {
             commands::forge_account_disconnect,
             commands::forge_repositories,
             commands::forge_pull_requests,
+            commands::forge_dashboard,
             commands::forge_pull_request_create,
             commands::forge_pull_request_merge,
             commands::forge_pull_request_checkout,

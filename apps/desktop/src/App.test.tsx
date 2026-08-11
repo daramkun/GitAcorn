@@ -58,6 +58,7 @@ import {
   getGitIdentity,
   getIdentityProfiles,
   getForgeAccounts,
+  getForgeDashboard,
   connectForgeAccount,
   disconnectForgeAccount,
   getForgeRepositories,
@@ -189,6 +190,7 @@ vi.mock("./windowControls", () => ({
   applyIdentityProfile: vi.fn(),
   chooseSshPrivateKey: vi.fn(),
   getForgeAccounts: vi.fn(),
+  getForgeDashboard: vi.fn(),
   connectForgeAccount: vi.fn(),
   disconnectForgeAccount: vi.fn(),
   getForgeRepositories: vi.fn(),
@@ -313,6 +315,7 @@ const mockedGetGitFlowSettings = vi.mocked(getGitFlowSettings);
 const mockedGetGitIdentity = vi.mocked(getGitIdentity);
 const mockedGetIdentityProfiles = vi.mocked(getIdentityProfiles);
 const mockedGetForgeAccounts = vi.mocked(getForgeAccounts);
+const mockedGetForgeDashboard = vi.mocked(getForgeDashboard);
 const mockedConnectForgeAccount = vi.mocked(connectForgeAccount);
 const mockedDisconnectForgeAccount = vi.mocked(disconnectForgeAccount);
 const mockedGetForgeRepositories = vi.mocked(getForgeRepositories);
@@ -433,6 +436,7 @@ describe("App", () => {
     });
     mockedGetSystemFileIcons.mockResolvedValue({});
     mockedGetForgeAccounts.mockResolvedValue({ schemaVersion: 1, accounts: [] });
+    mockedGetForgeDashboard.mockResolvedValue({ schemaVersion: 1, items: [], failures: [], coveredRepositories: 0, skippedRepositories: 0 });
     mockedConnectForgeAccount.mockRejectedValue(new Error("not configured"));
     mockedDisconnectForgeAccount.mockResolvedValue();
     mockedGetForgeRepositories.mockResolvedValue({ schemaVersion: 1, repositories: [] });
@@ -1798,7 +1802,43 @@ describe("App", () => {
     expect(await screen.findByRole("dialog", { name: /Hosted repositories|호스팅 저장소/i })).toBeInTheDocument();
     expect(mockedGetForgeAccounts).toHaveBeenCalledOnce();
     expect(screen.getByRole("heading", { name: /Connect hosting account|호스팅 계정 연결/i })).toBeVisible();
-  });  it("lists submodules and opens an initialized submodule on double-click", async () => {
+  });
+
+  it("opens the team dashboard and reports unread forge attention", async () => {
+    mockedGetForgeDashboard.mockResolvedValue({
+      schemaVersion: 1,
+      coveredRepositories: 1,
+      skippedRepositories: 0,
+      failures: [],
+      items: [{
+        id: "attention-pr",
+        kind: "pullRequest",
+        provider: "github",
+        accountId: "account",
+        accountLogin: "ada",
+        repositoryId: "repo",
+        repositoryName: "team/demo",
+        number: 5,
+        title: "Fix CI",
+        author: "ada",
+        webUrl: "https://github.com/team/demo/pull/5",
+        state: "open",
+        personal: true,
+        attention: "ciFailed",
+        reviewStatus: "approved",
+        ciStatus: "failure",
+      }],
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Team dashboard|팀 대시보드/i }));
+
+    expect(await screen.findByRole("dialog", { name: /Team dashboard|팀 대시보드/i })).toBeVisible();
+    expect(screen.getByText(/Fix CI/)).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText(/1 unread notification|읽지 않은 알림 1개/i)).toBeVisible());
+  });
+
+  it("lists submodules and opens an initialized submodule on double-click", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedGetSidebar.mockResolvedValue({
       schemaVersion: 1,

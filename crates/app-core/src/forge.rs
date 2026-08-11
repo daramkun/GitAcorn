@@ -238,7 +238,140 @@ pub struct ForgePullRequest {
     pub updated_at: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeIssue {
+    pub id: String,
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub assignees: Vec<String>,
+    pub web_url: String,
+    pub state: String,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ForgeDashboardKind {
+    PullRequest,
+    Issue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ForgeAttentionReason {
+    ChangesRequested,
+    CiFailed,
+    AssignedIssue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeDashboardItem {
+    pub id: String,
+    pub kind: ForgeDashboardKind,
+    pub provider: ForgeProvider,
+    pub account_id: String,
+    pub account_login: String,
+    pub repository_id: String,
+    pub repository_name: String,
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub web_url: String,
+    pub state: String,
+    pub personal: bool,
+    pub attention: Option<ForgeAttentionReason>,
+    pub review_status: Option<ForgeReviewStatus>,
+    pub ci_status: Option<ForgeCiStatus>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeDashboardFailure {
+    pub account_id: String,
+    pub repository_name: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeDashboard {
+    pub items: Vec<ForgeDashboardItem>,
+    pub failures: Vec<ForgeDashboardFailure>,
+    pub covered_repositories: usize,
+    pub skipped_repositories: usize,
+}
+
 impl ForgeEndpointPlan {
+    pub fn issues_url(&self, repository: &ForgeRepository) -> Result<String, AppError> {
+        let path = self.repository_api_path(repository)?;
+        Ok(match self.provider {
+            ForgeProvider::GitHub => {
+                format!("{}/{path}/issues?state=all&per_page=100", self.base_url)
+            }
+            ForgeProvider::GitLab => format!(
+                "{}/{path}/issues?scope=all&state=all&per_page=100&order_by=updated_at&sort=desc",
+                self.base_url
+            ),
+            ForgeProvider::Bitbucket => format!(
+                "{}/{path}/issues?pagelen=100&sort=-updated_on",
+                self.base_url
+            ),
+            ForgeProvider::AzureDevOps => self.azure_work_item_query_url(repository)?,
+        })
+    }
+
+    pub fn azure_work_item_query_url(
+        &self,
+        repository: &ForgeRepository,
+    ) -> Result<String, AppError> {
+        if self.provider != ForgeProvider::AzureDevOps {
+            return Err(AppError::InvalidRequest(
+                "Work item queries are only available for Azure DevOps".to_owned(),
+            ));
+        }
+        let project = repository.full_name.split('/').next().unwrap_or_default();
+        if project.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "Azure DevOps project is invalid".to_owned(),
+            ));
+        }
+        Ok(format!(
+            "{}/{}/{}/_apis/wit/wiql?api-version=7.1",
+            self.base_url,
+            encode_path_segment(self.scope.as_deref().expect("Azure scope is validated")),
+            encode_path_segment(project)
+        ))
+    }
+
+    pub fn azure_work_items_url(
+        &self,
+        repository: &ForgeRepository,
+        ids: &[u64],
+    ) -> Result<String, AppError> {
+        if ids.is_empty() || ids.len() > 100 {
+            return Err(AppError::InvalidRequest(
+                "Azure DevOps work item batch is invalid".to_owned(),
+            ));
+        }
+        let project = repository.full_name.split('/').next().unwrap_or_default();
+        if project.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "Azure DevOps project is invalid".to_owned(),
+            ));
+        }
+        let ids = ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+        Ok(format!(
+            "{}/{}/{}/_apis/wit/workitems?ids={ids}&$expand=links&api-version=7.1",
+            self.base_url,
+            encode_path_segment(self.scope.as_deref().expect("Azure scope is validated")),
+            encode_path_segment(project)
+        ))
+    }
+
     pub fn pull_requests_url(&self, repository: &ForgeRepository) -> Result<String, AppError> {
         let path = self.repository_api_path(repository)?;
         Ok(match self.provider {
@@ -407,6 +540,137 @@ pub fn parse_forge_pull_requests(
         .iter()
         .map(|item| parse_pull_request(provider, item))
         .collect()
+}
+
+pub fn parse_forge_issues(
+    provider: ForgeProvider,
+    bytes: &[u8],
+) -> Result<Vec<ForgeIssue>, AppError> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| AppError::InvalidGitOutput("Forge returned invalid JSON".to_owned()))?;
+    let items = match provider {
+        ForgeProvider::GitHub | ForgeProvider::GitLab => value.as_array(),
+        ForgeProvider::Bitbucket | ForgeProvider::AzureDevOps => {
+            value.get("values").and_then(Value::as_array)
+        }
+    }
+    .ok_or_else(|| AppError::InvalidGitOutput("Forge issue response is not a list".to_owned()))?;
+    items
+        .iter()
+        .filter(|item| provider != ForgeProvider::GitHub || item.get("pull_request").is_none())
+        .map(|item| parse_issue(provider, item))
+        .collect()
+}
+
+fn parse_issue(provider: ForgeProvider, item: &Value) -> Result<ForgeIssue, AppError> {
+    let required = |value: Option<&str>, label: &str| {
+        value
+            .map(str::to_owned)
+            .ok_or_else(|| AppError::InvalidGitOutput(format!("Forge issue has no {label}")))
+    };
+    let assignee_names = |values: Option<&Vec<Value>>, key: &str| {
+        values
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.get(key).and_then(Value::as_str).map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    Ok(match provider {
+        ForgeProvider::GitHub => ForgeIssue {
+            id: item.get("id").map(Value::to_string).unwrap_or_default(),
+            number: item.get("number").and_then(Value::as_u64).ok_or_else(|| {
+                AppError::InvalidGitOutput("Forge issue has no number".to_owned())
+            })?,
+            title: required(item.get("title").and_then(Value::as_str), "title")?,
+            author: required(
+                item.pointer("/user/login").and_then(Value::as_str),
+                "author",
+            )?,
+            assignees: assignee_names(item.get("assignees").and_then(Value::as_array), "login"),
+            web_url: required(item.get("html_url").and_then(Value::as_str), "web URL")?,
+            state: text(item, "state").unwrap_or_default(),
+            updated_at: text(item, "updated_at"),
+        },
+        ForgeProvider::GitLab => ForgeIssue {
+            id: item.get("id").map(Value::to_string).unwrap_or_default(),
+            number: item.get("iid").and_then(Value::as_u64).ok_or_else(|| {
+                AppError::InvalidGitOutput("Forge issue has no number".to_owned())
+            })?,
+            title: required(item.get("title").and_then(Value::as_str), "title")?,
+            author: required(
+                item.pointer("/author/username").and_then(Value::as_str),
+                "author",
+            )?,
+            assignees: assignee_names(item.get("assignees").and_then(Value::as_array), "username"),
+            web_url: required(item.get("web_url").and_then(Value::as_str), "web URL")?,
+            state: text(item, "state").unwrap_or_default(),
+            updated_at: text(item, "updated_at"),
+        },
+        ForgeProvider::Bitbucket => ForgeIssue {
+            id: item.get("id").map(Value::to_string).unwrap_or_default(),
+            number: item.get("id").and_then(Value::as_u64).ok_or_else(|| {
+                AppError::InvalidGitOutput("Forge issue has no number".to_owned())
+            })?,
+            title: required(item.get("title").and_then(Value::as_str), "title")?,
+            author: required(
+                item.pointer("/reporter/display_name")
+                    .and_then(Value::as_str),
+                "author",
+            )?,
+            assignees: item
+                .pointer("/assignee/display_name")
+                .and_then(Value::as_str)
+                .map(|value| vec![value.to_owned()])
+                .unwrap_or_default(),
+            web_url: required(
+                item.pointer("/links/html/href").and_then(Value::as_str),
+                "web URL",
+            )?,
+            state: text(item, "state").unwrap_or_default(),
+            updated_at: text(item, "updated_on"),
+        },
+        ForgeProvider::AzureDevOps => {
+            let fields = item.get("fields").ok_or_else(|| {
+                AppError::InvalidGitOutput("Azure work item has no fields".to_owned())
+            })?;
+            let identity = |key: &str| {
+                fields.get(key).and_then(|value| {
+                    value
+                        .get("uniqueName")
+                        .or_else(|| value.get("displayName"))
+                        .and_then(Value::as_str)
+                        .or_else(|| value.as_str())
+                })
+            };
+            let number = item.get("id").and_then(Value::as_u64).ok_or_else(|| {
+                AppError::InvalidGitOutput("Azure work item has no number".to_owned())
+            })?;
+            ForgeIssue {
+                id: number.to_string(),
+                number,
+                title: required(fields.get("System.Title").and_then(Value::as_str), "title")?,
+                author: required(identity("System.CreatedBy"), "author")?,
+                assignees: identity("System.AssignedTo")
+                    .map(|value| vec![value.to_owned()])
+                    .unwrap_or_default(),
+                web_url: item
+                    .pointer("/_links/html/href")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.get("url").and_then(Value::as_str))
+                    .unwrap_or_default()
+                    .to_owned(),
+                state: fields
+                    .get("System.State")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                updated_at: fields
+                    .get("System.ChangedDate")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            }
+        }
+    })
 }
 
 pub fn parse_forge_pull_request(
@@ -842,7 +1106,8 @@ fn text(value: &Value, key: &str) -> Option<String> {
 mod tests {
     use super::{
         ForgeCiStatus, ForgeEndpointPlan, ForgeMergeability, ForgeProvider, ForgeReviewStatus,
-        parse_forge_profile, parse_forge_pull_requests, parse_forge_repositories,
+        parse_forge_issues, parse_forge_profile, parse_forge_pull_requests,
+        parse_forge_repositories,
     };
 
     #[test]
@@ -947,7 +1212,7 @@ mod tests {
         );
         let azure_repository = super::ForgeRepository {
             full_name: "Project One/demo".to_owned(),
-            ..repository
+            ..repository.clone()
         };
         let azure = ForgeEndpointPlan::new(
             ForgeProvider::AzureDevOps,
@@ -961,6 +1226,31 @@ mod tests {
                 .unwrap()
                 .contains("acorn-org/Project%20One/_apis/git/repositories/17/pullrequests")
         );
+        assert_eq!(
+            github.issues_url(&repository).unwrap(),
+            "https://api.github.com/repos/team/demo/issues?state=all&per_page=100"
+        );
+        assert!(
+            azure
+                .issues_url(&azure_repository)
+                .unwrap()
+                .contains("acorn-org/Project%20One/_apis/wit/wiql")
+        );
+    }
+
+    #[test]
+    fn normalizes_provider_issues_and_excludes_github_pull_requests() {
+        let github = parse_forge_issues(ForgeProvider::GitHub, br#"[{"id":1,"number":3,"title":"Crash","user":{"login":"ada"},"assignees":[{"login":"grace"}],"html_url":"https://github.com/team/demo/issues/3","state":"open","updated_at":"2026-08-10T00:00:00Z"},{"id":2,"number":4,"title":"PR","user":{"login":"ada"},"assignees":[],"html_url":"https://github.com/team/demo/pull/4","state":"open","pull_request":{}}]"#).unwrap();
+        assert_eq!(github.len(), 1);
+        assert_eq!(github[0].assignees, vec!["grace"]);
+
+        let gitlab = parse_forge_issues(ForgeProvider::GitLab, br#"[{"id":7,"iid":8,"title":"Regression","author":{"username":"ada"},"assignees":[{"username":"ada"}],"web_url":"https://gitlab.example/team/demo/-/issues/8","state":"opened"}]"#).unwrap();
+        assert_eq!(gitlab[0].number, 8);
+        assert_eq!(gitlab[0].author, "ada");
+
+        let azure = parse_forge_issues(ForgeProvider::AzureDevOps, br#"{"values":[{"id":11,"fields":{"System.Title":"Broken build","System.CreatedBy":{"displayName":"Ada"},"System.AssignedTo":{"uniqueName":"ada@example.com"},"System.State":"Active","System.ChangedDate":"2026-08-10T00:00:00Z"},"_links":{"html":{"href":"https://dev.azure.com/org/project/_workitems/edit/11"}}}]}"#).unwrap();
+        assert_eq!(azure[0].assignees, vec!["ada@example.com"]);
+        assert_eq!(azure[0].state, "Active");
     }
 
     #[test]

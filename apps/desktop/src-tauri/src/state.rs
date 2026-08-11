@@ -8,13 +8,15 @@ use std::time::{Duration, Instant};
 use app_core::{
     AppError, BinaryPreview, BisectMark, BisectState, BranchRequest, CloneRequest, CommitRequest,
     ComparePatch, ConflictFile, ConflictResolution, DiffTarget, ExternalDiffResult,
-    ExternalDiffTool, FileBlame, ForgeAccount, ForgeProvider, ForgePullRequest, ForgeRepository,
-    GitFlowSettings, GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
-    HistoryMutationPreview, HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest,
-    LfsLock, LfsRequest, LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress,
-    RemoteRequest, RemoteTagSummary, RepositoryCommandResult, RepositoryInitRequest,
-    RepositoryScheduler, RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus,
-    StashRequest, WorktreeCreateRequest,
+    ExternalDiffTool, FileBlame, ForgeAccount, ForgeAttentionReason, ForgeCiStatus, ForgeDashboard,
+    ForgeDashboardFailure, ForgeDashboardItem, ForgeDashboardKind, ForgeIssue, ForgeProvider,
+    ForgePullRequest, ForgeRepository, ForgeReviewStatus, GitFlowSettings, GitIdentity,
+    GitIdentitySettings, GitReference, GitRemote, HistoryFilter, HistoryMutationPreview,
+    HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest, LfsLock, LfsRequest,
+    LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress, RemoteRequest,
+    RemoteTagSummary, RepositoryCommandResult, RepositoryInitRequest, RepositoryScheduler,
+    RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus, StashRequest,
+    WorktreeCreateRequest,
 };
 use git_cli::CancellationToken;
 use git_domain::{
@@ -1771,6 +1773,117 @@ impl ApplicationState {
             .await
     }
 
+    pub async fn forge_dashboard(&self) -> Result<ForgeDashboard, AppError> {
+        const MAX_REPOSITORIES_PER_ACCOUNT: usize = 20;
+        let records = self
+            .session
+            .list_forge_accounts()
+            .await
+            .map_err(persistence_error)?;
+        let mut dashboard = ForgeDashboard {
+            items: Vec::new(),
+            failures: Vec::new(),
+            covered_repositories: 0,
+            skipped_repositories: 0,
+        };
+        for record in records {
+            let account = match forge_account_from_record(record.clone()) {
+                Ok(account) => account,
+                Err(error) => {
+                    dashboard.failures.push(ForgeDashboardFailure {
+                        account_id: record.id,
+                        repository_name: None,
+                        message: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let mut repositories = match self
+                .forge
+                .repositories(&account, &record.auth_username)
+                .await
+            {
+                Ok(repositories) => repositories,
+                Err(error) => {
+                    dashboard.failures.push(ForgeDashboardFailure {
+                        account_id: account.id.clone(),
+                        repository_name: None,
+                        message: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            repositories.retain(|repository| !repository.archived);
+            dashboard.skipped_repositories += repositories
+                .len()
+                .saturating_sub(MAX_REPOSITORIES_PER_ACCOUNT);
+            repositories.truncate(MAX_REPOSITORIES_PER_ACCOUNT);
+            dashboard.covered_repositories += repositories.len();
+            let mut tasks = tokio::task::JoinSet::new();
+            for repository in repositories {
+                let forge = self.forge.clone();
+                let task_account = account.clone();
+                let auth_username = record.auth_username.clone();
+                tasks.spawn(async move {
+                    let result = forge
+                        .dashboard_repository(&task_account, &auth_username, &repository)
+                        .await;
+                    (task_account, repository, result)
+                });
+            }
+            while let Some(result) = tasks.join_next().await {
+                let Ok((task_account, repository, result)) = result else {
+                    dashboard.failures.push(ForgeDashboardFailure {
+                        account_id: account.id.clone(),
+                        repository_name: None,
+                        message: "Dashboard refresh task stopped unexpectedly".to_owned(),
+                    });
+                    continue;
+                };
+                match result {
+                    Ok((pull_requests, issues)) => {
+                        match pull_requests {
+                            Ok(pull_requests) => dashboard.items.extend(
+                                pull_requests.into_iter().map(|pull_request| {
+                                    dashboard_pull_request(&task_account, &repository, pull_request)
+                                }),
+                            ),
+                            Err(error) => dashboard.failures.push(ForgeDashboardFailure {
+                                account_id: task_account.id.clone(),
+                                repository_name: Some(repository.full_name.clone()),
+                                message: error.to_string(),
+                            }),
+                        }
+                        match issues {
+                            Ok(issues) => {
+                                dashboard.items.extend(issues.into_iter().map(|issue| {
+                                    dashboard_issue(&task_account, &repository, issue)
+                                }))
+                            }
+                            Err(error) => dashboard.failures.push(ForgeDashboardFailure {
+                                account_id: task_account.id.clone(),
+                                repository_name: Some(repository.full_name.clone()),
+                                message: error.to_string(),
+                            }),
+                        }
+                    }
+                    Err(error) => dashboard.failures.push(ForgeDashboardFailure {
+                        account_id: task_account.id,
+                        repository_name: Some(repository.full_name),
+                        message: error.to_string(),
+                    }),
+                }
+            }
+        }
+        dashboard.items.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(dashboard)
+    }
+
     pub async fn forge_pull_request_create(
         &self,
         account_id: &str,
@@ -2675,6 +2788,85 @@ fn ensure_revision(expected: u64, actual: u64) -> Result<(), AppError> {
     }
 }
 
+fn dashboard_pull_request(
+    account: &ForgeAccount,
+    repository: &ForgeRepository,
+    pull_request: ForgePullRequest,
+) -> ForgeDashboardItem {
+    let personal = same_identity(&pull_request.author, &account.login);
+    let attention = if pull_request.review_status == ForgeReviewStatus::ChangesRequested {
+        Some(ForgeAttentionReason::ChangesRequested)
+    } else if pull_request.ci_status == ForgeCiStatus::Failure {
+        Some(ForgeAttentionReason::CiFailed)
+    } else {
+        None
+    };
+    ForgeDashboardItem {
+        id: format!(
+            "{}:{}:{}:pullRequest:{}",
+            account.id, repository.id, pull_request.id, pull_request.number
+        ),
+        kind: ForgeDashboardKind::PullRequest,
+        provider: account.provider,
+        account_id: account.id.clone(),
+        account_login: account.login.clone(),
+        repository_id: repository.id.clone(),
+        repository_name: repository.full_name.clone(),
+        number: pull_request.number,
+        title: pull_request.title,
+        author: pull_request.author,
+        web_url: pull_request.web_url,
+        state: pull_request.state,
+        personal,
+        attention,
+        review_status: Some(pull_request.review_status),
+        ci_status: Some(pull_request.ci_status),
+        updated_at: pull_request.updated_at,
+    }
+}
+
+fn dashboard_issue(
+    account: &ForgeAccount,
+    repository: &ForgeRepository,
+    issue: ForgeIssue,
+) -> ForgeDashboardItem {
+    let assigned = issue
+        .assignees
+        .iter()
+        .any(|assignee| same_identity(assignee, &account.login));
+    let personal = assigned || same_identity(&issue.author, &account.login);
+    let open = matches!(
+        issue.state.to_ascii_lowercase().as_str(),
+        "open" | "opened" | "active" | "new" | "to do" | "todo"
+    );
+    ForgeDashboardItem {
+        id: format!(
+            "{}:{}:{}:issue:{}",
+            account.id, repository.id, issue.id, issue.number
+        ),
+        kind: ForgeDashboardKind::Issue,
+        provider: account.provider,
+        account_id: account.id.clone(),
+        account_login: account.login.clone(),
+        repository_id: repository.id.clone(),
+        repository_name: repository.full_name.clone(),
+        number: issue.number,
+        title: issue.title,
+        author: issue.author,
+        web_url: issue.web_url,
+        state: issue.state,
+        personal,
+        attention: (assigned && open).then_some(ForgeAttentionReason::AssignedIssue),
+        review_status: None,
+        ci_status: None,
+        updated_at: issue.updated_at,
+    }
+}
+
+fn same_identity(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
+}
+
 fn persistence_error(error: sqlx::Error) -> AppError {
     AppError::Persistence {
         detail: error.to_string(),
@@ -2713,11 +2905,14 @@ fn forge_account_from_record(record: ForgeAccountRecord) -> Result<ForgeAccount,
 
 #[cfg(test)]
 mod tests {
-    use app_core::AppError;
+    use app_core::{
+        AppError, ForgeAccount, ForgeAttentionReason, ForgeCiStatus, ForgeIssue, ForgeMergeability,
+        ForgeProvider, ForgePullRequest, ForgeRepository, ForgeReviewStatus,
+    };
     use persistence::{SessionStore, WorkspaceRecord, WorkspaceRepositoryRecord};
     use test_support::TestRepository;
 
-    use super::{ApplicationState, ensure_revision};
+    use super::{ApplicationState, dashboard_issue, dashboard_pull_request, ensure_revision};
 
     #[test]
     fn rejects_a_stale_write_revision() {
@@ -2729,6 +2924,69 @@ mod tests {
                 actual: 5
             }
         ));
+    }
+
+    #[test]
+    fn classifies_personal_forge_attention_without_changing_remote_state() {
+        let account = ForgeAccount {
+            id: "account".to_owned(),
+            provider: ForgeProvider::GitHub,
+            host: "github.com".to_owned(),
+            login: "ada".to_owned(),
+            display_name: "Ada".to_owned(),
+            scope: None,
+            avatar_url: None,
+        };
+        let repository = ForgeRepository {
+            id: "repo".to_owned(),
+            name: "demo".to_owned(),
+            full_name: "team/demo".to_owned(),
+            clone_url: "https://github.com/team/demo.git".to_owned(),
+            web_url: "https://github.com/team/demo".to_owned(),
+            private: false,
+            archived: false,
+            updated_at: None,
+        };
+        let pull_request = dashboard_pull_request(
+            &account,
+            &repository,
+            ForgePullRequest {
+                id: "12".to_owned(),
+                number: 12,
+                title: "Fix checks".to_owned(),
+                author: "Ada".to_owned(),
+                source_branch: "fix".to_owned(),
+                target_branch: "main".to_owned(),
+                source_oid: "abcdef0".to_owned(),
+                source_clone_url: None,
+                web_url: "https://github.com/team/demo/pull/12".to_owned(),
+                state: "open".to_owned(),
+                draft: false,
+                mergeability: ForgeMergeability::Blocked,
+                review_status: ForgeReviewStatus::Approved,
+                ci_status: ForgeCiStatus::Failure,
+                updated_at: None,
+            },
+        );
+        assert!(pull_request.personal);
+        assert_eq!(pull_request.attention, Some(ForgeAttentionReason::CiFailed));
+
+        let issue = dashboard_issue(
+            &account,
+            &repository,
+            ForgeIssue {
+                id: "7".to_owned(),
+                number: 7,
+                title: "Regression".to_owned(),
+                author: "grace".to_owned(),
+                assignees: vec!["ADA".to_owned()],
+                web_url: "https://github.com/team/demo/issues/7".to_owned(),
+                state: "open".to_owned(),
+                updated_at: None,
+            },
+        );
+        assert!(issue.personal);
+        assert_eq!(issue.attention, Some(ForgeAttentionReason::AssignedIssue));
     }
     #[tokio::test]
     async fn workspace_batch_clones_fetches_and_fast_forward_pulls_local_repositories() {

@@ -170,6 +170,7 @@ import {
 import { updateRepositoryOperation } from "./remote-operations";
 import { ConflictEditor } from "./conflict-editor";
 import { ForgeBrowser } from "./forge-browser";
+import { ForgeDashboard } from "./forge-dashboard";
 import { WorkspaceManager } from "./workspace-manager";
 import { IdentityProfiles } from "./identity-profiles";
 import { GitFlowSettings } from "./git-flow-settings";
@@ -571,6 +572,8 @@ export function App() {
   const [cloneUrl, setCloneUrl] = useState("");
   const [showClone, setShowClone] = useState(false);
   const [showForge, setShowForge] = useState(false);
+  const [showForgeDashboard, setShowForgeDashboard] = useState(false);
+  const [forgeDashboardUnread, setForgeDashboardUnread] = useState(0);
   const [showWorkspaceManager, setShowWorkspaceManager] = useState(false);
   const [cloneOperation, setCloneOperation] = useState<OperationEventDto>();
   const [showInit, setShowInit] = useState(false);
@@ -757,6 +760,7 @@ export function App() {
         if (pendingCommand) setPendingCommand(undefined);
         else if (commandResult) setCommandResult(undefined);
         else if (showCommandPalette) setShowCommandPalette(false);
+        else if (showForgeDashboard) setShowForgeDashboard(false);
         else if (showForge) setShowForge(false);
         else if (showWorkspaceManager) setShowWorkspaceManager(false);
         else if (showSubmoduleAdd) setShowSubmoduleAdd(false);
@@ -784,6 +788,7 @@ export function App() {
     pendingCommand,
     commandResult,
     showCommandPalette,
+    showForgeDashboard,
     showForge,
     showWorkspaceManager,
     referenceContextMenu,
@@ -2566,12 +2571,15 @@ export function App() {
         <button className="control-button control-button--primary open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
           <span aria-hidden="true">＋</span>{" "}{opening ? t("Opening…") : t("Open a repository")}
         </button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowInit((value) => !value); setShowClone(false); setShowForge(false); setShowWorkspaceManager(false); }}>{t("New repository")}</button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowClone((value) => !value); setShowInit(false); setShowForge(false); setShowWorkspaceManager(false); }}>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowInit((value) => !value); setShowClone(false); setShowForge(false); setShowForgeDashboard(false); setShowWorkspaceManager(false); }}>{t("New repository")}</button>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowClone((value) => !value); setShowInit(false); setShowForge(false); setShowForgeDashboard(false); setShowWorkspaceManager(false); }}>
           {t("Clone")}
         </button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowWorkspaceManager(true); setShowForge(false); setShowClone(false); setShowInit(false); }}>{t("Workspaces")}</button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowForge(true); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>{t("Hosted repositories")}</button>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowWorkspaceManager(true); setShowForge(false); setShowForgeDashboard(false); setShowClone(false); setShowInit(false); }}>{t("Workspaces")}</button>
+        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowForge(true); setShowForgeDashboard(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>{t("Hosted repositories")}</button>
+        <button className="control-button control-button--secondary open-button forge-dashboard-open" type="button" onClick={() => { setShowForgeDashboard(true); setShowForge(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>
+          {t("Team dashboard")}{forgeDashboardUnread > 0 && <span className="forge-dashboard-notification" aria-label={t("{count} unread notifications", { count: forgeDashboardUnread })}>{forgeDashboardUnread > 99 ? "99+" : forgeDashboardUnread}</span>}
+        </button>
       </div>
 
       <main
@@ -3101,6 +3109,12 @@ export function App() {
           onClose={() => setShowWorkspaceManager(false)}
         />
       )}
+      {showForgeDashboard && (
+        <ForgeDashboard
+          onClose={() => setShowForgeDashboard(false)}
+          onUnreadChange={setForgeDashboardUnread}
+        />
+      )}
       {showForge && (
         <ForgeBrowser
           activeRepoId={activeSnapshot?.repository.id}
@@ -3214,6 +3228,7 @@ export function App() {
                 { id: "terminal", label: t("Open repository terminal"), hint: activeSnapshot?.repository.name ?? t("No repository open"), disabled: !activeSnapshot, run: () => void handleOpenTerminal() },
                 { id: "workspaces", label: t("Workspaces"), hint: t("Repository groups and batch operations"), disabled: false, run: () => { setShowCommandPalette(false); setShowWorkspaceManager(true); } },
                 { id: "forge-browser", label: t("Hosted repositories"), hint: t("Accounts and repositories"), disabled: false, run: () => { setShowCommandPalette(false); setShowForge(true); } },
+                { id: "forge-dashboard", label: t("Team dashboard"), hint: t("Pull requests, issues, CI, and notifications"), disabled: false, run: () => { setShowCommandPalette(false); setShowForgeDashboard(true); } },
                 { id: "repository-settings", label: t("Open repository settings"), hint: t("Settings"), disabled: !activeSnapshot, run: () => { setShowCommandPalette(false); setShowRepositorySettings(true); } },
                 { id: "settings", label: t("Open settings"), hint: t("Settings"), disabled: false, run: () => { setShowCommandPalette(false); setShowSettings(true); } },
               ].filter((item) => `${item.label} ${item.hint}`.toLowerCase().includes(commandQuery.toLowerCase())).map((item) => (

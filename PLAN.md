@@ -119,7 +119,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 
 ## P2 — 협업 및 지능형 기능
 
-- [ ] PR·issue·CI를 모은 개인/팀 dashboard와 알림
+- [x] PR·issue·CI를 모은 개인/팀 dashboard와 알림
 - [ ] cloud/shared patch 또는 호환 가능한 자체 호스팅 patch 공유
 - [ ] worktree 기반 coding-agent session 관리
 - [ ] 선택 가능한 provider를 사용하는 AI commit/PR 문안 생성
@@ -157,3 +157,4 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P1.7 여러 저장소 Workspace | 완료 | 이름 있는 저장소 그룹 영속화, 열린 저장소 추가, 누락 경로 clone과 저장소별 fetch·fast-forward pull 결과, 부분 실패 계속 처리 및 실행 확인 팝업 |
 | P1.8 다중 Identity profile과 SSH key | 완료 | 이름·이메일·SSH 개인 키 경로 프로필 영속화, 저장소별 local config 적용과 고정 `core.sshCommand`, 실패 시 원래 설정 복구, 적용·삭제 확인 팝업 |
 | P1.9 Git-flow와 branch naming preset | 완료 | 저장소별 `gitflow.*` 설정과 develop 초기화, feature·release·hotfix·support 접두사 및 시작점 preset, 실행 명령·복구 확인 팝업 |
+| P2.1 개인/팀 dashboard와 알림 | 완료 | 연결된 Forge 계정의 최근 저장소 PR·issue·CI 읽기 전용 집계, 개인·팀·주의 필요 필터, 읽음 알림, provider별 부분 실패와 조회 범위 표시 |
