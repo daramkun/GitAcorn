@@ -54,6 +54,7 @@ import {
   getCommitDiff,
   getCommitFiles,
   getHistoryPage,
+  getGitFlowSettings,
   getGitIdentity,
   getIdentityProfiles,
   getForgeAccounts,
@@ -102,6 +103,7 @@ import {
   runExternalMerge,
   saveComparePatch,
   updateExternalDiffTool,
+  updateGitFlowSettings,
   validateComparePatch,
   updateGlobalGitIdentity,
   updateSignatureSettings,
@@ -179,6 +181,7 @@ vi.mock("./windowControls", () => ({
   getCommitDiff: vi.fn(),
   getCommitFiles: vi.fn(),
   getHistoryPage: vi.fn(),
+  getGitFlowSettings: vi.fn(),
   getGitIdentity: vi.fn(),
   getIdentityProfiles: vi.fn(),
   saveIdentityProfile: vi.fn(),
@@ -206,6 +209,7 @@ vi.mock("./windowControls", () => ({
   resolveConflict: vi.fn(),
   updateGlobalGitIdentity: vi.fn(),
   updateExternalDiffTool: vi.fn(),
+  updateGitFlowSettings: vi.fn(),
   updateRepositoryGitIdentity: vi.fn(),
   updateSessionTab: vi.fn(),
   updateRemote: vi.fn(),
@@ -275,6 +279,7 @@ const mockedRunExternalDiff = vi.mocked(runExternalDiff);
 const mockedRunExternalMerge = vi.mocked(runExternalMerge);
 const mockedSaveComparePatch = vi.mocked(saveComparePatch);
 const mockedUpdateExternalDiffTool = vi.mocked(updateExternalDiffTool);
+const mockedUpdateGitFlowSettings = vi.mocked(updateGitFlowSettings);
 const mockedValidateComparePatch = vi.mocked(validateComparePatch);
 const mockedGetLfsLocks = vi.mocked(getLfsLocks);
 const mockedGetLfsStatus = vi.mocked(getLfsStatus);
@@ -304,6 +309,7 @@ const mockedGetPathHistory = vi.mocked(getPathHistory);
 const mockedGetCommitDiff = vi.mocked(getCommitDiff);
 const mockedGetCommitFiles = vi.mocked(getCommitFiles);
 const mockedGetHistory = vi.mocked(getHistoryPage);
+const mockedGetGitFlowSettings = vi.mocked(getGitFlowSettings);
 const mockedGetGitIdentity = vi.mocked(getGitIdentity);
 const mockedGetIdentityProfiles = vi.mocked(getIdentityProfiles);
 const mockedGetForgeAccounts = vi.mocked(getForgeAccounts);
@@ -459,6 +465,20 @@ describe("App", () => {
     mockedGetSignatureSettings.mockResolvedValue({ schemaVersion: 1, commitSign: false, tagSign: false, format: null, signingKey: null, sshAllowedSignersFile: null });
     mockedGetSignatureStatus.mockResolvedValue({ schemaVersion: 1, revision: "", kind: "commit", status: "N" });
     mockedUpdateSignatureSettings.mockResolvedValue({ schemaVersion: 1, commitSign: false, tagSign: false, format: null, signingKey: null, sshAllowedSignersFile: null });
+    mockedGetGitFlowSettings.mockResolvedValue({
+      schemaVersion: 1,
+      mainBranch: "main",
+      developBranch: "develop",
+      featurePrefix: "feature/",
+      releasePrefix: "release/",
+      hotfixPrefix: "hotfix/",
+      supportPrefix: "support/",
+      versionTagPrefix: "v",
+      mainExists: true,
+      developExists: true,
+      configured: true,
+    });
+    mockedUpdateGitFlowSettings.mockResolvedValue(snapshot);
     mockedCreateWorktree.mockResolvedValue({
       schemaVersion: 1,
       worktrees: [],
@@ -3420,6 +3440,49 @@ describe("App", () => {
         "topic",
         "topic-renamed",
         true,
+      ),
+    );
+  });
+
+  it("creates a Git-flow feature branch from the configured naming preset", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
+    mockedGetSidebar.mockResolvedValue({
+      schemaVersion: 1,
+      worktrees: [],
+      branches: { total: 2, items: ["main", "develop"] },
+      remoteBranches: { total: 0, items: [] },
+      tags: { total: 0, items: [] },
+      stashes: [],
+    });
+    render(<App />);
+
+    const main = await screen.findByRole("button", { name: "Branch main" });
+    fireEvent.contextMenu(main, { clientX: 100, clientY: 140 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "New branch from here" }));
+    fireEvent.change(
+      await screen.findByLabelText("Branch naming preset"),
+      { target: { value: "feature" } },
+    );
+    fireEvent.change(screen.getByLabelText("Branch name"), {
+      target: { value: "review-flow" },
+    });
+    expect(
+      screen.getByText("Branch name preview: feature/review-flow"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("The new branch will start at develop."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create branch" }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('git branch "feature/review-flow" "develop"'),
+    );
+    await waitFor(() =>
+      expect(mockedCreateBranch).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        snapshot.revision,
+        { name: "feature/review-flow", startPoint: "develop" },
       ),
     );
   });

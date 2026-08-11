@@ -115,7 +115,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 - [x] PR/MR 생성·조회·checkout·merge와 review/CI 상태
 - [x] 여러 저장소 Workspace와 일괄 clone/fetch/pull
 - [x] 다중 계정/profile, SSH key 및 Git identity profile
-- [ ] Git-flow와 branch naming preset
+- [x] Git-flow와 branch naming preset
 
 ## P2 — 협업 및 지능형 기능
 
@@ -156,3 +156,4 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P1.6 Forge PR/MR workflow | 완료 | GitHub·GitLab·Bitbucket·Azure DevOps PR/MR 조회·생성·checkout·merge, review/CI 상태, source OID 검증과 merged 상태 보호 |
 | P1.7 여러 저장소 Workspace | 완료 | 이름 있는 저장소 그룹 영속화, 열린 저장소 추가, 누락 경로 clone과 저장소별 fetch·fast-forward pull 결과, 부분 실패 계속 처리 및 실행 확인 팝업 |
 | P1.8 다중 Identity profile과 SSH key | 완료 | 이름·이메일·SSH 개인 키 경로 프로필 영속화, 저장소별 local config 적용과 고정 `core.sshCommand`, 실패 시 원래 설정 복구, 적용·삭제 확인 팝업 |
+| P1.9 Git-flow와 branch naming preset | 완료 | 저장소별 `gitflow.*` 설정과 develop 초기화, feature·release·hotfix·support 접두사 및 시작점 preset, 실행 명령·복구 확인 팝업 |

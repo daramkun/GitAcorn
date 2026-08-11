@@ -19,14 +19,14 @@ pub use git_domain::{FileBlame, PathHistory};
 pub use remote::{CloneRequest, RemoteOperationKind, RemoteProgress, RemoteRequest};
 pub use repository::{
     BinaryPreview, BisectMark, BisectState, BranchRequest, CommitFile, CommitRequest, ComparePatch,
-    DiffTarget, ExternalDiffResult, ExternalDiffTool, GitIdentity, GitIdentitySettings,
-    GitReference, GitRemote, GitVersion, HistoryFilter, HistoryMutationPreview, HistoryOperation,
-    InteractiveRebaseAction, InteractiveRebaseCommit, InteractiveRebaseItem,
-    InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsOperationKind,
-    LfsRequest, LfsStatus, PatchSelection, RefSummary, ReferenceKind, ReflogEntry,
-    RemoteTagSummary, RepositoryCommandResult, RepositoryInitRequest, RepositoryService,
-    RepositorySidebar, SignatureSettings, SignatureStatus, StashSummary, WorktreeCreateRequest,
-    WorktreeSummary,
+    DiffTarget, ExternalDiffResult, ExternalDiffTool, GitFlowSettings, GitIdentity,
+    GitIdentitySettings, GitReference, GitRemote, GitVersion, HistoryFilter,
+    HistoryMutationPreview, HistoryOperation, InteractiveRebaseAction, InteractiveRebaseCommit,
+    InteractiveRebaseItem, InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus,
+    LfsLock, LfsOperationKind, LfsRequest, LfsStatus, PatchSelection, RefSummary, ReferenceKind,
+    ReflogEntry, RemoteTagSummary, RepositoryCommandResult, RepositoryInitRequest,
+    RepositoryService, RepositorySidebar, SignatureSettings, SignatureStatus, StashSummary,
+    WorktreeCreateRequest, WorktreeSummary,
 };
 pub use scheduler::RepositoryScheduler;
 pub use workspace::{ConflictFile, ConflictResolution, ConflictSegment, StashRequest};

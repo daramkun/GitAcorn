@@ -274,6 +274,19 @@ pub struct SignatureSettings {
     pub signing_key: Option<String>,
     pub ssh_allowed_signers_file: Option<String>,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitFlowSettings {
+    pub main_branch: String,
+    pub develop_branch: String,
+    pub feature_prefix: String,
+    pub release_prefix: String,
+    pub hotfix_prefix: String,
+    pub support_prefix: String,
+    pub version_tag_prefix: String,
+    pub main_exists: bool,
+    pub develop_exists: bool,
+    pub configured: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatchSelection {
@@ -844,6 +857,162 @@ impl RepositoryService {
         self.signature_settings(repository)
     }
 
+    pub fn git_flow_settings(
+        &self,
+        repository: &RepositoryDescriptor,
+    ) -> Result<GitFlowSettings, AppError> {
+        let configured_main =
+            self.config_value(Some(repository), "--local", "gitflow.branch.master")?;
+        let configured_develop =
+            self.config_value(Some(repository), "--local", "gitflow.branch.develop")?;
+        let configured_feature =
+            self.config_value(Some(repository), "--local", "gitflow.prefix.feature")?;
+        let configured_release =
+            self.config_value(Some(repository), "--local", "gitflow.prefix.release")?;
+        let configured_hotfix =
+            self.config_value(Some(repository), "--local", "gitflow.prefix.hotfix")?;
+        let configured_support =
+            self.config_value(Some(repository), "--local", "gitflow.prefix.support")?;
+        let configured_version =
+            self.config_value(Some(repository), "--local", "gitflow.prefix.versiontag")?;
+
+        let main_branch = configured_main.clone().unwrap_or_else(|| {
+            if self
+                .local_branch_oid(repository, "main")
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                "main".to_owned()
+            } else if self
+                .local_branch_oid(repository, "master")
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                "master".to_owned()
+            } else {
+                "main".to_owned()
+            }
+        });
+        let develop_branch = configured_develop
+            .clone()
+            .unwrap_or_else(|| "develop".to_owned());
+        let main_exists = self.local_branch_oid(repository, &main_branch)?.is_some();
+        let develop_exists = self
+            .local_branch_oid(repository, &develop_branch)?
+            .is_some();
+
+        Ok(GitFlowSettings {
+            main_branch,
+            develop_branch,
+            feature_prefix: configured_feature
+                .clone()
+                .unwrap_or_else(|| "feature/".to_owned()),
+            release_prefix: configured_release
+                .clone()
+                .unwrap_or_else(|| "release/".to_owned()),
+            hotfix_prefix: configured_hotfix
+                .clone()
+                .unwrap_or_else(|| "hotfix/".to_owned()),
+            support_prefix: configured_support
+                .clone()
+                .unwrap_or_else(|| "support/".to_owned()),
+            version_tag_prefix: configured_version.clone().unwrap_or_else(|| "v".to_owned()),
+            main_exists,
+            develop_exists,
+            configured: [
+                configured_main,
+                configured_develop,
+                configured_feature,
+                configured_release,
+                configured_hotfix,
+                configured_support,
+                configured_version,
+            ]
+            .iter()
+            .all(Option::is_some),
+        })
+    }
+
+    pub fn update_git_flow_settings(
+        &self,
+        repository: &RepositoryDescriptor,
+        settings: &GitFlowSettings,
+        initialize_develop: bool,
+    ) -> Result<GitFlowSettings, AppError> {
+        let main_branch = self.validate_branch_name(repository, &settings.main_branch)?;
+        let develop_branch = self.validate_branch_name(repository, &settings.develop_branch)?;
+        if main_branch == develop_branch {
+            return Err(AppError::InvalidRequest(
+                "Git-flow main and develop branches must be different".to_owned(),
+            ));
+        }
+        let feature_prefix =
+            self.validate_git_flow_prefix(repository, &settings.feature_prefix, "feature")?;
+        let release_prefix =
+            self.validate_git_flow_prefix(repository, &settings.release_prefix, "release")?;
+        let hotfix_prefix =
+            self.validate_git_flow_prefix(repository, &settings.hotfix_prefix, "hotfix")?;
+        let support_prefix =
+            self.validate_git_flow_prefix(repository, &settings.support_prefix, "support")?;
+        let version_tag_prefix = settings.version_tag_prefix.trim().to_owned();
+        if version_tag_prefix.is_empty() || version_tag_prefix.contains(['\0', '\r', '\n']) {
+            return Err(AppError::InvalidRequest(
+                "Git-flow version tag prefix is invalid".to_owned(),
+            ));
+        }
+        self.validate_tag_name(repository, &format!("{version_tag_prefix}1.0.0"))?;
+
+        let main_exists = self.local_branch_oid(repository, &main_branch)?.is_some();
+        let develop_exists = self
+            .local_branch_oid(repository, &develop_branch)?
+            .is_some();
+        if initialize_develop && !main_exists {
+            return Err(AppError::InvalidRequest(format!(
+                "Git-flow main branch {main_branch} does not exist"
+            )));
+        }
+
+        let updates = [
+            ("gitflow.branch.master", main_branch.as_str()),
+            ("gitflow.branch.develop", develop_branch.as_str()),
+            ("gitflow.prefix.feature", feature_prefix.as_str()),
+            ("gitflow.prefix.release", release_prefix.as_str()),
+            ("gitflow.prefix.hotfix", hotfix_prefix.as_str()),
+            ("gitflow.prefix.support", support_prefix.as_str()),
+            ("gitflow.prefix.versiontag", version_tag_prefix.as_str()),
+        ];
+        let previous = updates
+            .iter()
+            .map(|(key, _)| self.config_value(Some(repository), "--local", key))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let apply = (|| {
+            for (key, value) in updates {
+                self.update_config_value(Some(repository), "--local", key, Some(value))?;
+            }
+            if initialize_develop && !develop_exists {
+                self.create_branch(
+                    repository,
+                    &BranchRequest {
+                        name: develop_branch.clone(),
+                        start_point: Some(main_branch.clone()),
+                    },
+                )?;
+            }
+            Ok::<(), AppError>(())
+        })();
+        if let Err(error) = apply {
+            for ((key, _), value) in updates.iter().zip(previous.iter()) {
+                let _ =
+                    self.update_config_value(Some(repository), "--local", key, value.as_deref());
+            }
+            return Err(error);
+        }
+
+        self.git_flow_settings(repository)
+    }
     fn lfs_request<I, S>(
         &self,
         repository: &RepositoryDescriptor,
@@ -3136,6 +3305,21 @@ impl RepositoryService {
         Ok(name.to_owned())
     }
 
+    fn validate_git_flow_prefix(
+        &self,
+        repository: &RepositoryDescriptor,
+        prefix: &str,
+        label: &str,
+    ) -> Result<String, AppError> {
+        let prefix = prefix.trim();
+        if prefix.is_empty() || prefix.contains(['\0', '\r', '\n']) {
+            return Err(AppError::InvalidRequest(format!(
+                "Git-flow {label} prefix is invalid"
+            )));
+        }
+        self.validate_branch_name(repository, &format!("{prefix}sample"))?;
+        Ok(prefix.to_owned())
+    }
     fn validate_tag_name(
         &self,
         repository: &RepositoryDescriptor,

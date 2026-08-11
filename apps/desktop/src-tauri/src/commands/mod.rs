@@ -13,19 +13,19 @@ use crate::dto::{
     CommitFileDto, CommitRequestDto, CompareDto, ComparePatchDto, CompareRequestDto,
     ConflictContentRequestDto, ConflictFileDto, DiffDto, ExternalDiffResultDto,
     ExternalDiffToolDto, ExternalDiffToolRequestDto, FileBlameDto, ForgeAccountDto,
-    ForgeAccountsDto, ForgePullRequestsDto, ForgeRepositoriesDto, GitIdentityDto,
-    GitIdentitySettingsDto, GitIdentityUpdateDto, GitRemoteDto, HistoryMutationPreviewDto,
-    HistoryPageDto, IdentityProfileDto, IdentityProfileSaveRequestDto, IdentityProfilesDto,
-    InteractiveRebasePreviewDto, InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto,
-    LfsOperationRequestDto, LfsStatusDto, OperationEventDto, OperationRecordDto,
-    OperationStartedDto, PatchSelectionDto, PathHistoryDto, ReferenceDto, ReflogEntryDto,
-    RemoteMutationRequestDto, RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto,
-    RepositoryCommandRequestDto, RepositoryCommandResultDto, RepositoryGitIdentityDto,
-    RepositoryInitRequestDto, RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto,
-    SessionDto, SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto,
-    SignatureStatusDto, StashRequestDto, SubmoduleAddRequestDto, WorkspaceBatchDto,
-    WorkspaceBatchResultDto, WorkspaceDto, WorkspaceSaveRequestDto, WorkspacesDto,
-    WorktreeCreateRequestDto,
+    ForgeAccountsDto, ForgePullRequestsDto, ForgeRepositoriesDto, GitFlowSettingsDto,
+    GitFlowSettingsRequestDto, GitIdentityDto, GitIdentitySettingsDto, GitIdentityUpdateDto,
+    GitRemoteDto, HistoryMutationPreviewDto, HistoryPageDto, IdentityProfileDto,
+    IdentityProfileSaveRequestDto, IdentityProfilesDto, InteractiveRebasePreviewDto,
+    InteractiveRebaseRequestDto, LfsLockDto, LfsLockRequestDto, LfsOperationRequestDto,
+    LfsStatusDto, OperationEventDto, OperationRecordDto, OperationStartedDto, PatchSelectionDto,
+    PathHistoryDto, ReferenceDto, ReflogEntryDto, RemoteMutationRequestDto,
+    RemoteReferenceDeleteDto, RemoteRequestDto, RemoteTagDto, RepositoryCommandRequestDto,
+    RepositoryCommandResultDto, RepositoryGitIdentityDto, RepositoryInitRequestDto,
+    RepositoryOpenSourceDto, RepositorySidebarDto, RepositorySnapshotDto, SessionDto,
+    SessionTabUpdateDto, SignatureSettingsDto, SignatureSettingsRequestDto, SignatureStatusDto,
+    StashRequestDto, SubmoduleAddRequestDto, WorkspaceBatchDto, WorkspaceBatchResultDto,
+    WorkspaceDto, WorkspaceSaveRequestDto, WorkspacesDto, WorktreeCreateRequestDto,
 };
 use crate::forge::{ForgePullRequestCreateRequest, ForgePullRequestMergeRequest};
 use crate::state::{
@@ -580,6 +580,32 @@ pub fn signature_status_get(
     state
         .repository_signature_status(&repo_id, &revision, &kind)
         .map(SignatureStatusDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn git_flow_settings_get(
+    state: State<'_, ApplicationState>,
+    repo_id: String,
+) -> CommandResult<GitFlowSettingsDto> {
+    state
+        .repository_git_flow_settings(&repo_id)
+        .map(GitFlowSettingsDto::from)
+        .map_err(|error| AppErrorDto::from(&error))
+}
+
+#[tauri::command]
+pub fn git_flow_settings_update(
+    state: State<'_, ApplicationState>,
+    repo_id: String,
+    revision: u64,
+    request: GitFlowSettingsRequestDto,
+    initialize_develop: bool,
+) -> CommandResult<RepositorySnapshotDto> {
+    let settings = request.into();
+    state
+        .update_repository_git_flow_settings(&repo_id, revision, &settings, initialize_develop)
+        .map(RepositorySnapshotDto::from)
         .map_err(|error| AppErrorDto::from(&error))
 }
 

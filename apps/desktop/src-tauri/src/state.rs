@@ -9,7 +9,7 @@ use app_core::{
     AppError, BinaryPreview, BisectMark, BisectState, BranchRequest, CloneRequest, CommitRequest,
     ComparePatch, ConflictFile, ConflictResolution, DiffTarget, ExternalDiffResult,
     ExternalDiffTool, FileBlame, ForgeAccount, ForgeProvider, ForgePullRequest, ForgeRepository,
-    GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
+    GitFlowSettings, GitIdentity, GitIdentitySettings, GitReference, GitRemote, HistoryFilter,
     HistoryMutationPreview, HistoryOperation, InteractiveRebasePreview, InteractiveRebaseRequest,
     LfsLock, LfsRequest, LfsStatus, PatchSelection, PathHistory, ReflogEntry, RemoteProgress,
     RemoteRequest, RemoteTagSummary, RepositoryCommandResult, RepositoryInitRequest,
@@ -543,6 +543,26 @@ impl ApplicationState {
         })
     }
 
+    pub fn repository_git_flow_settings(&self, repo_id: &str) -> Result<GitFlowSettings, AppError> {
+        let repo_id = parse_repo_id(repo_id)?;
+        let descriptor = self.descriptor(repo_id)?;
+        self.scheduler
+            .read(repo_id, || self.service.git_flow_settings(&descriptor))
+    }
+
+    pub fn update_repository_git_flow_settings(
+        &self,
+        repo_id: &str,
+        revision: u64,
+        settings: &GitFlowSettings,
+        initialize_develop: bool,
+    ) -> Result<RepositorySnapshot, AppError> {
+        self.mutate(repo_id, revision, |service, repository| {
+            service
+                .update_git_flow_settings(repository, settings, initialize_develop)
+                .map(|_| ())
+        })
+    }
     pub fn global_identity(&self) -> Result<GitIdentity, AppError> {
         let _guard = self
             .identity_lock

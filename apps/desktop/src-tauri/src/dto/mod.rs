@@ -1,12 +1,12 @@
 use app_core::{
     AppErrorDto, BinaryPreview, BisectState, BranchRequest, CloneRequest, CommitFile,
     CommitRequest, ComparePatch, ConflictFile, ConflictSegment, ExternalDiffResult,
-    ExternalDiffTool, ForgeAccount, ForgePullRequest, ForgeRepository, GitIdentity, GitReference,
-    GitRemote, HistoryMutationPreview, InteractiveRebaseAction, InteractiveRebaseItem,
-    InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus, LfsLock, LfsStatus,
-    PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind, RemoteRequest,
-    RemoteTagSummary, RepositoryInitRequest, RepositorySidebar, SignatureSettings, SignatureStatus,
-    WorktreeCreateRequest,
+    ExternalDiffTool, ForgeAccount, ForgePullRequest, ForgeRepository, GitFlowSettings,
+    GitIdentity, GitReference, GitRemote, HistoryMutationPreview, InteractiveRebaseAction,
+    InteractiveRebaseItem, InteractiveRebasePreview, InteractiveRebaseRequest, LfsFileStatus,
+    LfsLock, LfsStatus, PatchSelection, ReferenceKind, ReflogEntry, RemoteOperationKind,
+    RemoteRequest, RemoteTagSummary, RepositoryInitRequest, RepositorySidebar, SignatureSettings,
+    SignatureStatus, WorktreeCreateRequest,
 };
 use git_domain::{
     BlameLine, CommitSummary, DiffDocument, DiffFile, DiffLineKind, FileBlame, FileChange,
@@ -431,6 +431,33 @@ pub struct SignatureSettingsDto {
     pub ssh_allowed_signers_file: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFlowSettingsDto {
+    pub schema_version: u16,
+    pub main_branch: String,
+    pub develop_branch: String,
+    pub feature_prefix: String,
+    pub release_prefix: String,
+    pub hotfix_prefix: String,
+    pub support_prefix: String,
+    pub version_tag_prefix: String,
+    pub main_exists: bool,
+    pub develop_exists: bool,
+    pub configured: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFlowSettingsRequestDto {
+    pub main_branch: String,
+    pub develop_branch: String,
+    pub feature_prefix: String,
+    pub release_prefix: String,
+    pub hotfix_prefix: String,
+    pub support_prefix: String,
+    pub version_tag_prefix: String,
+}
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignatureSettingsRequestDto {
@@ -487,6 +514,40 @@ impl From<SignatureStatus> for SignatureStatusDto {
     }
 }
 
+impl From<GitFlowSettings> for GitFlowSettingsDto {
+    fn from(settings: GitFlowSettings) -> Self {
+        Self {
+            schema_version: 1,
+            main_branch: settings.main_branch,
+            develop_branch: settings.develop_branch,
+            feature_prefix: settings.feature_prefix,
+            release_prefix: settings.release_prefix,
+            hotfix_prefix: settings.hotfix_prefix,
+            support_prefix: settings.support_prefix,
+            version_tag_prefix: settings.version_tag_prefix,
+            main_exists: settings.main_exists,
+            develop_exists: settings.develop_exists,
+            configured: settings.configured,
+        }
+    }
+}
+
+impl From<GitFlowSettingsRequestDto> for GitFlowSettings {
+    fn from(settings: GitFlowSettingsRequestDto) -> Self {
+        Self {
+            main_branch: settings.main_branch,
+            develop_branch: settings.develop_branch,
+            feature_prefix: settings.feature_prefix,
+            release_prefix: settings.release_prefix,
+            hotfix_prefix: settings.hotfix_prefix,
+            support_prefix: settings.support_prefix,
+            version_tag_prefix: settings.version_tag_prefix,
+            main_exists: false,
+            develop_exists: false,
+            configured: false,
+        }
+    }
+}
 impl From<SignatureSettings> for SignatureSettingsDto {
     fn from(settings: SignatureSettings) -> Self {
         Self {

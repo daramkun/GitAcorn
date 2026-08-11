@@ -102,6 +102,8 @@ pub fn run() {
             commands::lfs_locks_get,
             commands::lfs_lock,
             commands::lfs_unlock,
+            commands::git_flow_settings_get,
+            commands::git_flow_settings_update,
             commands::signature_status_get,
             commands::signature_settings_get,
             commands::signature_settings_update,

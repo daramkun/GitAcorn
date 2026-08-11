@@ -1,7 +1,7 @@
 use app_core::{
-    BisectMark, BranchRequest, CommitRequest, DiffTarget, HistoryFilter, HistoryOperation,
-    InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebaseRequest, PatchSelection,
-    ReferenceKind, RepositoryInitRequest, RepositoryService, SignatureSettings,
+    BisectMark, BranchRequest, CommitRequest, DiffTarget, GitFlowSettings, HistoryFilter,
+    HistoryOperation, InteractiveRebaseAction, InteractiveRebaseItem, InteractiveRebaseRequest,
+    PatchSelection, ReferenceKind, RepositoryInitRequest, RepositoryService, SignatureSettings,
     WorktreeCreateRequest,
 };
 use git_cli::GitExecutor;
@@ -2751,5 +2751,76 @@ fn applies_identity_profile_with_fixed_ssh_command_and_preserves_config_on_valid
             .repository_ssh_command(&repository)
             .expect("read cleared ssh command")
             .is_none()
+    );
+}
+
+#[test]
+fn configures_git_flow_creates_develop_and_preserves_config_on_validation_error() {
+    let fixture = TestRepository::init();
+    let service = RepositoryService::default();
+    let repository = service
+        .discover(fixture.path())
+        .expect("discover repository");
+    let initial = service
+        .git_flow_settings(&repository)
+        .expect("read Git-flow defaults");
+    assert_eq!(initial.main_branch, "main");
+    assert!(initial.main_exists);
+    assert!(!initial.develop_exists);
+    assert!(!initial.configured);
+
+    let configured = service
+        .update_git_flow_settings(
+            &repository,
+            &GitFlowSettings {
+                main_branch: "main".to_owned(),
+                develop_branch: "integration".to_owned(),
+                feature_prefix: "feat/".to_owned(),
+                release_prefix: "release/".to_owned(),
+                hotfix_prefix: "fix/".to_owned(),
+                support_prefix: "support/".to_owned(),
+                version_tag_prefix: "v".to_owned(),
+                main_exists: false,
+                develop_exists: false,
+                configured: false,
+            },
+            true,
+        )
+        .expect("configure Git-flow");
+    assert!(configured.configured);
+    assert!(configured.main_exists);
+    assert!(configured.develop_exists);
+    assert_eq!(configured.develop_branch, "integration");
+    assert_eq!(
+        service
+            .local_branch_oid(&repository, "integration")
+            .expect("read integration branch"),
+        service
+            .local_branch_oid(&repository, "main")
+            .expect("read main branch")
+    );
+    assert_eq!(
+        String::from_utf8(fixture.git_output([
+            "config",
+            "--local",
+            "--get",
+            "gitflow.prefix.feature",
+        ]))
+        .expect("UTF-8 config")
+        .trim(),
+        "feat/"
+    );
+
+    let mut invalid = configured.clone();
+    invalid.feature_prefix = "bad prefix/".to_owned();
+    service
+        .update_git_flow_settings(&repository, &invalid, false)
+        .expect_err("reject invalid branch prefix");
+    assert_eq!(
+        service
+            .git_flow_settings(&repository)
+            .expect("read preserved Git-flow settings")
+            .feature_prefix,
+        "feat/"
     );
 }

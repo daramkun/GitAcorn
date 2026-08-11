@@ -49,6 +49,7 @@ import {
   getExternalDiffTool,
   getLfsLocks,
   getLfsStatus,
+  getGitFlowSettings,
   getSignatureSettings,
   getSignatureStatus,
   createBranch,
@@ -119,6 +120,7 @@ import {
   lockWorktree,
   updateSessionTab,
   updateRemote,
+  updateGitFlowSettings,
   updateGlobalGitIdentity,
   updateExternalDiffTool,
   updateRepositoryGitIdentity,
@@ -145,6 +147,7 @@ import {
   type FileChangeDto,
   type FileBlameDto,
   type PathHistoryDto,
+  type GitFlowSettingsDto,
   type GitRemoteDto,
   type GitIdentitySettingsDto,
   type RepositoryGitIdentityDto,
@@ -169,6 +172,7 @@ import { ConflictEditor } from "./conflict-editor";
 import { ForgeBrowser } from "./forge-browser";
 import { WorkspaceManager } from "./workspace-manager";
 import { IdentityProfiles } from "./identity-profiles";
+import { GitFlowSettings } from "./git-flow-settings";
 import { localeTag, t } from "./i18n";
 import { getSystemFileIcons } from "./fileIcons";
 import {
@@ -297,6 +301,12 @@ type ReferenceEditor =
   | { mode: "renameBranch"; name: string; upstream?: string }
   | { mode: "createTag"; target: string };
 
+type BranchNamingPreset =
+  | "custom"
+  | "feature"
+  | "release"
+  | "hotfix"
+  | "support";
 type ReferenceDeleteDialogState = {
   kind: "branch" | "tag";
   repoId: string;
@@ -3529,6 +3539,28 @@ export function App() {
                   </div>
                 ) : signatureLoading ? <p className="identity-state">{t("Loading signature settings…")}</p> : null}
               </div>
+              <div className="settings-section" aria-label={t("Git-flow and branch naming")}>
+                <h3>{t("Git-flow and branch naming")}</h3>
+                <p className="settings-section-desc">
+                  {t("Configure repository-local Git-flow branches and naming prefixes.")}
+                </p>
+                {activeRepoId && activeSnapshot && (
+                  <GitFlowSettings
+                    repoId={activeRepoId}
+                    revision={activeSnapshot.revision}
+                    onConfigure={(settings, initializeDevelop) =>
+                      handleWorkspaceMutation(() =>
+                        updateGitFlowSettings(
+                          activeRepoId,
+                          activeSnapshot.revision,
+                          settings,
+                          initializeDevelop,
+                        ),
+                      )
+                    }
+                  />
+                )}
+              </div>
               <div className="settings-section git-identity-settings">
                 <h3>{t("Git author identity")}</h3>
                 <p className="settings-section-desc">
@@ -4210,15 +4242,16 @@ export function App() {
       {referenceEditor && activeSnapshot && (
         <ReferenceEditorDialog
           editor={referenceEditor}
+          repoId={activeSnapshot.repository.id}
           blocked={refreshing.has(activeSnapshot.repository.id)}
           onClose={() => setReferenceEditor(undefined)}
-          onSave={(name, renameRemote) => {
+          onSave={(name, renameRemote, startPoint) => {
             if (referenceEditor.mode === "createBranch") {
               return handleWorkspaceMutation(() =>
                 createBranch(
                   activeSnapshot.repository.id,
                   activeSnapshot.revision,
-                  { name, startPoint: referenceEditor.source },
+                  { name, startPoint: startPoint ?? referenceEditor.source },
                 ),
               );
             }
@@ -4935,20 +4968,68 @@ function ReferenceDeleteDialog({
 
 function ReferenceEditorDialog({
   editor,
+  repoId,
   blocked,
   onClose,
   onSave,
 }: {
   editor: ReferenceEditor;
+  repoId: string;
   blocked: boolean;
   onClose: () => void;
-  onSave: (name: string, renameRemote: boolean) => Promise<void>;
+  onSave: (
+    name: string,
+    renameRemote: boolean,
+    startPoint?: string,
+  ) => Promise<void>;
 }) {
   const [name, setName] = useState(
     editor.mode === "renameBranch" ? editor.name : "",
   );
   const [renameRemote, setRenameRemote] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [preset, setPreset] = useState<BranchNamingPreset>("custom");
+  const [gitFlow, setGitFlow] = useState<GitFlowSettingsDto>();
+
+  useEffect(() => {
+    if (editor.mode !== "createBranch") return;
+    let disposed = false;
+    getGitFlowSettings(repoId)
+      .then((settings) => {
+        if (!disposed) setGitFlow(settings);
+      })
+      .catch(() => {
+        if (!disposed) setGitFlow(undefined);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [editor.mode, repoId]);
+
+  const selectedPrefix =
+    preset === "feature"
+      ? gitFlow?.featurePrefix
+      : preset === "release"
+        ? gitFlow?.releasePrefix
+        : preset === "hotfix"
+          ? gitFlow?.hotfixPrefix
+          : preset === "support"
+            ? gitFlow?.supportPrefix
+            : "";
+  const preparedName =
+    editor.mode === "createBranch" && preset !== "custom"
+      ? (selectedPrefix ?? "") + name.trim()
+      : name.trim();
+  const presetStartPoint =
+    preset === "feature" || preset === "release"
+      ? gitFlow?.developBranch
+      : preset === "hotfix" || preset === "support"
+        ? gitFlow?.mainBranch
+        : undefined;
+  const preparedStartPoint =
+    editor.mode === "createBranch"
+      ? (presetStartPoint ?? editor.source)
+      : undefined;
   const title =
     editor.mode === "createBranch"
       ? t("Create branch")
@@ -4983,15 +5064,61 @@ function ReferenceEditorDialog({
             className="remote-form"
             onSubmit={(event) => {
               event.preventDefault();
-              const nextName = name.trim();
+              const nextName = preparedName;
               if (!nextName || blocked) return;
+              if (
+                editor.mode === "createBranch" &&
+                !confirmRepositoryMutation(
+                  [
+                    t("Create branch with this Git command?"),
+                    "",
+                    [
+                      "git branch",
+                      JSON.stringify(nextName),
+                      JSON.stringify(preparedStartPoint),
+                    ].join(" "),
+                    "",
+                    t("This creates the branch without checking it out."),
+                    t("Recovery: delete the new local branch if it is not needed."),
+                  ].join("\n"),
+                )
+              ) {
+                return;
+              }
               setBusy(true);
-              void onSave(nextName, renameRemote).finally(() => {
+              void onSave(nextName, renameRemote, preparedStartPoint).finally(() => {
                 setBusy(false);
                 onClose();
               });
             }}
           >
+            {editor.mode === "createBranch" && gitFlow && (
+              <label>
+                <span>{t("Branch naming preset")}</span>
+                <select
+                  className="control-input"
+                  value={preset}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setPreset(event.target.value as BranchNamingPreset)
+                  }
+                >
+                  <option value="custom">{t("Custom name")}</option>
+                  <option value="feature" disabled={!gitFlow.developExists}>
+                    {t("Feature")} · {gitFlow.featurePrefix}
+                  </option>
+                  <option value="release" disabled={!gitFlow.developExists}>
+                    {t("Release")} · {gitFlow.releasePrefix}
+                  </option>
+                  <option value="hotfix" disabled={!gitFlow.mainExists}>
+                    {t("Hotfix")} · {gitFlow.hotfixPrefix}
+                  </option>
+                  <option value="support" disabled={!gitFlow.mainExists}>
+                    {t("Support")} · {gitFlow.supportPrefix}
+                  </option>
+                </select>
+              </label>
+            )}
             <label>
               <span>{fieldLabel}</span>
               <input
@@ -5002,11 +5129,18 @@ function ReferenceEditorDialog({
               />
             </label>
             {editor.mode === "createBranch" && (
-              <small>
-                {t("The new branch will start at {branch}.", {
-                  branch: editor.source,
-                })}
-              </small>
+              <div className="branch-preset-preview">
+                <small>
+                  {t("Branch name preview: {branch}", {
+                    branch: preparedName || t("Enter a branch name"),
+                  })}
+                </small>
+                <small>
+                  {t("The new branch will start at {branch}.", {
+                    branch: preparedStartPoint ?? editor.source,
+                  })}
+                </small>
+              </div>
             )}
             {editor.mode === "createTag" && (
               <small>

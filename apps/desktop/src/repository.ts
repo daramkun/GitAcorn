@@ -177,6 +177,24 @@ export type SignatureSettingsDto = {
   sshAllowedSignersFile?: string | null;
 };
 
+export type GitFlowSettingsDto = {
+  schemaVersion: 1;
+  mainBranch: string;
+  developBranch: string;
+  featurePrefix: string;
+  releasePrefix: string;
+  hotfixPrefix: string;
+  supportPrefix: string;
+  versionTagPrefix: string;
+  mainExists: boolean;
+  developExists: boolean;
+  configured: boolean;
+};
+
+export type GitFlowSettingsRequest = Omit<
+  GitFlowSettingsDto,
+  "schemaVersion" | "mainExists" | "developExists" | "configured"
+>;
 export type BinaryPreviewDto = {
   schemaVersion: number;
   oldPath: string;
@@ -1518,6 +1536,23 @@ export function unlockLfsPath(
   });
 }
 
+export function getGitFlowSettings(repoId: string): Promise<GitFlowSettingsDto> {
+  return invoke<GitFlowSettingsDto>("git_flow_settings_get", { repoId });
+}
+
+export function updateGitFlowSettings(
+  repoId: string,
+  revision: number,
+  settings: GitFlowSettingsRequest,
+  initializeDevelop: boolean,
+): Promise<RepositorySnapshotDto> {
+  return invoke<RepositorySnapshotDto>("git_flow_settings_update", {
+    repoId,
+    revision,
+    request: settings,
+    initializeDevelop,
+  });
+}
 export function getSignatureStatus(
   repoId: string,
   revision: string,
