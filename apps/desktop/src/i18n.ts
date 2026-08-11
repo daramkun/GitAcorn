@@ -4,6 +4,11 @@ type Parameters = Record<string, string | number>;
 
 const korean = {
   "Settings": "설정",  "Command palette": "명령 팔레트",
+  "Repository actions": "저장소 작업",
+  "Create or get": "만들기 및 가져오기",
+  "Manage and collaborate": "관리 및 협업",
+  "Clone a repository from a remote URL.": "원격 URL에서 저장소를 복제합니다.",
+  "Open an existing Git repository from your computer.": "컴퓨터에 있는 기존 Git 저장소를 엽니다.",
   "Hosted repositories": "호스팅 저장소",
   "Collaboration": "협업",
   "Shared patches": "공유 패치",

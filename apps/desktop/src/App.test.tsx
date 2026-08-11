@@ -1759,8 +1759,10 @@ describe("App", () => {
     mockedChooseRepository.mockResolvedValue("C:\\Code\\acorn-demo");
     render(<App />);
 
-    const [openRepository] = await screen.findAllByRole("button", {
-      name: "Open a repository",
+    fireEvent.click(await screen.findByRole("button", { name: /Repository actions|저장소 작업/i }));
+    const repositoryActions = await screen.findByRole("group", { name: /Repository actions|저장소 작업/i });
+    const openRepository = within(repositoryActions).getByRole("button", {
+      name: /^Open a repository/,
     });
     fireEvent.click(openRepository);
 
@@ -1775,7 +1777,8 @@ describe("App", () => {
     mockedChooseRepositoryInit.mockResolvedValue("C:\\Code\\new-acorn");
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "New repository" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Repository actions|저장소 작업/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /^New repository/ }));
     expect(
       screen.getByRole("dialog", { name: "Create a new repository" }),
     ).toBeInTheDocument();
@@ -1800,11 +1803,32 @@ describe("App", () => {
   it("opens the hosted repository browser from the repository action bar", async () => {
     render(<App />);
 
+    fireEvent.click(await screen.findByRole("button", { name: /Repository actions|저장소 작업/i }));
     fireEvent.click(await screen.findByRole("button", { name: /Hosted repositories|호스팅 저장소/i }));
 
     expect(await screen.findByRole("dialog", { name: /Hosted repositories|호스팅 저장소/i })).toBeInTheDocument();
     expect(mockedGetForgeAccounts).toHaveBeenCalledOnce();
     expect(screen.getByRole("heading", { name: /Connect hosting account|호스팅 계정 연결/i })).toBeVisible();
+  });
+
+  it("keeps secondary repository actions in a grouped overflow menu", async () => {
+    const { container } = render(<App />);
+
+    const actionsButton = await screen.findByRole("button", { name: /Repository actions|저장소 작업/i });
+    const tabbar = container.querySelector(".tabbar");
+    expect(tabbar).not.toBeNull();
+    expect(tabbar?.querySelectorAll(":scope > button")).toHaveLength(0);
+    expect(screen.queryByRole("group", { name: /Repository actions|저장소 작업/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New repository|새 저장소/i })).not.toBeInTheDocument();
+
+    fireEvent.click(actionsButton);
+
+    const repositoryActions = screen.getByRole("group", { name: /Repository actions|저장소 작업/i });
+    expect(screen.getByText(/Create or get|만들기 및 가져오기/i)).toBeInTheDocument();
+    expect(screen.getByText(/Manage and collaborate|관리 및 협업/i)).toBeInTheDocument();
+    expect(within(repositoryActions).getByRole("button", { name: /^Open a repository/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /New repository|새 저장소/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Shared patches|공유 패치/i })).toBeDisabled();
   });
 
   it("opens the team dashboard and reports unread forge attention", async () => {
@@ -1834,6 +1858,7 @@ describe("App", () => {
     });
     render(<App />);
 
+    fireEvent.click(await screen.findByRole("button", { name: /Repository actions|저장소 작업/i }));
     fireEvent.click(await screen.findByRole("button", { name: /Team dashboard|팀 대시보드/i }));
 
     expect(await screen.findByRole("dialog", { name: /Team dashboard|팀 대시보드/i })).toBeVisible();

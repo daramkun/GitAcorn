@@ -514,6 +514,8 @@ export function App() {
   const [appInfo, setAppInfo] = useState<AppInfoState>({ status: "loading" });
   const [tabs, setTabs] = useState<SessionTabDto[]>([]);
   const repositoryTabsRef = useRef<HTMLDivElement>(null);
+  const repositoryActionsRef = useRef<HTMLDivElement>(null);
+  const [showRepositoryActions, setShowRepositoryActions] = useState(false);
   const [tabScrollState, setTabScrollState] = useState({
     canScrollLeft: false,
     canScrollRight: false,
@@ -2389,6 +2391,24 @@ export function App() {
         : t("Unborn branch")
     : undefined;
 
+  useEffect(() => {
+    if (!showRepositoryActions) return;
+    const dismissOnOutsideClick = (event: MouseEvent) => {
+      if (!repositoryActionsRef.current?.contains(event.target as Node)) {
+        setShowRepositoryActions(false);
+      }
+    };
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowRepositoryActions(false);
+    };
+    document.addEventListener("mousedown", dismissOnOutsideClick);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", dismissOnOutsideClick);
+      document.removeEventListener("keydown", dismissOnEscape);
+    };
+  }, [showRepositoryActions]);
+
   if (sessionLoading) {
     return (
       <main className="session-loading-screen" role="status" aria-live="polite">
@@ -2572,19 +2592,51 @@ export function App() {
             ›
           </button>
         </div>
-        <button className="control-button control-button--primary open-button" type="button" disabled={opening} onClick={handleOpenRepository}>
-          <span aria-hidden="true">＋</span>{" "}{opening ? t("Opening…") : t("Open a repository")}
-        </button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowInit((value) => !value); setShowClone(false); setShowForge(false); setShowForgeDashboard(false); setShowPatchShare(false); setShowWorkspaceManager(false); }}>{t("New repository")}</button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowClone((value) => !value); setShowInit(false); setShowForge(false); setShowForgeDashboard(false); setShowPatchShare(false); setShowWorkspaceManager(false); }}>
-          {t("Clone")}
-        </button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowWorkspaceManager(true); setShowForge(false); setShowForgeDashboard(false); setShowPatchShare(false); setShowClone(false); setShowInit(false); }}>{t("Workspaces")}</button>
-        <button className="control-button control-button--secondary open-button" type="button" onClick={() => { setShowForge(true); setShowForgeDashboard(false); setShowPatchShare(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>{t("Hosted repositories")}</button>
-        <button className="control-button control-button--secondary open-button forge-dashboard-open" type="button" onClick={() => { setShowForgeDashboard(true); setShowForge(false); setShowPatchShare(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>
-          {t("Team dashboard")}{forgeDashboardUnread > 0 && <span className="forge-dashboard-notification" aria-label={t("{count} unread notifications", { count: forgeDashboardUnread })}>{forgeDashboardUnread > 99 ? "99+" : forgeDashboardUnread}</span>}
-        </button>
-        <button className="control-button control-button--secondary open-button" type="button" disabled={!activeSnapshot} onClick={() => { setShowPatchShare(true); setShowForgeDashboard(false); setShowForge(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>{t("Shared patches")}</button>
+        <div className="repository-actions" ref={repositoryActionsRef}>
+          <button
+            className="control-button control-button--secondary repository-actions-trigger"
+            type="button"
+            aria-controls="repository-actions-menu"
+            aria-expanded={showRepositoryActions}
+            aria-haspopup="true"
+            onClick={() => setShowRepositoryActions((visible) => !visible)}
+          >
+            <span>{t("Repository actions")}</span>
+            {forgeDashboardUnread > 0 && <span className="forge-dashboard-notification" aria-label={t("{count} unread notifications", { count: forgeDashboardUnread })}>{forgeDashboardUnread > 99 ? "99+" : forgeDashboardUnread}</span>}
+            <span className="repository-actions-chevron" aria-hidden="true">⌄</span>
+          </button>
+          {showRepositoryActions && (
+            <div id="repository-actions-menu" className="repository-actions-menu" role="group" aria-label={t("Repository actions")}>
+              <section>
+                <p>{t("Create or get")}</p>
+                <button type="button" disabled={opening} onClick={() => { setShowRepositoryActions(false); void handleOpenRepository(); }}>
+                  <span aria-hidden="true">◇</span><span><strong>{opening ? t("Opening…") : t("Open a repository")}</strong><small>{t("Open an existing Git repository from your computer.")}</small></span>
+                </button>
+                <button type="button" onClick={() => { setShowRepositoryActions(false); setShowInit((value) => !value); setShowClone(false); setShowForge(false); setShowForgeDashboard(false); setShowPatchShare(false); setShowWorkspaceManager(false); }}>
+                  <span aria-hidden="true">＋</span><span><strong>{t("New repository")}</strong><small>{t("Initialize an existing folder and optionally add starter files.")}</small></span>
+                </button>
+                <button type="button" onClick={() => { setShowRepositoryActions(false); setShowClone((value) => !value); setShowInit(false); setShowForge(false); setShowForgeDashboard(false); setShowPatchShare(false); setShowWorkspaceManager(false); }}>
+                  <span aria-hidden="true">↓</span><span><strong>{t("Clone")}</strong><small>{t("Clone a repository from a remote URL.")}</small></span>
+                </button>
+              </section>
+              <section>
+                <p>{t("Manage and collaborate")}</p>
+                <button type="button" onClick={() => { setShowRepositoryActions(false); setShowWorkspaceManager(true); setShowForge(false); setShowForgeDashboard(false); setShowPatchShare(false); setShowClone(false); setShowInit(false); }}>
+                  <span aria-hidden="true">▦</span><span><strong>{t("Workspaces")}</strong><small>{t("Repository groups and batch operations")}</small></span>
+                </button>
+                <button type="button" onClick={() => { setShowRepositoryActions(false); setShowForge(true); setShowForgeDashboard(false); setShowPatchShare(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>
+                  <span aria-hidden="true">◎</span><span><strong>{t("Hosted repositories")}</strong><small>{t("Accounts and repositories")}</small></span>
+                </button>
+                <button type="button" onClick={() => { setShowRepositoryActions(false); setShowForgeDashboard(true); setShowForge(false); setShowPatchShare(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>
+                  <span aria-hidden="true">◫</span><span><strong>{t("Team dashboard")}</strong><small>{t("Pull requests, issues, CI, and notifications")}</small></span>{forgeDashboardUnread > 0 && <span className="forge-dashboard-notification" aria-label={t("{count} unread notifications", { count: forgeDashboardUnread })}>{forgeDashboardUnread > 99 ? "99+" : forgeDashboardUnread}</span>}
+                </button>
+                <button type="button" disabled={!activeSnapshot} onClick={() => { setShowRepositoryActions(false); setShowPatchShare(true); setShowForgeDashboard(false); setShowForge(false); setShowWorkspaceManager(false); setShowClone(false); setShowInit(false); }}>
+                  <span aria-hidden="true">⇄</span><span><strong>{t("Shared patches")}</strong><small>{t("Publish or import a patch")}</small></span>
+                </button>
+              </section>
+            </div>
+          )}
+        </div>
       </div>
 
       <main

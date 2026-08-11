@@ -698,8 +698,96 @@ button:focus-visible {
   background: var(--accent);
 }
 
-.open-button {
+.repository-actions {
+  position: relative;
   flex: 0 0 auto;
+}
+
+.repository-actions-trigger {
+  gap: var(--space-2);
+}
+
+.repository-actions-chevron {
+  color: var(--muted);
+  font-size: var(--font-size-base);
+  transition: transform var(--motion-fast) ease;
+}
+
+.repository-actions-trigger[aria-expanded="true"] .repository-actions-chevron {
+  transform: rotate(180deg);
+}
+
+.repository-actions-menu {
+  position: fixed;
+  z-index: 40;
+  top: 82px;
+  right: 12px;
+  width: min(330px, calc(100vw - 24px));
+  padding: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: 0 12px 30px var(--shadow-color);
+}
+
+.repository-actions-menu section + section {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.repository-actions-menu p {
+  margin: 0;
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  color: var(--faint);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.repository-actions-menu button {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.repository-actions-menu button:hover:not(:disabled),
+.repository-actions-menu button:focus-visible {
+  background: var(--control-hover-bg);
+}
+
+.repository-actions-menu button > span:first-child {
+  color: var(--accent-strong);
+  font-size: var(--font-size-lg);
+  text-align: center;
+}
+
+.repository-actions-menu button > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.repository-actions-menu strong {
+  font-size: var(--font-size-base);
+}
+
+.repository-actions-menu small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 button:disabled {
