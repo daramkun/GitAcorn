@@ -123,7 +123,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 - [x] cloud/shared patch 또는 호환 가능한 자체 호스팅 patch 공유
 - [ ] commit/branch 설명과 opt-in AI code review
 - [ ] AI conflict resolution은 항상 patch preview와 사용자 승인을 거쳐 적용
-- [ ] Linux 패키징과 배포 검증
+- [x] Linux 패키징과 배포 검증
 
 ## 공통 품질 게이트
 
@@ -133,7 +133,7 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 - [x] 저장소별 write 직렬화와 stale revision 검증을 통과한다.
 - [x] 명령 인수는 shell 문자열이 아닌 배열로 전달되고 민감 정보가 마스킹된다.
 - [x] Rust unit/integration test와 React UI test가 추가된다.
-- [x] Windows와 macOS의 플랫폼 차이를 문서화하고 해당 CI를 통과한다.
+- [x] Windows, macOS, Linux의 플랫폼 차이를 문서화하고 해당 CI를 통과한다.
 - [x] 저장소 루트에서 `pnpm check`가 통과한다.
 
 ## 구현 진행 기록
@@ -157,3 +157,4 @@ GitAcorn은 다음 핵심 흐름을 이미 지원한다.
 | P1.9 Git-flow와 branch naming preset | 완료 | 저장소별 `gitflow.*` 설정과 develop 초기화, feature·release·hotfix·support 접두사 및 시작점 preset, 실행 명령·복구 확인 팝업 |
 | P2.1 개인/팀 dashboard와 알림 | 완료 | 연결된 Forge 계정의 최근 저장소 PR·issue·CI 읽기 전용 집계, 개인·팀·주의 필요 필터, 읽음 알림, provider별 부분 실패와 조회 범위 표시 |
 | P2.2 자체 호스팅 shared patch | 완료 | 호환 가능한 `/v1/patches` publish·fetch·delete API, HTTPS·크기·SHA-256 무결성 검증, 메모리 전용 bearer token, 패치 미리보기·적용 가능성 검사와 게시·삭제·적용 확인 팝업 |
+| P2.3 Linux 패키징과 배포 | 완료 | Ubuntu 22.04 CI와 alpha release job, Debian/AppImage 번들·updater 서명·headless 실행 검증, Linux 비 UTF-8 경로 보존 및 플랫폼별 아이콘 처리 |

@@ -3,6 +3,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+#[cfg(any(windows, target_os = "macos"))]
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 #[cfg(windows)]
@@ -32,6 +33,7 @@ fn repository_path(worktree: &Path, relative_path: &str) -> Option<PathBuf> {
     Some(worktree.join(relative))
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn png_data_url(bytes: &[u8]) -> String {
     format!("data:image/png;base64,{}", STANDARD.encode(bytes))
 }

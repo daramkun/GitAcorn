@@ -10,6 +10,85 @@ permissions:
   contents: write
 
 jobs:
+  linux-alpha:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - if: startsWith(github.ref, 'refs/tags/v')
+        run: pnpm version:check -- --tag "${{ github.ref_name }}"
+
+      - name: Prepare updater verification config
+        shell: bash
+        env:
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$TAURI_SIGNING_PUBLIC_KEY"
+          node <<'NODE'
+          const fs = require("node:fs");
+          const config = {
+            bundle: { createUpdaterArtifacts: true },
+            plugins: {
+              updater: {
+                pubkey: process.env.TAURI_SIGNING_PUBLIC_KEY,
+                endpoints: [`https://github.com/${process.env.GITHUB_REPOSITORY}/releases/latest/download/latest.json`],
+              },
+            },
+          };
+          fs.writeFileSync("apps/desktop/src-tauri/tauri.release.conf.json", JSON.stringify(config));
+          NODE
+
+      - name: Build Debian, AppImage, and updater artifacts
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: GitAcorn v__VERSION__ Alpha
+          releaseBody: See docs/alpha-release.md for validation and known limitations.
+          releaseDraft: true
+          prerelease: true
+          includeUpdaterJson: true
+          args: --config src-tauri/tauri.release.conf.json
+
+      - name: Verify packages and launch AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="$(find target/release/bundle/deb -name '*.deb' -print -quit)"
+          appimage="$(find target/release/bundle/appimage -name '*.AppImage' -print -quit)"
+          test -n "$deb"
+          test -n "$appimage"
+          test -f "$appimage.sig"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb" | grep -F 'usr/bin/git-acorn-desktop'
+          bash scripts/smoke-linux-appimage.sh "$appimage"
+
   windows-alpha:
     runs-on: windows-latest
     steps:

@@ -1,6 +1,6 @@
 # GitAcorn
 
-GitAcorn은 실행할 Git 명령과 복구 경로를 사용자가 확인할 수 있게 만든 Windows·macOS용 데스크톱 Git 클라이언트입니다. Tauri 2와 Rust 백엔드, React/TypeScript 프런트엔드로 구성되어 있습니다.
+GitAcorn은 실행할 Git 명령과 복구 경로를 사용자가 확인할 수 있게 만든 Windows·macOS·Linux용 데스크톱 Git 클라이언트입니다. Tauri 2와 Rust 백엔드, React/TypeScript 프런트엔드로 구성되어 있습니다.
 
 이 문서의 **저장소 루트 명령**이 개발자, 작업 에이전트, CI가 공통으로 사용하는 기준입니다. `apps/desktop`이나 개별 Rust crate에서 명령을 직접 조합하지 마세요.
 
@@ -13,6 +13,7 @@ GitAcorn은 실행할 Git 명령과 복구 경로를 사용자가 확인할 수 
 - Rust 1.88.0 (`clippy`, `rustfmt` 포함)
 - Windows: Microsoft C++ Build Tools와 WebView2
 - macOS: Xcode Command Line Tools
+- Linux: WebKitGTK 4.1, AppIndicator, librsvg, `patchelf`와 기본 C/C++ 빌드 도구
 
 도구 버전은 `.node-version`, `package.json`, `rust-toolchain.toml`, `mise.toml`에 고정되어 있습니다. [mise](https://mise.jdx.dev/)를 사용하면 루트에서 다음 명령으로 Node와 pnpm을 맞출 수 있습니다.
 
@@ -89,6 +90,7 @@ pnpm build
 
 - Windows: `target/release/bundle/nsis/`의 current-user NSIS 설치 프로그램
 - macOS: `target/release/bundle/macos/`의 앱과 `target/release/bundle/dmg/`의 DMG
+- Linux: `target/release/bundle/deb/`의 Debian 패키지와 `target/release/bundle/appimage/`의 AppImage
 
 로컬 번들은 서명·공증된 공식 배포본이 아닙니다. 공식 산출물은 릴리스 워크플로에서만 생성합니다.
 
@@ -111,7 +113,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-태그가 푸시되면 GitHub Actions가 Windows 설치 프로그램과 macOS universal DMG, updater artifact를 빌드하고 검증한 뒤 **draft prerelease**를 만듭니다. 담당자가 [Alpha 검증 체크리스트](docs/alpha-release.md)를 수행한 후 draft를 게시합니다.
+태그가 푸시되면 GitHub Actions가 Windows 설치 프로그램, macOS universal DMG, Linux Debian/AppImage 패키지와 updater artifact를 빌드하고 검증한 뒤 **draft prerelease**를 만듭니다. Linux 패키지는 호환성을 위해 Ubuntu 22.04에서 빌드합니다. 담당자가 [Alpha 검증 체크리스트](docs/alpha-release.md)를 수행한 후 draft를 게시합니다.
 
 서명과 공증에 필요한 GitHub Actions secrets는 `docs/alpha-release.md`에 정리되어 있습니다. 인증서, 개인 키, 계정 비밀번호는 저장소에 저장하지 마세요.
 
@@ -135,4 +137,5 @@ docs/                      아키텍처, 로드맵, 릴리스 체크리스트
 - `pnpm` 버전이 다르면 `corepack prepare pnpm@11.9.0 --activate` 또는 `mise install`로 맞춥니다.
 - Rust 구성 요소가 없으면 `rustup component add clippy rustfmt`를 실행합니다.
 - Windows linker 오류는 Visual Studio Build Tools의 **Desktop development with C++** 워크로드 설치 여부를 확인합니다.
+- Linux 빌드 오류는 `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf` 설치 여부를 확인합니다.
 - 앱은 사용자의 시스템 Git과 credential helper/SSH agent를 사용합니다. GUI에서 Git을 찾지 못하면 터미널에서 `git --version`이 먼저 동작하는지 확인합니다.

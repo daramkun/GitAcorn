@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "targets": ["deb", "appimage"],
+    "category": "DeveloperTool",
+    "shortDescription": "A transparent desktop Git client",
+    "longDescription": "GitAcorn shows Git commands, change scope, and recovery paths before repository operations.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ]
+  }
+}

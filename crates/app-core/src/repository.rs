@@ -2427,6 +2427,7 @@ impl RepositoryService {
         args.extend([
             OsString::from("--find-renames"),
             OsString::from("--name-status"),
+            OsString::from("-z"),
             OsString::from("--format=%x1e%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00"),
             OsString::from(format!("--max-count={limit}")),
             OsString::from("--"),

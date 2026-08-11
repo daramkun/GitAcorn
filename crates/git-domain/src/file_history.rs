@@ -228,4 +228,17 @@ mod tests {
         );
         assert_eq!(entries[0].path, b"new.txt");
     }
+
+    #[test]
+    fn preserves_non_utf8_paths_from_nul_terminated_history() {
+        let oid = "d".repeat(40);
+        let mut output =
+            format!("{oid}\0\0Alice\0alice@example.com\042\0Add\0A\0src/").into_bytes();
+        output.extend_from_slice(&[0xff, b'.', b't', b'x', b't', 0, 0x1e, b'\n']);
+
+        let entries = parse_path_history(&output).expect("history");
+
+        assert_eq!(entries[0].status, "A");
+        assert_eq!(entries[0].path, b"src/\xff.txt");
+    }
 }
