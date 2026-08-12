@@ -299,7 +299,8 @@ fn reads_blame_and_tracks_renames_in_file_and_directory_history() {
     assert!(!directory_history.entries.is_empty());
 }
 
-#[cfg(unix)]
+// macOS filesystems reject path components containing invalid UTF-8 bytes.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn reads_non_utf8_paths_without_reencoding_them() {
     use std::ffi::OsString;
