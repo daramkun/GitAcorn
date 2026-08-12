@@ -174,7 +174,7 @@ jobs:
           releaseBody: Unsigned alpha build. See docs/alpha-release.md for validation and installation warnings.
           releaseDraft: true
           prerelease: true
-          args: --target universal-apple-darwin --config src-tauri/tauri.macos.conf.json
+          args: --target universal-apple-darwin --config apps/desktop/src-tauri/tauri.macos.conf.json
 
       - name: Verify ad-hoc signature, architecture, and launch
         shell: bash
