@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import appIconUrl from "../src-tauri/icons/icon.svg";
 import { App, buildRemoteBranchTree, renderWordDiffLine } from "./App";
 import { getAppInfo } from "./app-info";
 import { getSystemFileIcons } from "./fileIcons";
@@ -808,9 +809,13 @@ describe("App", () => {
   });
 
   it("renders a draggable custom titlebar with native window actions", async () => {
-    render(<App />);
+    const { container } = render(<App />);
 
     expect(await screen.findByRole("banner")).toHaveAttribute("data-tauri-drag-region");
+    expect(container.querySelector("img.brand-icon")).toHaveAttribute(
+      "src",
+      appIconUrl,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Minimize window" }));
     fireEvent.click(screen.getByRole("button", { name: "Maximize or restore window" }));
     fireEvent.click(screen.getByRole("button", { name: "Close window" }));

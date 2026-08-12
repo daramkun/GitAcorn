@@ -54,6 +54,7 @@ pnpm dev:web
 | --- | --- | --- |
 | 데스크톱 개발 실행 | `pnpm dev` | Vite + Tauri 개발 앱 실행 |
 | 브라우저 UI 실행 | `pnpm dev:web` | Vite 개발 서버만 실행 |
+| 앱 아이콘 생성 | `pnpm icon:generate` | `icon.svg` 원본에서 플랫폼별 Tauri 아이콘 재생성 |
 | 코드 포맷 적용 | `pnpm format` | Rust 워크스페이스 포맷 적용 |
 | 전체 검증 | `pnpm check` | 포맷, lint, Rust/UI 테스트, 프런트엔드 빌드, 버전 일치 검사 |
 | 전체 테스트 | `pnpm test` | Rust 워크스페이스와 UI 테스트 1회 실행 |

@@ -20,10 +20,16 @@ const WM_NCLBUTTONDOWN: u32 = 0x00A1;
 const WM_NCLBUTTONUP: u32 = 0x00A2;
 const WM_SYSCOMMAND: u32 = 0x0112;
 const WM_DPICHANGED: u32 = 0x02E0;
+const WM_SETICON: u32 = 0x0080;
 const SC_MAXIMIZE: usize = 0xF030;
 const SC_RESTORE: usize = 0xF120;
 const HTMAXBUTTON: isize = 9;
 const NULL_BRUSH: i32 = 5;
+const ICON_BIG: usize = 1;
+const IMAGE_ICON: u32 = 1;
+const LR_DEFAULTSIZE: u32 = 0x0040;
+const LR_SHARED: u32 = 0x8000;
+const APP_ICON_RESOURCE_ID: usize = 32512;
 
 const SNAP_CLASS: &[u16] = &[
     b'G' as u16,
@@ -135,7 +141,16 @@ unsafe extern "system" {
     fn GetDpiForWindow(window: Hwnd) -> u32;
     fn GetParent(window: Hwnd) -> Hwnd;
     fn IsZoomed(window: Hwnd) -> i32;
+    fn LoadImageW(
+        instance: Hinstance,
+        name: *const u16,
+        image_type: u32,
+        width: i32,
+        height: i32,
+        flags: u32,
+    ) -> *mut c_void;
     fn PostMessageW(window: Hwnd, message: u32, wparam: usize, lparam: isize) -> i32;
+    fn SendMessageW(window: Hwnd, message: u32, wparam: usize, lparam: isize) -> isize;
     fn SetWindowPos(
         window: Hwnd,
         insert_after: Hwnd,
@@ -152,6 +167,7 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::error::
 
     // SAFETY: Installation runs on Tauri's window thread with a live Win32 window handle.
     unsafe {
+        install_app_icon(parent)?;
         register_overlay_class();
         remove_existing_overlay();
 
@@ -185,6 +201,27 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::error::
         update_overlay_position(parent);
     }
 
+    Ok(())
+}
+
+unsafe fn install_app_icon(window: Hwnd) -> Result<(), Box<dyn std::error::Error>> {
+    let icon = unsafe {
+        LoadImageW(
+            GetModuleHandleW(ptr::null()),
+            APP_ICON_RESOURCE_ID as *const u16,
+            IMAGE_ICON,
+            0,
+            0,
+            LR_DEFAULTSIZE | LR_SHARED,
+        )
+    };
+    if icon.is_null() {
+        return Err(Box::new(io::Error::last_os_error()));
+    }
+
+    unsafe {
+        SendMessageW(window, WM_SETICON, ICON_BIG, icon as isize);
+    }
     Ok(())
 }
 

@@ -11,6 +11,7 @@
     "format": "cargo fmt --all",
     "dev:web": "pnpm --filter @git-acorn/desktop dev",
     "tauri": "pnpm --filter @git-acorn/desktop tauri",
+    "icon:generate": "pnpm --filter @git-acorn/desktop tauri icon src-tauri/icons/icon.svg -o src-tauri/icons",
     "format:check": "cargo fmt --all -- --check",
     "lint": "pnpm format:check && pnpm lint:rust && pnpm lint:web",
     "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",

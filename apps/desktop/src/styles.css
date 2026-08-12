@@ -376,35 +376,14 @@ button:focus-visible {
   letter-spacing: -0.01em;
 }
 
-.acorn-mark {
-  position: relative;
+.brand-icon {
   width: 18px;
   height: 18px;
-  border-radius: 55% 55% 62% 62%;
-  background: #b87535;
-  transform: rotate(2deg);
+  display: block;
 }
 
-.acorn-mark::before {
-  position: absolute;
-  top: -2px;
-  left: 2px;
-  width: 14px;
-  height: 6px;
-  border-radius: 60%;
-  background: #5e3a22;
-  content: "";
-}
-
-.acorn-mark span {
-  position: absolute;
-  top: -6px;
-  left: 9px;
-  width: 2px;
-  height: 6px;
-  border-radius: 2px;
-  background: #d39a59;
-  transform: rotate(25deg);
+.brand-title {
+  line-height: 18px;
 }
 
 .alpha-badge {

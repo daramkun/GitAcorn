@@ -13,6 +13,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
+import appIconUrl from "../src-tauri/icons/icon.svg";
 import { getAppInfo, type AppInfoDto } from "./app-info";
 import {
   layoutCommitGraph,
@@ -2422,8 +2423,8 @@ export function App() {
     <div className="app-shell">
       <header className="titlebar" data-tauri-drag-region>
         <div className="brand" data-tauri-drag-region>
-          <span className="acorn-mark" aria-hidden="true"><span /></span>
-          <span>GitAcorn</span>
+          <img className="brand-icon" src={appIconUrl} alt="" aria-hidden="true" />
+          <span className="brand-title">GitAcorn</span>
           {alphaFeaturesEnabled && (
             <button
               className="alpha-badge"
