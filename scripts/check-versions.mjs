@@ -32,12 +32,22 @@ if (uniqueVersions.size !== 1) {
 }
 
 const version = versions.values().next().value;
+const semverPattern =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+
+if (!semverPattern.test(version)) {
+  throw new Error(`프로젝트 버전 ${version}이 유효한 SemVer가 아닙니다.`);
+}
+
 const tagArgumentIndex = process.argv.indexOf("--tag");
 
 if (tagArgumentIndex !== -1) {
   const tag = process.argv[tagArgumentIndex + 1];
   if (!tag) {
     throw new Error("--tag 다음에 v0.1.0 형식의 태그가 필요합니다.");
+  }
+  if (!tag.startsWith("v") || !semverPattern.test(tag.slice(1))) {
+    throw new Error(`릴리스 태그 ${tag}가 v 접두사를 포함한 유효한 SemVer가 아닙니다.`);
   }
   if (tag !== `v${version}`) {
     throw new Error(`릴리스 태그 ${tag}와 프로젝트 버전 v${version}이 다릅니다.`);
