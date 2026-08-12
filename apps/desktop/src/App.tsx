@@ -9097,7 +9097,7 @@ function HistoryView({
         block: "nearest",
       });
     }
-  }, [selected?.oid, visibleCommits]);
+  }, [selected?.oid]);
 
   useEffect(() => {
     if (!showReflog) {

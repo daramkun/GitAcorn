@@ -2345,6 +2345,79 @@ describe("App", () => {
     );
   });
 
+  it("keeps the graph scroll position when older commits are loaded", async () => {
+    mockedRestoreSession.mockResolvedValue({
+      ...sessionWithSnapshot,
+      tabs: [
+        {
+          ...sessionWithSnapshot.tabs[0],
+          page: "history",
+          selectedCommit: "abcdef123456",
+        },
+      ],
+    });
+    mockedGetHistory
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        commits: [
+          {
+            oid: "abcdef123456",
+            parents: ["123456abcdef"],
+            authorName: "Ada",
+            authorEmail: "ada@example.com",
+            authoredAt: 1_700_000_000,
+            subject: "Initial commit",
+            body: "",
+            references: ["HEAD -> refs/heads/main"],
+            lane: 0,
+            laneCount: 1,
+          },
+        ],
+        nextCursor: "older-cursor",
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        commits: [
+          {
+            oid: "123456abcdef",
+            parents: [],
+            authorName: "Grace",
+            authorEmail: "grace@example.com",
+            authoredAt: 1_699_999_900,
+            subject: "Older commit",
+            body: "",
+            references: [],
+            lane: 0,
+            laneCount: 1,
+          },
+        ],
+      });
+    render(<App />);
+
+    const selectedCommit = await screen.findByRole("button", {
+      name: /Initial commit/,
+    });
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(selectedCommit, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Load older commits" }));
+
+    expect(
+      await screen.findByRole("button", { name: /Older commit/ }),
+    ).toBeInTheDocument();
+    await act(async () => undefined);
+    expect(mockedGetHistory).toHaveBeenLastCalledWith(
+      snapshot.repository.id,
+      "older-cursor",
+      undefined,
+      undefined,
+    );
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   it("filters sidebar references after Ctrl+F and closes with Escape", async () => {
     mockedRestoreSession.mockResolvedValue(sessionWithSnapshot);
     mockedGetSidebar.mockResolvedValue({
