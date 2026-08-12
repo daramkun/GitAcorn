@@ -2402,6 +2402,13 @@ describe("App", () => {
     const selectedCommit = await screen.findByRole("button", {
       name: /Initial commit/,
     });
+    await waitFor(() =>
+      expect(mockedGetSignatureStatus).toHaveBeenCalledWith(
+        snapshot.repository.id,
+        "abcdef123456",
+        "commit",
+      ),
+    );
     const scrollIntoView = vi.fn();
     Object.defineProperty(selectedCommit, "scrollIntoView", {
       configurable: true,
