@@ -93,7 +93,7 @@ pnpm build
 - macOS: `target/release/bundle/macos/`의 앱과 `target/release/bundle/dmg/`의 DMG
 - Linux: `target/release/bundle/deb/`의 Debian 패키지와 `target/release/bundle/appimage/`의 AppImage
 
-로컬 번들은 서명·공증된 공식 배포본이 아닙니다. 공식 산출물은 릴리스 워크플로에서만 생성합니다.
+로컬 번들과 공식 Alpha 산출물은 공인 인증서로 서명·공증되지 않습니다. macOS 번들은 Apple Silicon 실행 호환성을 위해 ad-hoc 서명만 적용합니다.
 
 ## 배포
 
@@ -114,9 +114,9 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-태그가 푸시되면 GitHub Actions가 Windows 설치 프로그램, macOS universal DMG, Linux Debian/AppImage 패키지와 updater artifact를 빌드하고 검증한 뒤 **draft prerelease**를 만듭니다. Linux 패키지는 호환성을 위해 Ubuntu 22.04에서 빌드합니다. 담당자가 [Alpha 검증 체크리스트](docs/alpha-release.md)를 수행한 후 draft를 게시합니다.
+태그가 푸시되면 GitHub Actions가 Windows 설치 프로그램, macOS universal DMG, Linux Debian/AppImage 패키지를 인증서 없이 빌드하고 검증한 뒤 **draft prerelease**를 만듭니다. Linux 패키지는 호환성을 위해 Ubuntu 22.04에서 빌드합니다. 담당자가 [Alpha 검증 체크리스트](docs/alpha-release.md)를 수행한 후 draft를 게시합니다.
 
-서명과 공증에 필요한 GitHub Actions secrets는 `docs/alpha-release.md`에 정리되어 있습니다. 인증서, 개인 키, 계정 비밀번호는 저장소에 저장하지 마세요.
+공인 코드 서명과 macOS 공증을 적용하지 않으므로 별도의 GitHub Actions secret은 필요하지 않습니다. 설치 시 운영체제의 미확인 개발자 경고가 표시될 수 있으며 자세한 주의사항은 `docs/alpha-release.md`에 정리되어 있습니다.
 
 ## 프로젝트 구조
 
